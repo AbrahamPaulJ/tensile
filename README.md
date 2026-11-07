@@ -9,6 +9,15 @@ whole network.
 it in a browser: no wallet, no install, no network. **[Watch it: `demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4)**, about
 three minutes.
 
+**For a judge with five minutes**, from the repository root:
+
+| Command | Needs | What it shows | Time |
+|---|---|---|---|
+| open `demo/dist/tensile-demo.html` | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
+| `fe test` | Fe 26.5.1 | 72 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
+| `node wasm/diff.mjs` | Node 20+ | the committed WebAssembly module against the NumPy reference: 10,000 images, 0 mismatches | 4 s |
+| `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 14 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message | 17 s |
+
 ## The problem
 
 Running a neural network inside a smart contract is possible and costly: this project's small MNIST
@@ -37,15 +46,22 @@ of typed numeric code that compiles to both backends.
   and the answer. A challenger names one wrong value and presents the neuron's weights with a Merkle
   proof against the model's root. The contract holds no weights and never runs a layer.
 - **The rule is a pure function.** `dispute::step(claim, now, action)` is the whole lifecycle, with no
-  storage or clock, unit-tested on both backends. Its deadline rules are `static_assert`s.
+  storage or clock, unit-tested on both backends, and `dispute::shares` splits the bond. Its deadline
+  rules, and that every bond is shared out to the last wei, are `static_assert`s.
+- **Why not `core::fixed`.** Fe's standard fixed point is unsigned decimal on 256-bit words
+  (`UFixed<D>`, a power-of-ten scale). A network needs signed values with a binary point: 8-bit
+  weights and activations packed 32 to a word, 32-bit accumulators, and requantisation as an
+  arithmetic shift. `Q<F>` is that, an `i32` with `F` fractional bits, so it is its own type.
 
 Everything was built during the contest window. Integer accuracy is 97.44% on the MNIST test set; the
 floating-point model it came from reaches 97.50%.
 
 ## Fe highlight
 
-The neuron's signature states the rule of fixed-point arithmetic in the type system. A bias must have
-the scale of a weight times an activation, `F + FW` fractional bits:
+Many Fe libraries put a scale in a type. Tensile computes with scales in types: the neuron's signature
+states the rule of fixed-point multiplication, so a bias must have the scale of a weight times an
+activation, `F + FW` fractional bits, and a compile-time function in the `where` clause proves that
+the accumulator cannot overflow for any input of that length:
 
 ```rust
 // ingots/tensile/src/dense.fe
@@ -130,7 +146,7 @@ curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | b
 
 fe --version          # fe 26.5.1 (149c758)
 fe fmt --check ingots
-fe test               # 71 tests on the EVM backend, about 20 s
+fe test               # 72 tests on the EVM backend, about 25 s
 fe build              # the contracts, into ./out
 ```
 
@@ -141,9 +157,9 @@ The full checks need Foundry (`curl -L https://foundry.paradigm.xyz | bash && fo
 |---|---|---|
 | `bash tools/m1_check.sh` | Both backends' unit tests, 14 compile-fail cases, native against the reference on all 10,000 samples at `-O 0`, `-O 1`, `-O 2` | 68 s |
 | `bash tools/m2_check.sh` | The contracts against the reference on all 10,000 classes and 1,000 traces; fuzz against a plain Solidity spec; real gas on anvil | 199 s |
-| `bash tools/m3_check.sh` | The arbiter: 26 Fe contract tests, 45 Foundry fuzz and invariant tests for properties P1 to P6, auditor against Python on 5,200 mutated claims | 146 s |
+| `bash tools/m3_check.sh` | The arbiter: 26 Fe contract tests, 45 Foundry fuzz and invariant tests for properties P1 to P6, auditor against Python on 5,200 mutated claims | 176 s |
 | `bash tools/m4_numbers.sh` | Regenerates `docs/numbers.md`: every gas and size figure, from real transactions | about 6 min, or 78 s with `--no-forms` |
-| `python3 tools/m3_mutants.py --fresh` | 53 deliberate faults in the contract; all are caught. Results in `docs/mutation-results.md` | 806 s |
+| `python3 tools/m3_mutants.py --fresh` | 59 deliberate faults in the contract; all are caught, 11 of them by the compiler. Results in `docs/mutation-results.md` | 977 s |
 | `python3 ref/get_mnist.py && python3 ref/test_ref.py` (needs NumPy; the first downloads MNIST and checks its SHA-256) | The reference's arithmetic and exported files | 5 s |
 | `bash tools/m5_clean_run.sh` | Copies only what git would publish to an empty directory, makes it `$HOME`, installs the tools, runs all the above except the mutation test and the numbers, and rebuilds the demo | 9 min |
 
