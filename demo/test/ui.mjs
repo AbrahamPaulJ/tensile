@@ -144,9 +144,10 @@ await page.waitForFunction(() => document.getElementById('settle-out').textConte
 await page.click('#w-claimant');
 await page.waitForFunction(() => document.getElementById('settle-out').textContent.includes('Claimant pulled'));
 await page.waitForTimeout(150);
-expect((await page.textContent('#l-watcher')).includes('103'), `the watcher ends with three bonds: ${await page.textContent('#l-watcher')}`);
+expect((await page.textContent('#l-watcher')).includes('101.5'), `the watcher ends with half of three bonds: ${await page.textContent('#l-watcher')}`);
 expect((await page.textContent('#l-claimant')).includes('97'), `the claimant ends three bonds down: ${await page.textContent('#l-claimant')}`);
-expect((await page.textContent('#l-arbiter')).trim() === '0 ETH', 'the arbiter ends empty');
+expect((await page.textContent('#l-arbiter')).trim() === '1.5 ETH', `the arbiter ends with only the burned halves: ${await page.textContent('#l-arbiter')}`);
+expect((await page.textContent('#l-arbiter-burned')).includes('burned'), "the ledger says the arbiter's ETH is burned");
 await shot(page, '05-settle');
 
 await page.click('#steps button[data-act="fe"]');

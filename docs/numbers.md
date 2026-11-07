@@ -6,7 +6,7 @@ reference sample 0, each result checked against the NumPy reference or the proto
 is recorded. The demo page's chain reproduces the Fe figures of sections 1 and 2 exactly
 (`demo/test/run.mjs` compares them).
 
-fe 26.5.1 (149c758); forge Version: 1.9.0; solc 0.8.38, via-IR, optimiser 200 runs. Whole script: 85.0 s.
+fe 26.5.1 (149c758); forge Version: 1.9.0; solc 0.8.38, via-IR, optimiser 200 runs. Whole script: 806.3 s.
 
 ## 1. What the dispute saves
 
@@ -14,15 +14,15 @@ fe 26.5.1 (149c758); forge Version: 1.9.0; solc 0.8.38, via-IR, optimiser 200 ru
 |---|---|---|
 | `Network.classify` (whole network, one transaction) | 1,896,043 | 100% |
 | `Network.trace` (the same, returning every value) | 1,897,354 | 100.1% |
-| `claim` | 246,141 | 13.0% |
-| `challengeNeuron1 (784 inputs)` | 156,380 | 8.2% |
-| `challengeNeuron2 (32 inputs)` | 67,977 | 3.6% |
-| `challengeClass` | 58,358 | 3.1% |
-| `finalize` | 48,942 | 2.6% |
-| `withdraw (4 bonds)` | 30,096 | 1.6% |
+| `claim` | 246,113 | 13.0% |
+| `challengeNeuron1 (784 inputs)` | 178,662 | 9.4% |
+| `challengeNeuron2 (32 inputs)` | 73,142 | 3.9% |
+| `challengeClass` | 63,540 | 3.4% |
+| `finalize` | 49,034 | 2.6% |
+| `withdraw (4 credits)` | 30,096 | 1.6% |
 
-An honest claim costs `claim` + `finalize`, 295,083 gas; a dispute at layer 1, the worst case, costs
-156,380 gas once. `classify` is 11.3% of the Osaka per-transaction cap of 16,777,216 gas.
+An honest claim costs `claim` + `finalize`, 295,147 gas; a dispute at layer 1, the worst case, costs
+178,662 gas once. `classify` is 11.3% of the Osaka per-transaction cap of 16,777,216 gas.
 
 ## 2. What the abstractions cost at run time
 
@@ -34,11 +34,11 @@ same behaviour: same checks in the same order, same results (the anvil scripts c
 | Typed vectors, scales and shapes: `Packed`, `Row`, `Activations`, `Q` (`tests/abstraction/neuron_check_raw.fe`) | layer 1 neuron, execution gas | 54,588 | 53,466 | +1,122 (+2.1%) |
 | the same | layer 2 neuron, execution gas | 2,152 | 2,130 | +22 (+1.0%) |
 | the same | `NeuronCheck` runtime bytes | 4,301 | 3,982 | +319 (+8.0%) |
-| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `challengeNeuron1 (784 inputs)`, gas | 156,380 | 156,029 | +351 (+0.2%) |
-| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `challengeNeuron2 (32 inputs)`, gas | 67,977 | 67,635 | +342 (+0.5%) |
-| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `challengeClass`, gas | 58,358 | 58,007 | +351 (+0.6%) |
-| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `finalize`, gas | 48,942 | 48,559 | +383 (+0.8%) |
-| the same | `Arbiter` runtime bytes | 11,550 | 11,191 | +359 (+3.2%) |
+| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `challengeNeuron1 (784 inputs)`, gas | 178,662 | 178,264 | +398 (+0.2%) |
+| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `challengeNeuron2 (32 inputs)`, gas | 73,142 | 72,744 | +398 (+0.5%) |
+| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `challengeClass`, gas | 63,540 | 63,142 | +398 (+0.6%) |
+| Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `finalize`, gas | 49,034 | 48,570 | +464 (+1.0%) |
+| the same | `Arbiter` runtime bytes | 11,649 | 11,273 | +376 (+3.3%) |
 
 Compile-time checks have no run-time cost by construction: the 14 compile-fail cases, the
 `static_assert` overflow proof and the deadline rules in `ingots/dispute/src/step.fe` produce no code.
@@ -61,13 +61,13 @@ contract, `tools/m4_twin_suite.sh`):
 
 | Call | Fe | Solidity twin | Fe against Solidity |
 |---|---|---|---|
-| `claim` | 246,141 | 195,155 | 1.26x |
-| `challengeNeuron1 (784 inputs)` | 156,380 | 121,096 | 1.29x |
-| `challengeNeuron2 (32 inputs)` | 67,977 | 59,377 | 1.14x |
-| `challengeClass` | 58,358 | 53,971 | 1.08x |
-| `finalize` | 48,942 | 44,311 | 1.10x |
-| `withdraw (4 bonds)` | 30,096 | 29,895 | 1.01x |
-| Runtime bytes | 11,550 | 4,838 | 2.39x |
+| `claim` | 246,113 | 195,155 | 1.26x |
+| `challengeNeuron1 (784 inputs)` | 178,662 | 143,442 | 1.25x |
+| `challengeNeuron2 (32 inputs)` | 73,142 | 64,601 | 1.13x |
+| `challengeClass` | 63,540 | 59,217 | 1.07x |
+| `finalize` | 49,034 | 44,311 | 1.11x |
+| `withdraw (4 credits)` | 30,096 | 29,895 | 1.01x |
+| Runtime bytes | 11,649 | 4,940 | 2.36x |
 
 Much of the `claim` and `finalize` gap is storage layout, which the twin is free to pack: Fe gives
 an `Address` a whole word and the record takes seven slots (`docs/fe-notes.md` M3.6), the twin five.
@@ -76,7 +76,7 @@ an `Address` a whole word and the record takes seven slots (`docs/fe-notes.md` M
 
 | Contract | Runtime bytes | Under the 24,576 limit by |
 |---|---|---|
-| `Arbiter` | 11,550 | 13,026 |
+| `Arbiter` | 11,649 | 12,927 |
 | `Network` | 8,251 | 16,325 |
 | `NeuronCheck` | 4,301 | 20,275 |
 | `RowsLow` | 12,971 | 11,605 |
@@ -90,12 +90,12 @@ Each form is the same dot product, run through both backends and checked against
 
 | Form | gas() | per multiply-add | Transaction | Runtime bytes | Native, 10,000 samples |
 |---|---|---|---|---|---|
-| **kept: `u32` limbs** | 48,427 | 61.7 | 92,608 | 4,301 | 4.39 s (0 mismatches) |
-| `i256_loop` | 74,029 | 94.4 | 118,242 | 2,059 | 28.88 s (0 mismatches) |
-| `i256_signext` | 98,029 | 125.0 | 196,772 | 2,155 | 34.09 s (0 mismatches) |
-| `i256_unrolled` | 35,286 | 45.0 | 79,467 | 2,946 | 37.45 s (0 mismatches) |
-| `i64_lanes` | 105,641 | 134.7 | 165,039 | 2,722 | 2.74 s (0 mismatches) |
-| `u32_acc256` | 47,041 | 60.0 | 91,222 | 4,223 | 5.40 s (0 mismatches) |
-| `u64_acc256` | 51,941 | 66.2 | 96,122 | 3,911 | 6.09 s (0 mismatches) |
-| `u64_limbs` | 63,043 | 80.4 | 107,308 | 4,277 | 2.63 s (0 mismatches) |
-| `usize_limbs` | 60,075 | 76.6 | 104,461 | 2,723 | 34.95 s (0 mismatches) |
+| **kept: `u32` limbs** | 48,427 | 61.7 | 92,608 | 4,301 | 6.63 s (0 mismatches) |
+| `i256_loop` | 74,029 | 94.4 | 118,242 | 2,059 | 35.37 s (0 mismatches) |
+| `i256_signext` | 98,029 | 125.0 | 196,772 | 2,155 | 41.48 s (0 mismatches) |
+| `i256_unrolled` | 35,286 | 45.0 | 79,467 | 2,946 | 46.19 s (0 mismatches) |
+| `i64_lanes` | 105,641 | 134.7 | 165,039 | 2,722 | 4.29 s (0 mismatches) |
+| `u32_acc256` | 47,041 | 60.0 | 91,222 | 4,223 | 6.67 s (0 mismatches) |
+| `u64_acc256` | 51,941 | 66.2 | 96,122 | 3,911 | 6.71 s (0 mismatches) |
+| `u64_limbs` | 63,043 | 80.4 | 107,308 | 4,277 | 2.96 s (0 mismatches) |
+| `usize_limbs` | 60,075 | 76.6 | 104,461 | 2,723 | 39.93 s (0 mismatches) |

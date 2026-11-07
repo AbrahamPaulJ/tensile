@@ -104,6 +104,7 @@ interface IArbiter {
     function creditOf(address account) external view returns (uint256);
     function modelRoot() external view returns (uint256);
     function bond() external view returns (uint256);
+    function burned() external view returns (uint256);
     function window() external view returns (uint256);
 }
 

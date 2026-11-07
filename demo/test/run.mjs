@@ -101,11 +101,12 @@ const f0 = await d.finalize(me, 0n);
 check(!f0.reverted, 'finalize succeeds');
 measured('finalize', f0.gasUsed, anvilGas('finalize'));
 equal((await d.result(0n)).cls, honestClaim.cls, 'result of the final claim');
-equal(await d.creditOf(me), 4n * BOND, 'credit of three slashed bonds and one returned');
+equal(await d.creditOf(me), 3n * (BOND / 2n) + BOND, 'credit: half of three slashed bonds, and one returned');
+equal(await d.burned(), 3n * (BOND - BOND / 2n), 'burned: the other half of each slashed bond');
 const w0 = await d.withdraw(me);
 check(!w0.reverted, 'withdraw succeeds');
-measured('withdraw (4 bonds)', w0.gasUsed, anvilGas('withdraw (4 bonds)'));
-equal(await d.chain.balance(d.arbiter), 0n, 'arbiter empty after withdraw');
+measured('withdraw (4 credits)', w0.gasUsed, anvilGas('withdraw (4 credits)'));
+equal(await d.chain.balance(d.arbiter), await d.burned(), 'the arbiter holds only the burned halves after withdraw');
 for (const [label, got, onAnvil] of gas) console.log(`${label.padEnd(22)} page ${String(got).padStart(9)}   anvil ${String(onAnvil).padStart(9)}`);
 
 // ------------------------------------------------------------------------------------------------
@@ -197,11 +198,13 @@ for (const sample of assets.samples) {
       if (clean >= 0) equal((await fresh.challengeNeuron1('Watcher', lieId, clean, claim)).why?.name, 'NoFraud', 'forged hidden: untouched neuron holds');
     }
     const before = await fresh.creditOf('Watcher');
+    const burnedBefore = await fresh.burned();
     const hit = await fresh.challenge('Watcher', lieId, claim, finding);
     check(!hit.reverted, `${kind} lie slashed (${hit.why?.name})`);
     lieGas[kind].push(hit.gasUsed);
     equal((await fresh.claimInfo(lieId)).status, 2, `${kind} lie status`);
-    equal(await fresh.creditOf('Watcher'), before + BOND, `${kind} lie pays the watcher`);
+    equal(await fresh.creditOf('Watcher'), before + BOND / 2n, `${kind} lie pays the watcher half the bond`);
+    equal(await fresh.burned(), burnedBefore + (BOND - BOND / 2n), `${kind} lie burns the other half`);
     equal((await fresh.challenge('Bystander', lieId, claim, finding)).why?.name, 'ClaimNotOpen', 'a second challenge');
     equal((await fresh.result(lieId)).why?.name, 'NotFinal', 'a slashed claim has no result');
   }
@@ -229,6 +232,7 @@ check(!(await m.postClaim('Claimant', lie)).reverted, 'false claim');
 m.chain.advance(WINDOW + 1n);
 equal((await m.challengeClass('Watcher', 1n, lie)).why?.name, 'TooLate', 'challenge after the deadline');
 check(!(await m.finalize('Bystander', 0n)).reverted, 'anyone can finalize');
+equal(await m.burned(), 0n, 'finalising burns nothing');
 equal(await m.creditOf('Claimant'), BOND, 'bond credited to the claimant, not the caller');
 equal(await m.creditOf('Bystander'), 0n, 'nothing credited to the caller');
 equal((await m.withdraw('Bystander')).why?.name, 'NothingToWithdraw', 'withdraw with no credit');

@@ -104,15 +104,23 @@ if [ "$result" != "${honest[3]}" ]; then
   echo "WRONG: result(0) is $result, expected ${honest[3]}"
   failures=$((failures + 1))
 fi
+# A slash credits half the bond and burns the rest; finalising credits the whole bond.
+half=$((bond / 2))
+burnt=$((3 * (bond - half)))
 credit=$(cast call --rpc-url $rpc "$arbiter" "creditOf(address)(uint256)" $me | cut -d' ' -f1)
-if [ "$credit" != "$((4 * bond))" ]; then
-  echo "WRONG: credit is $credit, expected $((4 * bond)) (three slashed bonds and one returned)"
+if [ "$credit" != "$((3 * half + bond))" ]; then
+  echo "WRONG: credit is $credit, expected $((3 * half + bond)) (half of three slashed bonds and one returned)"
   failures=$((failures + 1))
 fi
-measure "withdraw (4 bonds)" 0 "$arbiter" "withdraw()"
+burned=$(cast call --rpc-url $rpc "$arbiter" "burned()(uint256)" | cut -d' ' -f1)
+if [ "$burned" != "$burnt" ]; then
+  echo "WRONG: burned is $burned, expected $burnt (half of three slashed bonds)"
+  failures=$((failures + 1))
+fi
+measure "withdraw (4 credits)" 0 "$arbiter" "withdraw()"
 balance=$(cast balance --rpc-url $rpc "$arbiter")
-if [ "$balance" != "0" ]; then
-  echo "WRONG: the arbiter still holds $balance wei"
+if [ "$balance" != "$burnt" ]; then
+  echo "WRONG: the arbiter holds $balance wei, expected only the burned $burnt"
   failures=$((failures + 1))
 fi
 echo "arbiter_gas: $failures wrong result(s)"

@@ -2,7 +2,7 @@
 
 **Pitch:** One integer neural-network kernel, written once in Fe with shapes and fixed-point scales in
 its types, runs natively and in WebAssembly to classify, and on the EVM to settle a dispute: a false
-answer posted on-chain is proven false by re-running a single neuron, at 8.2% of the gas of running the
+answer posted on-chain is proven false by re-running a single neuron, at 9.4% of the gas of running the
 whole network.
 
 **[Try it: `demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html)** is one self-contained file. Download it and open
@@ -74,7 +74,7 @@ that it can send ETH:
 
 ```rust
 // ingots/onchain/src/arbiter.fe
-Finalize { id } uses (ctx, count, mut claims, mut credits, mut log) {
+Finalize { id } uses (ctx, count, mut claims, mut credits, mut burned, mut log) {
 Withdraw -> Wei uses (ctx, mut call, mut credits, mut log) {
 ```
 
@@ -109,13 +109,14 @@ learned about Fe in `docs/fe-notes.md`.
 
 ### What a dispute does
 
-1. A claimant posts input, 32 hidden values, 10 outputs and the answer, with a bond (246,141 gas).
+1. A claimant posts input, 32 hidden values, 10 outputs and the answer, with a bond (246,113 gas).
 2. A watcher re-runs the network off-chain with the native build. The first value that differs names
    the challenge.
 3. The arbiter checks the vectors against the claim's hashes, checks the neuron's weights against the
-   model root, re-runs that one neuron, and on a mismatch gives the whole bond to the challenger
-   (156,380 gas at layer 1, 67,977 at layer 2, 58,358 for the answer).
-4. A claim nobody disproves becomes final after the window (48,942 gas), and only then does
+   model root, re-runs that one neuron, and on a mismatch credits the challenger half the bond and
+   burns the rest, so a false claim costs at least half its bond even if its own claimant slashes it
+   (178,662 gas at layer 1, 73,142 at layer 2, 63,540 for the answer).
+4. A claim nobody disproves becomes final after the window (49,034 gas), and only then does
    `result(id)` answer. Bonds are pulled with `withdraw()`, the only handler that sends ETH.
 
 ## Build and test
@@ -202,10 +203,10 @@ The [video](demo/video/tensile-demo.mp4) walks through the same page. Its narrat
 - **One honest watcher.** The scheme is sound only if someone checks every claim and can get a
   transaction in before the deadline, as with every optimistic protocol. A false claim nobody challenges
   becomes final. The demo shows this.
-- **A claimant can slash its own false claim and recover the bond,** losing only gas, if its transaction
-  lands before an honest challenger's. The false result still never becomes final, but "a false claim
-  costs its bond" holds only when an honest challenger lands first. Burning part of the bond on every
-  slash would close this; not done. Pinned by a test (`docs/spec-dispute.md`, section 7).
+- **Half the bond is burned on every slash.** That closes the claimant's own escape (slashing its false
+  claim before anyone else to get the bond back): it now costs half the bond, not just gas. The price is
+  that an honest challenger earns half the bond, not all of it, and the burned half stays in the arbiter
+  for good (`burned()`). Pinned by tests and `static_assert`s (`docs/spec-dispute.md`, sections 4 and 7).
 - **Challenges can be front-run,** so the reward may go to whoever copies a challenge from the mempool.
   The fraud is still caught.
 - **Deployment parameters are not checked.** A bond or window of zero is accepted, so a consumer must read
@@ -217,7 +218,7 @@ The [video](demo/video/tensile-demo.mp4) walks through the same page. Its narrat
 - **Small dense networks only.** No convolution. Layer sizes are compile-time. Layer 1's weights do not fit
   one contract, so `Network` reads them from two others.
 - **Not audited, and not deployed.** Nothing has been deployed to a public network. The mutation test's 53
-  faults were chosen by hand, so "53 of 53" is not a random sample. Do not hold real value with this.
+  faults were chosen by hand, so "59 of 59" is not a random sample. Do not hold real value with this.
 - **Fe costs more gas than the best hand-written Solidity here:** 1.24x per neuron transaction and 1.26x
   per claim (`docs/numbers.md`, section 3), and 2.39x the code. It is cheaper than the natural Solidity
   assembly loop (0.78x).

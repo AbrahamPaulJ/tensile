@@ -26,7 +26,8 @@ pub struct Claimed {
 }
 
 /// A neuron challenge proved a claim wrong: neuron `neuron` of layer `layer`
-/// recomputed to another value. The bond is credited to `challenger`.
+/// recomputed to another value. Half the bond is credited to `challenger`;
+/// the rest is burned (`dispute::shares`).
 #[event]
 pub struct NeuronSlashed {
     #[indexed]
@@ -38,7 +39,8 @@ pub struct NeuronSlashed {
 }
 
 /// A class challenge proved a claim wrong: the claimed class is not the
-/// argmax of the committed logits. The bond is credited to `challenger`.
+/// argmax of the committed logits. Half the bond is credited to `challenger`;
+/// the rest is burned (`dispute::shares`).
 #[event]
 pub struct ClassSlashed {
     #[indexed]

@@ -54,6 +54,10 @@ const GAS: u256 = 16777216
 /// The bond the test arbiters require.
 const BOND: Wei = wei(1_000_000)
 
+/// What a slash credits the challenger: half the bond. The rest is burned.
+const REWARD: Wei = wei(500_000)
+const BURN: Wei = wei(500_000)
+
 /// A window no test can reach the end of.
 const LONG: Duration = seconds(1_000_000)
 
@@ -292,6 +296,23 @@ fn credit(arbiter: Address, account: Address) -> Wei uses (evm: mut Evm) {
     )
 }
 
+fn burned(arbiter: Address) -> Wei uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::Burned {},
+    )
+}
+
+/// After one slash by this test's account: half the bond is its credit, the
+/// other half is burned, and the arbiter still holds all of it.
+fn slashed_once(arbiter: Address) -> bool uses (evm: mut Evm) {
+    credit(arbiter, account: evm.address()) == REWARD
+        && burned(arbiter) == BURN
+        && evm.balance(arbiter) == BOND
+}
+
 fn claim_count(arbiter: Address) -> u256 uses (evm: mut Evm) {
     evm.call(
         addr: arbiter,
@@ -321,6 +342,7 @@ fn an_honest_claim_survives_every_challenge() uses (evm: mut Evm) {
     )
     assert!(status(arbiter, id) == OPEN)
     assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
 }
 
 #[test(balance = 10_000_000)]
@@ -339,7 +361,7 @@ fn a_wrong_hidden_value_is_slashed_by_its_neuron_only() uses (evm: mut Evm) {
 
     assert!(challenge1(arbiter, id, 5, claimed).success())
     assert!(status(arbiter, id) == SLASHED)
-    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(slashed_once(arbiter))
     // Terminal: nothing moves it again, and it has no result.
     assert!(
         failed_with<ClaimNotOpen>(challenge1(arbiter, id, 5, claimed)),
@@ -348,7 +370,7 @@ fn a_wrong_hidden_value_is_slashed_by_its_neuron_only() uses (evm: mut Evm) {
     assert!(
         failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
     )
-    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(slashed_once(arbiter))
 }
 
 #[test(balance = 10_000_000)]
@@ -365,7 +387,7 @@ fn a_wrong_logit_is_slashed_by_its_neuron_only() uses (evm: mut Evm) {
     )
     assert!(challenge2(arbiter, id, 3, claimed).success())
     assert!(status(arbiter, id) == SLASHED)
-    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(slashed_once(arbiter))
 }
 
 #[test(balance = 10_000_000)]
@@ -377,7 +399,7 @@ fn a_wrong_class_is_slashed_by_the_class_challenge_only() uses (evm: mut Evm) {
     assert!(failed_with<NoFraud>(challenge2(arbiter, id, 0, claimed)))
     assert!(challenge_class(arbiter, id, claimed).success())
     assert!(status(arbiter, id) == SLASHED)
-    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(slashed_once(arbiter))
 }
 
 #[test(balance = 10_000_000)]
@@ -555,6 +577,7 @@ fn finalising_after_the_window_returns_the_bond() uses (evm: mut Evm) {
         failed_with<ClaimNotOpen>(challenge_class(arbiter, id, wrong_class())),
     )
     assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(burned(arbiter) == Wei::zero())
     assert!(evm.balance(arbiter) == BOND)
     // The test runner's own address cannot receive ETH, so this withdrawal
     // fails in the transfer: the credit and the balance must be untouched.

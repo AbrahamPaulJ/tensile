@@ -39,7 +39,8 @@ contract Reenterer {
         } catch (bytes memory why) {
             secondWithdrawFoundNothing = bytes4(why) == IArbiter.NothingToWithdraw.selector;
         }
-        arbiter.claim{value: msg.value}(claim.x0, claim.hidden, claim.logits, claim.cls);
+        // Everything it holds: the half bond just paid plus the top-up the test gave it, one bond.
+        arbiter.claim{value: address(this).balance}(claim.x0, claim.hidden, claim.logits, claim.cls);
         claimedInside = true;
     }
 }
@@ -183,7 +184,8 @@ contract ArbiterBoundsTest is ArbiterUser {
         for (uint256 k = 0; k < 3; k++) {
             require(statusOf(arbiter, early[k]) == 2, "a proven challenge at deadline - 1 did not slash");
         }
-        require(arbiter.creditOf(CHALLENGER) == 3 * BOND, "challenger credit");
+        require(arbiter.creditOf(CHALLENGER) == 3 * (BOND / 2), "challenger credit");
+        require(arbiter.burned() == 3 * (BOND - BOND / 2), "burned");
 
         vm.warp(deadline);
         vm.expectRevert(abi.encodeWithSelector(IArbiter.TooLate.selector, deadline));
@@ -201,7 +203,8 @@ contract ArbiterBoundsTest is ArbiterUser {
             arbiter.finalize(early[k]);
         }
         require(arbiter.creditOf(CLAIMANT) == 3 * BOND, "claimant credit");
-        require(arbiter.creditOf(CHALLENGER) == 3 * BOND, "challenger credit changed");
+        require(arbiter.creditOf(CHALLENGER) == 3 * (BOND / 2), "challenger credit changed");
+        require(arbiter.burned() == 3 * (BOND - BOND / 2), "finalising burned something");
 
         vm.warp(deadline + later % (1 << 64));
         for (uint256 k = 0; k < 3; k++) {
@@ -614,7 +617,7 @@ contract ArbiterBoundsTest is ArbiterUser {
         log = oneLog();
         require(log.topics.length == 2 && log.topics[0] == IArbiter.Withdrawn.selector, "withdraw topic");
         require(address(uint160(uint256(log.topics[1]))) == CHALLENGER, "withdraw account");
-        require(keccak256(log.data) == keccak256(abi.encode(3 * BOND)), "withdraw amount");
+        require(keccak256(log.data) == keccak256(abi.encode(3 * (BOND / 2))), "withdraw amount");
     }
 
     // ----------------------------------------------------------------------------------------
@@ -644,8 +647,9 @@ contract ArbiterBoundsTest is ArbiterUser {
     }
 
     /// A challenger contract whose `receive` calls `withdraw` again and posts a new claim with
-    /// the ETH it just received: it is paid the bond once, the inner withdraw finds nothing, the
-    /// new claim is stored, and the balance still equals open bonds plus credits (P1). A bystander's
+    /// the ETH it just received (half a bond, topped up to one): it is paid its half once, the
+    /// inner withdraw finds nothing, the new claim is stored, and the balance still equals open
+    /// bonds plus credits plus the burned half (P1). A bystander's
     /// open bond is in the arbiter throughout: without it a contract that zeroes the credit after
     /// the transfer passes this test, because its inner withdraw fails for lack of funds, not for
     /// lack of credit (found by the mutant `withdraw_zeroes_after_transfer`, docs/fe-notes.md M3.9).
@@ -657,14 +661,18 @@ contract ArbiterBoundsTest is ArbiterUser {
         uint256 id = post(arbiter, c, CLAIMANT, BOND);
         uint256 bystander = post(arbiter, pick(3), address(0xB1), BOND);
         r.challengeClass(id, c.logits);
-        require(arbiter.creditOf(address(r)) == BOND, "credit");
-        require(r.withdraw() == BOND, "withdraw amount");
+        require(arbiter.creditOf(address(r)) == BOND / 2, "credit");
+        vm.deal(address(r), BOND - BOND / 2);
+        require(r.withdraw() == BOND / 2, "withdraw amount");
         require(r.secondWithdrawFoundNothing(), "the inner withdraw was not refused for lack of credit");
         require(r.claimedInside(), "the re-entrant claim did not run");
         require(arbiter.creditOf(address(r)) == 0, "credit after");
         require(statusOf(arbiter, bystander) == 1, "the bystander's claim changed");
         require(arbiter.claimCount() == 3 && statusOf(arbiter, 2) == 1, "the re-entrant claim");
-        require(address(arbiter).balance == 2 * BOND, "balance: two open bonds, no credit");
+        require(
+            address(arbiter).balance == 2 * BOND + arbiter.burned() && arbiter.burned() == BOND - BOND / 2,
+            "balance: two open bonds and the burned half, no credit"
+        );
     }
 
     /// A payee that refuses ETH: `withdraw` reverts with `TransferFailed` and the credit stays.
@@ -675,7 +683,7 @@ contract ArbiterBoundsTest is ArbiterUser {
         r.challengeClass(arbiter, id, c.logits);
         vm.expectRevert(IArbiter.TransferFailed.selector);
         r.withdraw(arbiter);
-        require(arbiter.creditOf(address(r)) == BOND, "the credit was lost");
+        require(arbiter.creditOf(address(r)) == BOND / 2, "the credit was lost");
         require(address(arbiter).balance == BOND, "balance");
     }
 
@@ -703,21 +711,29 @@ contract ArbiterBoundsTest is ArbiterUser {
         require(address(arbiter).balance == BOND + 5 wei, "the forced ETH did not arrive");
         challengeC(arbiter, id, c, CHALLENGER);
         vm.prank(CHALLENGER);
-        require(arbiter.withdraw() == BOND, "withdraw paid another amount");
-        require(address(arbiter).balance == 5 wei, "only the forced ETH stays");
+        require(arbiter.withdraw() == BOND / 2, "withdraw paid another amount");
+        require(address(arbiter).balance == BOND - BOND / 2 + 5 wei, "only the burned half and the forced ETH stay");
+        require(arbiter.burned() == BOND - BOND / 2, "burned");
         require(arbiter.creditOf(CHALLENGER) == 0 && arbiter.creditOf(CLAIMANT) == 0, "credits");
     }
 
-    /// A limit of the design, pinned (docs/spec-dispute.md section 7): nothing stops a claimant from
-    /// challenging its own false claim. The claim is still slashed and never final, so the false
-    /// result cannot be used, but the bond comes back. A claimant that wins the race against a real
-    /// challenger loses only gas.
-    function test_claimant_can_slash_its_own_false_claim_and_keep_the_bond() public {
+    /// Nothing stops a claimant from challenging its own false claim (docs/spec-dispute.md section
+    /// 7). The claim is still slashed and never final, so the false result cannot be used, and the
+    /// slash burns half the bond: the claimant gets back only the other half, so a false claim costs
+    /// at least half its bond whoever slashes it. (Before the burn, a claimant that won the race
+    /// against a real challenger lost only gas.)
+    function test_claimant_slashing_its_own_false_claim_loses_half_the_bond() public {
         Claim memory c = wrongClass(pick(0));
         uint256 id = post(arbiter, c, CLAIMANT, BOND);
+        uint256 before = CLAIMANT.balance;
         challengeC(arbiter, id, c, CLAIMANT);
         require(statusOf(arbiter, id) == 2, "the claim is not slashed");
-        require(arbiter.creditOf(CLAIMANT) == BOND, "the bond did not return to the claimant");
+        require(arbiter.creditOf(CLAIMANT) == BOND / 2, "the claimant was credited more than half");
+        require(arbiter.burned() == BOND - BOND / 2, "the other half was not burned");
+        vm.prank(CLAIMANT);
+        arbiter.withdraw();
+        require(CLAIMANT.balance == before + BOND / 2, "the claimant got back more than half");
+        require(address(arbiter).balance == BOND - BOND / 2, "the burned half left the arbiter");
         vm.expectRevert(abi.encodeWithSelector(IArbiter.NotFinal.selector, id));
         arbiter.result(id);
     }

@@ -80,8 +80,11 @@ one handler with a runtime layer number would have to give those types up. Each 
 if `argmax(logits)` (lowest index wins a tie) differs from the claimed class, the claim is
 fraudulent. Otherwise the call reverts.
 
-**On fraud.** The claim becomes `Slashed` (terminal) and the whole bond is credited to the
-challenger.
+**On fraud.** The claim becomes `Slashed` (terminal). Half the bond, rounded down, is credited to
+the challenger; the rest is burned: added to `burned()`, held by the contract for good and owed to
+nobody. The burn is what makes a false claim cost its claimant something even when the claimant
+slashes it itself (section 7). The split is `dispute::shares`, a pure function whose
+`static_assert`s state that the two shares always add up to the bond.
 
 ## 5. Finalising
 
@@ -114,17 +117,19 @@ Let `f` be the network of `docs/spec.md` with the committed weights.
   challenger for the whole window defeats the scheme, as in every optimistic protocol.
 - **The model root is right.** The deployer commits the root. Anyone can rebuild it from the
   published model file and compare.
-- **The bond is the only penalty.** A false claim costs its bond, unless the claimant slashes it
-  first (below); the scheme does not make false claims impossible, it makes them unprofitable when the bond exceeds the gain from a false result
-  standing for at most `WINDOW`. Consumers must read results only from `Final` claims.
-- **Challenge front-running, and the claimant's own escape.** A successful challenge can be copied
-  from the public mempool by someone who then collects the bond. The fraud is still caught; the
-  reward may go to the copier. The copier can be the claimant: nothing stops a claimant from
-  challenging its own false claim, so the claim ends `Slashed` (the false result is never usable)
-  but the bond comes back and only gas is lost. "A false claim costs its bond" therefore holds only
-  when an honest challenger's transaction lands first; a private mempool for challengers, or burning
-  part of the bond on a slash, would close this. Not addressed here. Pinned by
-  `test_claimant_can_slash_its_own_false_claim_and_keep_the_bond`.
+- **The bond is the only penalty.** A false claim costs its claimant at least half its bond: all of
+  it when someone else slashes it, half when the claimant slashes it first (below). The scheme does
+  not make false claims impossible; it makes them unprofitable when half the bond exceeds the gain
+  from a false result standing for at most `WINDOW`. Consumers must read results only from `Final`
+  claims.
+- **Challenge front-running, and the claimant's own slash.** A successful challenge can be copied
+  from the public mempool by someone who then collects the challenger's half. The fraud is still
+  caught; the reward may go to the copier. The copier can be the claimant: nothing stops a claimant
+  from challenging its own false claim, so the claim ends `Slashed` (the false result is never
+  usable) and the claimant gets back the challenger's half. The other half is burned whoever
+  slashes, so this escape costs half the bond, not just gas. (Before the burn it cost only gas.)
+  The cost is that an honest challenger earns half the bond rather than all of it. Pinned by
+  `test_claimant_slashing_its_own_false_claim_loses_half_the_bond`.
 - **Deployment parameters are not checked.** The constructor accepts a bond of zero (no penalty) and
   a window of zero (every claim can be finalised at once and never challenged). A consumer must read
   `modelRoot()`, `bond()` and `window()` before trusting an arbiter. Pinned by
@@ -153,26 +158,27 @@ Let `f` be the network of `docs/spec.md` with the committed weights.
 
 | # | Property | How |
 |---|---|---|
-| P1 | The arbiter's ETH balance equals the bonds of open claims plus unwithdrawn credits (plus any forced ETH, section 7) | Foundry invariant test |
+| P1 | The arbiter's ETH balance equals the bonds of open claims plus unwithdrawn credits plus `burned()` (plus any forced ETH, section 7) | Foundry invariant test |
 | P2 | A claim equal to the reference output cannot be slashed by any challenge | Foundry fuzz: random challenges against honest claims all revert |
 | P3 | A claim with any single wrong value can be slashed, by the challenge the auditor names | Foundry fuzz: mutate one value of an honest claim, send the named challenge, expect `Slashed` |
-| P4 | A claim only moves `Open -> Slashed` or `Open -> Final`; terminal states never change; each bond is credited exactly once | State machine unit tests plus Foundry invariant |
+| P4 | A claim only moves `Open -> Slashed` or `Open -> Final`; terminal states never change; each bond is shared out exactly once (all to the claimant, or half to the challenger and the rest burned) | State machine unit tests and `static_assert`s, plus Foundry invariant |
 | P5 | Challenges succeed only before the deadline; `finalize` only at or after it | State machine unit tests at the boundary; Foundry with time travel |
 | P6 | Malformed vectors are rejected at claim time | Unit and fuzz tests: padding, range, class bound |
 | P7 | The native auditor and the Python reference name the same first failing check | Differential test over mutated claims |
 
 ## 10. Costs
 
-Measured 2026-11-06 on anvil (Osaka), real transactions for reference sample 0 (`tools/arbiter_gas.sh`):
+Measured 2026-11-07 on anvil (Osaka), after the half burn, real transactions for reference sample 0 (`tools/arbiter_gas.sh`):
 
 | Call | Gas | Calldata |
 |---|---|---|
-| claim | 246,141 | storage-bound: 7 record slots plus the counter |
-| challengeNeuron1 (784 inputs) | 156,380 | |
-| challengeNeuron2 (32 inputs) | 67,977 | 708 bytes |
-| challengeClass | 58,358 | 356 bytes |
-| finalize | 48,942 | 36 bytes |
-| withdraw (4 bonds credited) | 30,096 used (35,765 estimated) | 4 bytes |
+| claim | 246,113 | storage-bound: 7 record slots plus the counter |
+| challengeNeuron1 (784 inputs) | 178,662 | |
+| challengeNeuron2 (32 inputs) | 73,142 | 708 bytes |
+| challengeClass | 63,540 | 356 bytes |
+| finalize | 49,034 | 36 bytes |
+| withdraw (4 credits) | 30,096 | 4 bytes |
 
-A failed challenge reverts, so `cast estimate` cannot measure it; the demo page mines one: 129,074 gas at layer 1
-and 49,880 for the class. All current figures: `docs/numbers.md`.
+A slash costs about 22,000 gas more than before the burn: the first write of `burned` to a zero slot. A failed
+challenge reverts, so `cast estimate` cannot measure it; the demo page mines one and shows its gas. All current
+figures: `docs/numbers.md`.

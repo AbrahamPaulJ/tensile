@@ -5,36 +5,36 @@
  "neuron_sol_loop": 118248,
  "typed_exec": 54588,
  "raw_exec": 53466,
- "step_finalize": 48942,
- "inline_finalize": 48559,
+ "step_finalize": 49034,
+ "inline_finalize": 48570,
  "calls": {
   "claim": {
-   "fe": 246141,
+   "fe": 246113,
    "sol": 195155
   },
   "challengeNeuron1 (784 inputs)": {
-   "fe": 156380,
-   "sol": 121096
+   "fe": 178662,
+   "sol": 143442
   },
   "challengeNeuron2 (32 inputs)": {
-   "fe": 67977,
-   "sol": 59377
+   "fe": 73142,
+   "sol": 64601
   },
   "challengeClass": {
-   "fe": 58358,
-   "sol": 53971
+   "fe": 63540,
+   "sol": 59217
   },
   "finalize": {
-   "fe": 48942,
+   "fe": 49034,
    "sol": 44311
   },
-  "withdraw (4 bonds)": {
+  "withdraw (4 credits)": {
    "fe": 30096,
    "sol": 29895
   }
  },
  "arbiter_bytes": {
-  "fe": 11550,
-  "sol": 4838
+  "fe": 11649,
+  "sol": 4940
  }
 }

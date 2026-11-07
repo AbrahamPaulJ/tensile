@@ -198,16 +198,16 @@ const ACT = {
     await point('#fe-costs');
   },
   evidence: () => card(`<table>
-    <tr><td>0 / 10,000</td><td>mismatches: NumPy reference, native build and EVM build, bit for bit</td></tr>
+    <tr><td>0 / 10,000</td><td>mismatches: NumPy reference, native, WebAssembly and EVM builds, bit for bit</td></tr>
     <tr><td>45 tests</td><td>Foundry fuzz and invariant tests on the arbiter's properties P1 to P6</td></tr>
-    <tr><td>53 of 53</td><td>hand-chosen faults caught: 45 by those tests, 8 by compile-time assertions</td></tr>
+    <tr><td>59 of 59</td><td>hand-chosen faults caught: 48 by those tests, 11 by compile-time assertions</td></tr>
     <tr><td>1.26x</td><td>Fe's gas per claim, against a Solidity twin that passes the same tests</td></tr>
   </table>`),
   limits: () => card(`<h1 style="font-size:46px">Limits</h1>
-    <p>Needs at least one honest watcher. A claimant can slash its own false claim and recover the bond.</p>
+    <p>Needs at least one honest watcher. A slash burns half the bond, so an honest challenger earns half.</p>
     <p>A small dense model. Not audited, not deployed. Listed in full in the README.</p>`),
   end: () => card(`<h1>Tensile</h1><p>A false answer, caught by one neuron.</p>
-    <small>Fe 26.5.1. Page recorded in real time. Narration is a synthetic voice (Kokoro).</small>`),
+    <small>Fe 26.5.1; WebAssembly with Fe master 89d07b9. Page recorded in real time. Narration is a synthetic voice (Kokoro).</small>`),
 };
 
 // --------------------------------------------------------------------------------------------------

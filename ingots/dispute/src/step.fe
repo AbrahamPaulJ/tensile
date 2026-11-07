@@ -40,7 +40,7 @@ pub enum Rejection {
 impl Copy for Rejection {}
 
 /// What an accepted action does: the claim's new, terminal status and who
-/// is credited the whole bond.
+/// is credited the bond (all of it, or half for a slash: `shares`).
 pub struct Transition { pub status: Status, pub bond_to: Payee }
 
 impl Copy for Transition {}
@@ -48,8 +48,8 @@ impl Copy for Transition {}
 /// The lifecycle rule (`docs/spec-dispute.md` sections 4 and 5).
 ///
 /// - A challenge is accepted while the claim is open and `now < deadline`,
-///   and only if it proved fraud: the claim becomes `Slashed` and the bond
-///   goes to the challenger.
+///   and only if it proved fraud: the claim becomes `Slashed`, half the bond
+///   goes to the challenger and the rest is burned.
 /// - Finalising is accepted while the claim is open and `now >= deadline`:
 ///   the claim becomes `Final` and the bond returns to the claimant.
 /// - Anything else is rejected and nothing changes, so a terminal claim can
@@ -79,6 +79,22 @@ pub const fn step(_ claim: Claim, now: u256, action: Action) -> Result<Rejection
                 )
             }
         },
+    }
+}
+
+/// How a bond is shared out when its claim ends: `(paid, burned)`, where
+/// `paid` is credited to the payee and `burned` stays in the contract, owed
+/// to nobody. Finalising pays the whole bond back. A slash pays the challenger
+/// half, rounded down, and burns the rest, so a claimant that slashes its own
+/// false claim still loses at least half its bond (`docs/spec-dispute.md`
+/// section 4). The two shares always add up to the bond.
+pub const fn shares(_ bond: u256, _ transition: Transition) -> (u256, u256) {
+    match transition.bond_to {
+        Payee::Challenger => {
+            let paid = bond / 2
+            (paid, bond - paid)
+        },
+        Payee::Claimant => (bond, 0),
     }
 }
 
@@ -159,6 +175,43 @@ static_assert(moves_to(
     status: Status::Final,
     bond_to: Payee::Claimant,
 ))
+
+const SLASH: Transition = Transition { status: Status::Slashed, bond_to: Payee::Challenger }
+const CLOSE: Transition = Transition { status: Status::Final, bond_to: Payee::Claimant }
+
+/// Whether `shares` gives `(paid, burned)` and the shares add up to the bond.
+const fn shares_are(_ bond: u256, _ transition: Transition, paid: u256, burned: u256) -> bool {
+    let (p, b) = shares(bond, transition)
+    p == paid && b == burned && p + b == bond
+}
+
+// A slash pays half, rounded down, and burns the rest; finalising pays it all back. Nothing is
+// created or lost, even for an odd bond or the largest one.
+static_assert(shares_are(1_000_000, SLASH, paid: 500_000, burned: 500_000))
+static_assert(shares_are(3, SLASH, paid: 1, burned: 2))
+static_assert(shares_are(1, SLASH, paid: 0, burned: 1))
+static_assert(shares_are(0, SLASH, paid: 0, burned: 0))
+static_assert(shares_are(
+    u256::max(),
+    SLASH,
+    paid: u256::max() / 2,
+    burned: u256::max() / 2 + 1,
+))
+static_assert(shares_are(1_000_000, CLOSE, paid: 1_000_000, burned: 0))
+static_assert(shares_are(u256::max(), CLOSE, paid: u256::max(), burned: 0))
+
+#[test]
+fn shares_always_add_up_to_the_bond() {
+    let bonds: [u256; 6] = [0, 1, 2, 3, 999_999_999_999_999_999, u256::max()]
+    for i in 0 .. 6 {
+        let (paid, burned) = shares(bonds[i], SLASH)
+        assert!(paid + burned == bonds[i])
+        assert!(paid == bonds[i] / 2)
+        assert!(burned >= paid)
+        let (back, none) = shares(bonds[i], CLOSE)
+        assert!(back == bonds[i] && none == 0)
+    }
+}
 
 #[test]
 fn a_proven_challenge_before_the_deadline_slashes() {

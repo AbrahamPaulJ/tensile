@@ -22,6 +22,7 @@ const SIG = {
   claimInfo: 'claimInfo(uint256)',
   claimHashes: 'claimHashes(uint256)',
   creditOf: 'creditOf(address)',
+  burned: 'burned()',
   modelRoot: 'modelRoot()',
   bond: 'bond()',
   window: 'window()',
@@ -241,6 +242,11 @@ export class Deployment {
   async creditOf(name) {
     const out = await this.view(SIG.creditOf, [word(BigInt(this.chain.accounts[name].address.toString()))]);
     return readUint(out.returnValue);
+  }
+
+  /** Half of every slashed bond: held by the arbiter for good, owed to nobody. */
+  async burned() {
+    return readUint((await this.view(SIG.burned)).returnValue);
   }
 
   async modelRoot() {

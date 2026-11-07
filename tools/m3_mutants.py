@@ -76,7 +76,10 @@ MUTANTS = [
     # Settlement
     ("slash_pays_claimant", ARB, "Payee::Challenger => challenger,", "Payee::Challenger => record.claimant,", 0, "the challenger is not paid"),
     ("finalize_pays_caller", ARB, "Payee::Claimant => record.claimant,", "Payee::Claimant => challenger,", 0, "anyone can take a bond by finalising"),
-    ("credit_overwrites", ARB, "credits[payee] = credits[payee] + record.bond", "credits[payee] = record.bond", 0, "an earlier credit is lost"),
+    ("credit_overwrites", ARB, "credits[payee] = credits[payee] + wei(paid)", "credits[payee] = wei(paid)", 0, "an earlier credit is lost"),
+    ("slash_credits_whole_bond", ARB, "credits[payee] = credits[payee] + wei(paid)", "credits[payee] = credits[payee] + record.bond", 0, "a slash pays the whole bond and burns half as well: more is owed than held"),
+    ("burn_not_recorded", ARB, "if burnt != 0 {", "if false {", 0, "the burned half is held but not accounted"),
+    ("burn_overwrites", ARB, "burned = burned + wei(burnt)", "burned = wei(burnt)", 0, "an earlier burn is forgotten"),
     ("status_not_stored", ARB, "claims[id].status = transition.status.code()", "", 0, "a bond can be credited again and again"),
     ("clock_plus_one", ARB, "now: now.as_seconds()", "now: now.as_seconds() + 1", 0, "the deadline is off by one"),
     ("deadline_plus_one", ARB, "deadline: record.deadline.as_seconds(),", "deadline: record.deadline.as_seconds() + 1,", 0, "the deadline is off by one"),
@@ -111,6 +114,9 @@ MUTANTS = [
     ("step_challenge_boundary", STEP, "if now >= claim.deadline {", "if now > claim.deadline {", 0, "a challenge at the deadline succeeds"),
     ("step_finalize_boundary", STEP, "if now < claim.deadline {", "if now <= claim.deadline {", 0, "a finalisation at the deadline fails"),
     ("step_slash_pays_claimant", STEP, "bond_to: Payee::Challenger }", "bond_to: Payee::Claimant }", 0, "the challenger is not paid"),
+    ("shares_slash_pays_all", STEP, "let paid = bond / 2", "let paid = bond", 0, "a slash burns nothing: a claimant slashing itself loses nothing"),
+    ("shares_lose_odd_wei", STEP, "(paid, bond - paid)", "(paid, paid)", 0, "an odd bond loses a wei"),
+    ("shares_finalize_burns", STEP, "Payee::Claimant => (bond, 0),", "Payee::Claimant => (bond / 2, bond - bond / 2),", 0, "an honest claimant loses half"),
     # Commitments
     ("logits_hash_first_only", REC, "words[j] = logits[j].to_word()", "words[j] = logits[0].to_word()", 0, "the commitment ignores nine logits"),
     # The kernel

@@ -33,6 +33,8 @@ contract ArbiterTwin {
     uint256 public claimCount;
     mapping(uint256 => Record) private claims;
     mapping(address => uint256) public creditOf;
+    /// Half of every slashed bond, rounded up: held for good, owed to nobody.
+    uint256 public burned;
 
     event Claimed(
         uint256 indexed id,
@@ -215,7 +217,9 @@ contract ArbiterTwin {
         if (block.timestamp >= record.deadline) revert TooLate(record.deadline);
         if (!fraud) revert NoFraud();
         claims[id].status = SLASHED;
-        creditOf[msg.sender] += record.bond;
+        uint256 paid = record.bond / 2;
+        creditOf[msg.sender] += paid;
+        if (record.bond - paid != 0) burned += record.bond - paid;
     }
 
     function verify(bytes32[] calldata proof, bytes32 leaf) private view returns (bool) {

@@ -4,12 +4,15 @@
 //! Anyone posts a claimed inference with a bond; anyone can prove it wrong
 //! before the deadline by re-running one neuron or the argmax on-chain, with
 //! the model ingot's `neuron_from_words`: the code the forward pass runs. The
-//! lifecycle rule is `dispute::step`, a pure function; this contract reads the
-//! clock, loads and stores the claim, and moves credits. Credits are pulled
+//! lifecycle rule is `dispute::step`, a pure function, and `dispute::shares`
+//! says how a bond is shared out: all of it back on finalising; on a slash,
+//! half to the challenger and the rest burned, so that a false claim costs
+//! at least half its bond even when its own claimant slashes it. This contract
+//! reads the clock, loads and stores the claim, and moves credits. Credits are pulled
 //! with `withdraw`, the only handler that sends ETH, which its effect
 //! signature shows (`mut call`).
 use core::result::Result
-use dispute::{Action, Payee, Rejection, Status, Transition, step}
+use dispute::{Action, Payee, Rejection, Status, Transition, shares, step}
 use ingot::commitment::leaf
 use ingot::record::{Record, dynamic, logits_hash}
 use ingot::signals::{
@@ -37,7 +40,19 @@ use ingot::signals::{
 }
 use model::{Input, Logits, layer1, layer2}
 use std::abi::{Bytes32, DynArray}
-use std::evm::{Address, Call, Ctx, Duration, Log, StorageMap, Timestamp, Wei, keccak_words, merkle}
+use std::evm::{
+    Address,
+    Call,
+    Ctx,
+    Duration,
+    Log,
+    StorageMap,
+    Timestamp,
+    Wei,
+    keccak_words,
+    merkle,
+    wei,
+}
 use tensile::Activations
 
 /// The output of layer 1.
@@ -90,7 +105,8 @@ pub msg ArbiterMsg {
     /// logits (lowest index on a tie) is not the claimed class.
     #[selector = sol("challengeClass(uint256,int32[10])")]
     ChallengeClass { id: u256, logits: [i32; 10] },
-    /// Closes claim `id` at or after its deadline and credits the bond back.
+    /// Closes claim `id` at or after its deadline and credits the whole bond
+    /// back to the claimant.
     #[selector = sol("finalize(uint256)")]
     Finalize { id: u256 },
     /// Sends the caller's credits to the caller. Returns the amount.
@@ -118,6 +134,10 @@ pub msg ArbiterMsg {
     /// The bond a claim must attach.
     #[selector = sol("bond()")]
     Bond -> Wei,
+    /// The total burned by slashes: half of every slashed bond, rounded up.
+    /// It stays in the contract and nobody can withdraw it.
+    #[selector = sol("burned()")]
+    Burned -> Wei,
     /// How long a claim stays challengeable.
     #[selector = sol("window()")]
     Window -> Duration,
@@ -133,6 +153,7 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
     mut count: u256,
     mut claims: StorageMap<u256, Record>,
     mut credits: StorageMap<Address, Wei>,
+    mut burned: Wei,
 
     init(model_root: u256, bond_required: Wei, challenge_window: Duration)
     uses (mut root, mut bond, mut window)
@@ -190,7 +211,7 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
         }
 
         ChallengeNeuron1 { id, j, x0, hidden, row, bias, proof }
-        uses (ctx, root, count, mut claims, mut credits, mut log)
+        uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
         {
             let record = load(id)
             if j >= HIDDEN {
@@ -219,7 +240,7 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
         }
 
         ChallengeNeuron2 { id, j, hidden, logits, row, bias, proof }
-        uses (ctx, root, count, mut claims, mut credits, mut log)
+        uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
         {
             let record = load(id)
             if j >= CLASSES as u256 {
@@ -247,7 +268,14 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
             log.emit(NeuronSlashed { id, challenger, layer: 2, neuron: j })
         }
 
-        ChallengeClass { id, logits } uses (ctx, count, mut claims, mut credits, mut log) {
+        ChallengeClass { id, logits } uses (
+            ctx,
+            count,
+            mut claims,
+            mut credits,
+            mut burned,
+            mut log,
+        ) {
             let record = load(id)
             if logits_hash(logits) != record.logits_hash {
                 revert_error(OutputMismatch {})
@@ -264,7 +292,7 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
             log.emit(ClassSlashed { id, challenger })
         }
 
-        Finalize { id } uses (ctx, count, mut claims, mut credits, mut log) {
+        Finalize { id } uses (ctx, count, mut claims, mut credits, mut burned, mut log) {
             let record = load(id)
             settle(
                 id,
@@ -327,6 +355,10 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
             bond
         }
 
+        Burned -> Wei uses (burned) {
+            burned
+        }
+
         Window -> Duration uses (window) {
             window
         }
@@ -343,12 +375,12 @@ uses (count: u256, claims: StorageMap<u256, Record>)
     claims[id]
 }
 
-/// Applies the lifecycle rule to claim `id`: stores the new status and
-/// credits the bond to the challenger or the claimant, or reverts with the
-/// rule's reason. `challenger` is the caller; it is paid only when the rule
-/// says so.
+/// Applies the lifecycle rule to claim `id`: stores the new status, credits
+/// the payee its share of the bond and adds the rest to `burned`, or reverts
+/// with the rule's reason. `challenger` is the caller; it is paid only when
+/// the rule says so. `burned` grows only on a slash; finalising burns nothing.
 fn settle(_ id: u256, _ record: Record, now: Timestamp, action: Action, challenger: Address)
-uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei>)
+uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei>, burned: mut Wei)
 {
     let claim = dispute::Claim {
         status: Status::from_code(record.status),
@@ -369,7 +401,11 @@ uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei
                 Payee::Challenger => challenger,
                 Payee::Claimant => record.claimant,
             }
-            credits[payee] = credits[payee] + record.bond
+            let (paid, burnt) = shares(record.bond.as_wei(), transition)
+            credits[payee] = credits[payee] + wei(paid)
+            if burnt != 0 {
+                burned = burned + wei(burnt)
+            }
         },
     }
 }

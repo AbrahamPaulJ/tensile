@@ -1,6 +1,7 @@
 """Rewrites a scratch copy of ingots/onchain/src/arbiter.fe with the lifecycle rule inlined, for
 tools/m4_numbers.sh: no `dispute::step`, no `Action`, `Result`, `Transition`, `Payee` or `Status`
-values, just the same checks in the same order, written into `settle` over status codes. The gas
+values and no `shares`, just the same checks and the same half-burn in the same order, written
+into `settle` over status codes. The gas
 difference from the real Arbiter is what the pure state machine costs at run time.
 
 usage: python3 inline_settle.py <path to the scratch arbiter.fe>
@@ -28,7 +29,7 @@ source = source[:start] + """fn settle(
     finalizing: bool,
     challenger: Address,
 )
-uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei>)
+uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei>, burned: mut Wei)
 {
     if record.status != 1 {
         revert_error(ClaimNotOpen { id })
@@ -48,12 +49,17 @@ uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei
             revert_error(NoFraud {})
         }
         claims[id].status = 2
-        credits[challenger] = credits[challenger] + record.bond
+        let paid = record.bond / 2
+        credits[challenger] = credits[challenger] + paid
+        let burnt = record.bond - paid
+        if burnt != Wei::zero() {
+            burned = burned + burnt
+        }
     }
 }
 """
 source = source.replace("use core::result::Result\n", "")
-source = source.replace("use dispute::{Action, Payee, Rejection, Status, Transition, step}\n", "")
+source = source.replace("use dispute::{Action, Payee, Rejection, Status, Transition, shares, step}\n", "")
 source = source.replace("status: Status::Open.code(),", "status: 1,")
 source = source.replace("if record.status != Status::Final.code() {", "if record.status != 3 {")
 with open(path, "w", encoding="utf-8", newline="\n") as f:

@@ -86,7 +86,7 @@ def main():
         ("challengeNeuron2 (32 inputs)", "challengeNeuron2 (layer 2, j=0)"),
         ("challengeClass", "challengeClass"),
         ("finalize", "finalize (after the window)"),
-        ("withdraw (4 bonds)", "withdraw (4 bonds)"),
+        ("withdraw (4 credits)", "withdraw (4 credits)"),
     ]
     claim_gas = arb[calls[0][1]]["used"]
     n1_gas = arb[calls[1][1]]["used"]

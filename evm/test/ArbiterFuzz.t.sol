@@ -59,11 +59,14 @@ contract ArbiterFuzzTest is ArbiterUser {
         require(arbiter.creditOf(CLAIMANT) == 0, "a refused challenge credited the claimant");
     }
 
-    /// The claim is slashed, its bond credited once to `who`, and every further action on it is
-    /// refused; the credit can be withdrawn exactly once.
+    /// The claim is slashed, half its bond credited once to `who` and the rest burned (the only
+    /// slash of the test), and every further action on it is refused; the credit can be withdrawn
+    /// exactly once and the burned half stays in the arbiter.
     function assertSlashed(uint256 id, address who, uint256 bond, Claim memory c) internal {
+        uint256 reward = bond / 2;
         require(statusOf(arbiter, id) == 2, "a proven challenge did not slash");
-        require(arbiter.creditOf(who) == bond, "the bond was not credited to the challenger");
+        require(arbiter.creditOf(who) == reward, "half the bond was not credited to the challenger");
+        require(arbiter.burned() == bond - reward, "the other half was not burned");
         require(arbiter.creditOf(CLAIMANT) == 0, "the claimant was credited for a slashed claim");
         vm.expectRevert(abi.encodeWithSelector(IArbiter.ClaimNotOpen.selector, id));
         challengeC(arbiter, id, c, who);
@@ -74,9 +77,10 @@ contract ArbiterFuzzTest is ArbiterUser {
         arbiter.result(id);
         uint256 before = who.balance;
         vm.prank(who);
-        require(arbiter.withdraw() == bond, "withdraw returned another amount");
-        require(who.balance == before + bond, "withdraw paid another amount");
+        require(arbiter.withdraw() == reward, "withdraw returned another amount");
+        require(who.balance == before + reward, "withdraw paid another amount");
         require(arbiter.creditOf(who) == 0, "the credit survived the withdrawal");
+        require(address(arbiter).balance == bond - reward, "the burned half left the arbiter");
         vm.prank(who);
         vm.expectRevert(IArbiter.NothingToWithdraw.selector);
         arbiter.withdraw();
@@ -389,9 +393,11 @@ contract ArbiterFuzzTest is ArbiterUser {
         require(kind == wantKind && j == wantJ, "the walk names another check");
         uint256 id = post(arbiter, c, CLAIMANT, BOND);
         uint256 credit = arbiter.creditOf(CHALLENGER);
+        uint256 burnt = arbiter.burned();
         send(id, kind, j, c, CHALLENGER);
         require(statusOf(arbiter, id) == 2, "the named challenge did not slash");
-        require(arbiter.creditOf(CHALLENGER) == credit + BOND, "the bond was not credited once");
+        require(arbiter.creditOf(CHALLENGER) == credit + BOND / 2, "half the bond was not credited once");
+        require(arbiter.burned() == burnt + (BOND - BOND / 2), "the other half was not burned once");
     }
 
     /// The whole judgement on random claims: a random input, its honest claim from Model, then

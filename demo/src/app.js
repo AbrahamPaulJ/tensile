@@ -59,6 +59,8 @@ async function refreshLedger() {
   $('l-claimant').textContent = eth(await d.chain.balance(accounts.Claimant.address));
   $('l-watcher').textContent = eth(await d.chain.balance(accounts.Watcher.address));
   $('l-arbiter').textContent = eth(await d.chain.balance(d.arbiter));
+  const burned = await d.burned();
+  $('l-arbiter-burned').textContent = burned > 0n ? `${eth(burned)} of it burned, owed to nobody` : '';
   const credit = async (name, id) => {
     const c = await d.creditOf(name);
     $(id).textContent = c > 0n ? `+${eth(c)} to withdraw` : '';
@@ -590,7 +592,8 @@ async function sendChallenge(finding, label) {
     v.textContent = 'SLASHED';
     v.className = 'verdict slashed show';
     $('dispute-note').innerHTML = `<b>${fmt(tx.gasUsed)} gas settled it: ${pct(tx.gasUsed, c.runGas)} of the ${fmt(c.runGas)} a full run costs.</b> `
-      + 'The whole 1 ETH bond is now the watcher\'s to withdraw.';
+      + 'Half the 1 ETH bond is now the watcher\'s to withdraw. The other half is burned: it stays in the contract for good, '
+      + 'so a lie costs at least half its bond even if the claimant slashes it first.';
   }
   await refreshLedger();
   renderSettle();
@@ -629,7 +632,7 @@ function renderSettle() {
   if (!c) return;
   const name = STATUS[c.status] ?? 'open';
   if (name === 'slashed') {
-    settleSay(`Claim #${c.id} is <b class="st-slashed">slashed</b>. It can never become a result, and the watcher has the bond.`, 'bad');
+    settleSay(`Claim #${c.id} is <b class="st-slashed">slashed</b>. It can never become a result, the watcher has half the bond, and the other half is burned.`, 'bad');
   } else if (name === 'final') {
     settleSay(`Claim #${c.id} is <b class="st-final">final</b>.`, 'good');
   } else {

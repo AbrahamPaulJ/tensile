@@ -37,6 +37,7 @@ contract ArbiterHandler is ArbiterUser {
     mapping(address => uint256) public ghostCreditedEver;
     mapping(address => uint256) public ghostWithdrawn;
     uint256 public ghostOpenBonds;
+    uint256 public ghostBurned;
     uint256 public ghostTotalBonded;
     uint256 public ghostTotalCredited;
     uint256 public ghostTotalWithdrawn;
@@ -148,7 +149,10 @@ contract ArbiterHandler is ArbiterUser {
         }
         if (ok) {
             r.status = 2;
-            credit(who, r.bond);
+            // A slash credits the challenger half the bond, rounded down, and burns the rest.
+            credit(who, r.bond / 2);
+            ghostOpenBonds -= r.bond - r.bond / 2;
+            ghostBurned += r.bond - r.bond / 2;
             slashes++;
             slashesBy[kind]++;
         } else {
@@ -392,11 +396,11 @@ contract ArbiterInvariantTest is ArbiterUser {
         t[0] = FuzzSelector(address(handler), s);
     }
 
-    /// P1: the balance equals the open bonds plus the unwithdrawn credits, both as the ghost
-    /// accounts say and as the arbiter's own views say. P4: every claim's status is the one the
-    /// spec predicts (so it only moved Open -> Slashed or Open -> Final and never again), its
-    /// other fields never changed, and each bond was credited exactly once (bonded = open +
-    /// credited, credited = outstanding + withdrawn). Withdrawals: nobody withdrew more than
+    /// P1: the balance equals the open bonds plus the unwithdrawn credits plus the burned halves
+    /// of slashed bonds, both as the ghost accounts say and as the arbiter's own views say. P4:
+    /// every claim's status is the one the spec predicts (so it only moved Open -> Slashed or
+    /// Open -> Final and never again), its other fields never changed, and each bond was shared
+    /// out exactly once (bonded = open + credited + burned, credited = outstanding + withdrawn). Withdrawals: nobody withdrew more than
     /// they were credited, and the arbiter's credits equal the ghost credits. Every call the
     /// handler made had the outcome the spec predicts (`violations`).
     /// forge-config: default.invariant.runs = 256
@@ -423,9 +427,13 @@ contract ArbiterInvariantTest is ArbiterUser {
             require(handler.ghostWithdrawn(a) <= handler.ghostCreditedEver(a), "withdrew more than credited");
             credits += arbiter.creditOf(a);
         }
+        uint256 burned = arbiter.burned();
         require(openBonds == handler.ghostOpenBonds(), "P1: open bonds differ from the ghost");
-        require(address(arbiter).balance == openBonds + credits, "P1: balance != open bonds + credits");
-        require(handler.ghostTotalCredited() == closedBonds, "P4: credited != bonds of closed claims");
+        require(burned == handler.ghostBurned(), "P1: burned differs from the ghost");
+        require(
+            address(arbiter).balance == openBonds + credits + burned, "P1: balance != open bonds + credits + burned"
+        );
+        require(handler.ghostTotalCredited() + burned == closedBonds, "P4: credited + burned != bonds of closed claims");
         require(handler.ghostTotalBonded() == openBonds + closedBonds, "P4: bonded != open + closed");
         require(
             credits + handler.ghostTotalWithdrawn() == handler.ghostTotalCredited(),
@@ -492,7 +500,12 @@ contract ArbiterInvariantTest is ArbiterUser {
         require(handler.slashes() == 4 && handler.finals() == 2 && handler.payouts() == 2, "outcomes");
         require(handler.refused() == 11, "refusals");
         invariant_P1_P4_ledger_lifecycle_and_withdrawals();
-        require(address(arbiter).balance == 4 ether, "two credits of 1 ether and the stuck actor's 2 ether");
+        // Four slashes burned 0.5 ether each; two challengers hold 0.5 ether each, and the actor that
+        // refuses ETH holds its 0.5 ether reward plus claim 4's whole bond.
+        require(arbiter.burned() == 2 ether, "four half bonds burned");
+        require(
+            address(arbiter).balance == 4.5 ether, "2 ether burned, two credits of 0.5 ether, the stuck actor's 1.5 ether"
+        );
     }
 
     /// Negative control: against an arbiter deployed with another model root, the handler's
@@ -515,6 +528,6 @@ contract ArbiterInvariantTest is ArbiterUser {
         vm.deal(address(arbiter), address(arbiter).balance + 1);
         (bool ok, bytes memory reason) =
             address(this).staticcall(abi.encodeCall(this.invariant_P1_P4_ledger_lifecycle_and_withdrawals, ()));
-        require(!ok && keccak256(reason) == keccak256(abi.encodeWithSignature("Error(string)", "P1: balance != open bonds + credits")), "P1 did not fail");
+        require(!ok && keccak256(reason) == keccak256(abi.encodeWithSignature("Error(string)", "P1: balance != open bonds + credits + burned")), "P1 did not fail");
     }
 }
