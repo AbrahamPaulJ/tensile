@@ -15,6 +15,8 @@ permissions:
 
 jobs:
   deploy:
+    # Pages needs a public repository on a free plan; the job waits until the repository is made public.
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages

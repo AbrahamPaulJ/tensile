@@ -139,7 +139,7 @@ The full checks need Foundry (`curl -L https://foundry.paradigm.xyz | bash && fo
 | `bash tools/m3_check.sh` | The arbiter: 26 Fe contract tests, 45 Foundry fuzz and invariant tests for properties P1 to P6, auditor against Python on 5,200 mutated claims | 146 s |
 | `bash tools/m4_numbers.sh` | Regenerates `docs/numbers.md`: every gas and size figure, from real transactions | about 6 min, or 78 s with `--no-forms` |
 | `python3 tools/m3_mutants.py --fresh` | 53 deliberate faults in the contract; all are caught. Results in `docs/mutation-results.md` | 806 s |
-| `python3 ref/test_ref.py` (needs NumPy) | The reference's arithmetic and exported files | 5 s |
+| `python3 ref/get_mnist.py && python3 ref/test_ref.py` (needs NumPy; the first downloads MNIST and checks its SHA-256) | The reference's arithmetic and exported files | 5 s |
 | `bash tools/m5_clean_run.sh` | Copies only what git would publish to an empty directory, makes it `$HOME`, installs the tools, runs all the above except the mutation test and the numbers, and rebuilds the demo | 9 min |
 
 The demo needs only Node to rebuild and test (the built page is committed):
