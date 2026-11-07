@@ -74,6 +74,9 @@ for (const digit of [7, 1, 0, 4]) {
   await drawDigit(page, digit);
   const got = (await page.textContent('#answer')).trim();
   expect(got === String(digit), `a drawn ${digit} is classified as ${got}`);
+  const note = await page.textContent('#run-note');
+  expect(note.includes(`WebAssembly answered ${digit}`) && note.includes("ten outputs equal to the EVM's"),
+    `the WebAssembly build answers ${digit} too, with the EVM's outputs`);
 }
 await shot(page, '01-draw');
 

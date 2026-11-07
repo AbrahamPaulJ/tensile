@@ -1,8 +1,9 @@
 # Tensile
 
 **Pitch:** One integer neural-network kernel, written once in Fe with shapes and fixed-point scales in
-its types, runs natively to classify and on the EVM to settle a dispute: a false answer posted on-chain
-is proven false by re-running a single neuron, at 8.2% of the gas of running the whole network.
+its types, runs natively and in WebAssembly to classify, and on the EVM to settle a dispute: a false
+answer posted on-chain is proven false by re-running a single neuron, at 8.2% of the gas of running the
+whole network.
 
 **[Try it: `demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html)** is one self-contained file. Download it and open
 it in a browser: no wallet, no install, no network. **[Watch it: `demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4)**, about
@@ -24,10 +25,11 @@ of typed numeric code that compiles to both backends.
 
 ## Approach
 
-- **One kernel, two targets.** `ingots/tensile` is pure Fe with no effects. The native classifier and
-  the on-chain arbiter call the same `neuron` function. The NumPy reference, the native build and the
-  EVM build agree bit for bit: 0 mismatches on all 10,000 MNIST test classes and 1,000 full traces, on
-  both backends, at every optimisation level tested.
+- **One kernel, three targets.** `ingots/tensile` is pure Fe with no effects. The native classifier,
+  the on-chain arbiter and a WebAssembly module call the same `neuron` function. The NumPy reference
+  and the native, EVM and WebAssembly builds agree bit for bit: 0 mismatches on all 10,000 MNIST test
+  classes and 1,000 full traces, on every backend, at every optimisation level tested. In the demo,
+  the WebAssembly build is the watcher's own off-chain run.
 - **The types carry the model.** `Row<IN, FW>`, `Activations<N, F>` and `Q<F>` hold shape and scale as
   const generics. Wiring layers of the wrong shape, mixing scales, or giving a bias the wrong scale does
   not compile. A `static_assert` proves that no accumulator can overflow, for every possible input.
@@ -85,6 +87,7 @@ Withdraw -> Wei uses (ctx, mut call, mut credits, mut log) {
 | `ingots/dispute` | Fe, pure | The claim state machine |
 | `ingots/cli` | Fe, native | The classifier and auditor: reads samples or claims on stdin, names the first failing check |
 | `ingots/onchain` | Fe, contracts | `Arbiter`, `Network`, `NeuronCheck`, `RowsLow`, `RowsHigh`, the leaf commitment |
+| `wasm/` | Fe, WebAssembly | `entry.fe`, the module's exports; `tensile_wasm.fe`, `tensile` and `model` flattened into one file by `tools/gen_wasm.py` (the wasm target takes only standalone files); the built module in `wasm/out/` |
 | `ref/` | Python, NumPy | Training, quantisation, and the integer reference: the oracle every other part must match |
 | `evm/` | Solidity | Foundry fuzz and invariant tests of the Fe bytecode; Solidity twins as gas baselines |
 | `demo/` | JavaScript | The page: an EVM in the browser running the `fe build` output |
@@ -95,9 +98,10 @@ Withdraw -> Wei uses (ctx, mut call, mut credits, mut log) {
                        │         │
                ingots/model   ingots/dispute (pure lifecycle)
                  │       │       │
-   ingots/cli (native)  ingots/onchain (EVM)
-        │                        │
-   names the challenge  ──►  Arbiter re-runs that one neuron
+   ingots/cli (native)  ingots/onchain (EVM)       wasm/ (WebAssembly)
+        │                        │                     │
+   names the challenge  ──►  Arbiter re-runs     the demo's watcher
+                             that one neuron
 ```
 
 The arithmetic is specified in `docs/spec.md`, the protocol in `docs/spec-dispute.md`, what the build
@@ -153,6 +157,25 @@ npm run test:ui       # the page itself in Chrome, offline, from file://
 
 `bash tools/build_demo.sh` regenerates what the page embeds from a fresh `fe build`.
 
+### The WebAssembly build: a pinned master commit
+
+Fe's WebAssembly target was merged on 2026-11-05 ([argotorg/fe#1904](https://github.com/argotorg/fe/pull/1904)) and
+is not in a release yet, so this one part uses **fe 26.5.0 (89d07b9db)**, master commit
+`89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908`, which the organisers allow. Everything else uses 26.5.1. The
+built module is committed, so the demo needs no Rust.
+
+```sh
+git clone https://github.com/argotorg/fe ~/fe-master && cd ~/fe-master && git checkout 89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908
+(cd crates/tree-sitter-fe && npm ci) && PATH="$PWD/crates/tree-sitter-fe/node_modules/.bin:$PATH" cargo build --release -p fe --features wasm
+cd - && FE=~/fe-master/target/release/fe bash tools/build_wasm.sh
+```
+
+`tools/build_wasm.sh` flattens the ingots, runs all 26 kernel and model unit tests on the wasm backend
+(12 s), builds the module twice and requires identical bytes (37,471 bytes), then checks it against the
+reference: 10,000 of 10,000 classes, 10,000 of 10,000 logits and 32,000 of 32,000 hidden activations,
+about 380 microseconds per image in Node, and the same again for modules built at `-O 0` and `-O 2`. CI
+does all of this from a fresh build of that commit.
+
 Times are from one laptop (i5-13420H, WSL2 Ubuntu 24.04), with the repository on the Linux file system.
 
 ### A reproducible example without a browser
@@ -166,7 +189,8 @@ head -c 784 ref/out/inputs.bin | out-native/cli trace    # every hidden value, e
 ## Demo
 
 Open [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html). Draw a digit and the bytecode from `fe build` classifies it,
-on an EVM running in the tab. Post a claim, honest or forged, and watch the watcher name the wrong value
+on an EVM running in the tab, and the WebAssembly build of the same source classifies it again, in well
+under a millisecond, with every hidden value and output equal. Post a claim, honest or forged, and watch the watcher name the wrong value
 and the contract settle it. Every refusal you see is the contract's own error, and no button is gated by
 the page. The page's chain reproduces this project's anvil gas figures exactly (`demo/test/run.mjs`).
 
@@ -197,8 +221,11 @@ The [video](demo/video/tensile-demo.mp4) walks through the same page. Its narrat
 - **Fe costs more gas than the best hand-written Solidity here:** 1.24x per neuron transaction and 1.26x
   per claim (`docs/numbers.md`, section 3), and 2.39x the code. It is cheaper than the natural Solidity
   assembly loop (0.78x).
-- **The demo's chain is EthereumJS, not a real network,** and its watcher re-uses the on-EVM trace rather
-  than the native auditor, because Fe's native build does not target the browser.
+- **The demo's chain is EthereumJS, not a real network.** Its watcher runs the WebAssembly build of the
+  kernel, not the native auditor (`ingots/cli`), which does not run in a browser.
+- **The WebAssembly build rests on an unreleased compiler commit,** and its source is generated by
+  flattening two ingots into one file, because the target does not take ingots yet. Only the kernel and
+  the model are built for it; the dispute logic and the auditor are not.
 
 Compiler defects found along the way, with minimal examples: `docs/upstream-reports.md`.
 

@@ -27,9 +27,11 @@ cd "$SRC"
 git fetch -q origin master
 git checkout -q "$PIN"
 git submodule update --init --recursive -q || true
+[ -x crates/tree-sitter-fe/node_modules/.bin/tree-sitter ] || (log "npm ci for tree-sitter"; cd crates/tree-sitter-fe && npm ci --no-audit --no-fund 2>&1 | tail -2)
+export PATH="$SRC/crates/tree-sitter-fe/node_modules/.bin:$PATH"
 log "building fe at $(git rev-parse --short HEAD)"
 start=$(date +%s)
-cargo build --release -p fe 2>&1 | tail -5
+cargo build --release -p fe --features "wasm cranelift" 2>&1 | tail -5
 log "build took $(( $(date +%s) - start )) s"
 "$SRC/target/release/fe" --version
 node --version

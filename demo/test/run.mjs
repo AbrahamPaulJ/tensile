@@ -6,7 +6,9 @@
 //   4. honest claims survive every challenge, and the deadline rules hold.
 // usage: node test/run.mjs [samples]       (default 40 samples for the differential)
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { BOND, Deployment, WINDOW, argmax } from '../src/protocol.js';
+import { loadWasm } from '../src/wasm.js';
 
 const here = new URL('.', import.meta.url);
 const repo = new URL('../../', here);
@@ -120,6 +122,31 @@ for (let i = 0; i < SAMPLES; i++) {
 equal(mismatches, 0, 'mismatches against the reference');
 const diffMs = performance.now() - diffStart;
 console.log(`${SAMPLES} traces, ${mismatches} mismatches, ${(diffMs / SAMPLES).toFixed(0)} ms per forward pass`);
+
+// ------------------------------------------------------------------------------------------------
+section('the WebAssembly build of the same kernel (wasm/out), against the EVM and the reference');
+{
+  const wasmBytes = readFileSync(new URL('wasm/out/tensile_wasm.wasm', repo));
+  const manifest = JSON.parse(readFileSync(new URL('wasm/out/tensile_wasm.manifest.json', repo), 'utf8'));
+  equal(createHash('sha256').update(wasmBytes).digest('hex'), manifest.module.sha256, 'wasm module against its manifest');
+  const w = await loadWasm(wasmBytes);
+  let wasmMismatches = 0;
+  for (let i = 0; i < SAMPLES; i++) {
+    const evm = await d.trace(image(i));
+    const got = w.run(image(i));
+    const same = JSON.stringify(got.hidden) === JSON.stringify(evm.hidden)
+      && JSON.stringify(got.hidden) === JSON.stringify(traces[i].hidden[0])
+      && JSON.stringify(got.logits) === JSON.stringify(evm.logits)
+      && JSON.stringify(got.logits) === JSON.stringify(traces[i].logits)
+      && got.cls === evm.cls && got.cls === pred[i];
+    if (!same) wasmMismatches++;
+  }
+  equal(wasmMismatches, 0, 'wasm against the EVM and the reference');
+  let classMismatches = 0;
+  for (let i = 0; i < pred.length; i++) if (w.run(image(i)).cls !== pred[i]) classMismatches++;
+  equal(classMismatches, 0, 'wasm classes on every reference image');
+  console.log(`${SAMPLES} samples equal on the EVM, in wasm and in NumPy; ${pred.length} wasm classes, ${classMismatches} mismatches`);
+}
 
 // ------------------------------------------------------------------------------------------------
 section('every lie, on every embedded sample');

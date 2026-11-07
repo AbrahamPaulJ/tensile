@@ -105,7 +105,7 @@
   <section class="act" id="act-dispute">
     <div class="lede">
       <h2 id="dispute-title">Anyone can check the claim. It takes one neuron to prove it false.</h2>
-      <p>A watcher re-runs the network off-chain and walks the claim in order: hidden neurons, outputs, answer. The first value that differs is the challenge to send. (In production that is the native Fe auditor. Here it is the run from step 1.)</p>
+      <p>A watcher re-runs the network off-chain and walks the claim in order: hidden neurons, outputs, answer. The first value that differs is the challenge to send. (In production that is the native Fe auditor. Here it is the WebAssembly build of the same Fe source, run in this tab in step 1.)</p>
     </div>
     <div class="grid dispute-grid">
       <div class="panel">
@@ -176,7 +176,7 @@
   <section class="act" id="act-fe">
     <div class="lede">
       <h2>Why this is written in Fe</h2>
-      <p>Shapes and fixed-point scales live in the types, so a wrong model does not compile. Effects are in the signatures, so you can see which handler can move money. All of this is real compiler output and quoted source.</p>
+      <p>Shapes and fixed-point scales live in the types, so a wrong model does not compile. Effects are in the signatures, so you can see which handler can move money. One source compiles three ways: to the EVM bytecode in step 1, to a native auditor, and to the WebAssembly module that checks every run in this page. All of this is real compiler output and quoted source.</p>
     </div>
     <div class="grid fe-grid">
       <div class="panel">
@@ -189,7 +189,7 @@
       <div class="panel">
         <p class="label">Effects: only one handler can send ETH</p>
         <pre id="fe-effects" class="code"></pre>
-        <p class="label spaced">The neuron: the same code off-chain and on-chain</p>
+        <p class="label spaced">The neuron: the same code on-chain, native and in WebAssembly</p>
         <pre id="fe-neuron" class="code"></pre>
         <p class="note" id="fe-build"></p>
       </div>

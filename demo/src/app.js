@@ -2,6 +2,7 @@
 // from the Fe bytecode running on the EVM in chain.js. No button is gated by what the page expects
 // the contract to say: a refused call is shown with the contract's own error.
 import { BOND, Deployment, STATUS, WINDOW, argmax } from './protocol.js';
+import { fromBase64, loadWasm } from './wasm.js';
 
 const assets = window.TENSILE_ASSETS;
 const $ = (id) => document.getElementById(id);
@@ -250,13 +251,18 @@ async function runNetwork(x0, label) {
   const started = performance.now();
   const t = await S.d.traceTx(x0);
   const wall = performance.now() - started;
-  S.honest = t;
+  const w = S.wasm.run(x0);
+  const agree = w.cls === t.cls && w.logits.every((v, j) => v === t.logits[j]) && w.hidden.every((v, j) => v === t.hidden[j]);
+  // The watcher's own off-chain run is the WebAssembly build; the EVM run above supplies the gas.
+  S.honest = { ...t, hidden: w.hidden, logits: w.logits, cls: w.cls };
   S.runGas = t.gas;
   renderHidden(t.hidden);
   renderLogits(t.logits);
   $('answer').textContent = t.cls;
   $('run-note').innerHTML = `<b>${fmt(t.gas)} gas</b>, Ethereum's unit of computing cost, to run the whole network as one transaction. `
-    + `It took ${fmt(Math.round(wall))} ms in this tab. On a real chain that fee is paid for every single answer.`;
+    + `It took ${fmt(Math.round(wall))} ms in this tab. On a real chain that fee is paid for every single answer.<br>`
+    + `The same Fe source compiled to WebAssembly answered <b>${w.cls}</b> in ${w.ms < 1 ? w.ms.toFixed(2) : fmt(Math.round(w.ms))} ms, `
+    + (agree ? "with all 32 hidden values and ten outputs equal to the EVM's, to the last bit. That run is the watcher's from here on." : "<b>and its outputs differ from the EVM's</b>: please report this.");
   $('to-claim').disabled = false;
   logTx('Anyone', 'Network.trace(image)', t);
   S.prepared = null;
@@ -711,7 +717,7 @@ function renderFe() {
     <tr><td>Typed vectors and scales, against plain words: one neuron's execution</td><td class="n">${fmt(N.typed_exec)}</td><td class="n">${fmt(N.raw_exec)}</td><td class="n">${up(N.typed_exec, N.raw_exec)}</td></tr>
     <tr><td>Pure state machine, against inlined checks: <code>finalize</code></td><td class="n">${fmt(N.step_finalize)}</td><td class="n">${fmt(N.inline_finalize)}</td><td class="n">${up(N.step_finalize, N.inline_finalize)}</td></tr>
     <tr><td>Fe, against a hand-written Solidity twin: <code>claim</code></td><td class="n">${fmt(N.calls.claim.fe)}</td><td class="n">${fmt(N.calls.claim.sol)}</td><td class="n">${up(N.calls.claim.fe, N.calls.claim.sol)}</td></tr>`;
-  $('fe-build').textContent = `Built with ${assets.fe_version}. Arbiter ${fmt(assets.contracts.Arbiter.runtime_bytes)} bytes, `
+  $('fe-build').textContent = `Built with ${assets.fe_version}; the WebAssembly module with ${assets.wasm.compiler}, a pinned master commit. Arbiter ${fmt(assets.contracts.Arbiter.runtime_bytes)} bytes, `
     + `bytecode sha256 ${assets.contracts.Arbiter.sha256.slice(0, 16)}... Model accuracy ${(assets.model.accuracy.integer * 100).toFixed(2)}% on the 10,000 MNIST test images.`;
 }
 
@@ -725,9 +731,10 @@ async function boot() {
   const started = performance.now();
   S.d = await Deployment.create(assets);
   const ms = performance.now() - started;
+  S.wasm = await loadWasm(fromBase64(assets.wasm.base64));
   const root = await S.d.modelRoot();
   if (root !== assets.model.root) throw new Error('the deployed root differs from the exported one');
-  $('l-engine').textContent = `EVM (Osaka), 5 Fe contracts deployed in ${fmt(Math.round(ms))} ms. No wallet, no network, play money.`;
+  $('l-engine').textContent = `EVM (Osaka), 5 Fe contracts in ${fmt(Math.round(ms))} ms, plus the kernel in WebAssembly. No wallet, no network, play money.`;
   await refreshLedger();
   window.tensileDemo = { S, BOND, ready: true };
 }

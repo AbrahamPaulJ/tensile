@@ -1,9 +1,20 @@
 # Compiler defects found while building Tensile
 
-**Not filed yet.** These are drafts for the Fe issue tracker (`argotorg/fe`), each with a minimal example
-in this repository. All were reproduced on `fe 26.5.1 (149c758)` by `tools/upstream_check.sh`
-(2026-11-06). They were not re-tested on `master`, so check that first. The tracker was searched on
-the same day for each one; related issues are named where one exists.
+**Status, 2026-11-07.** Every example below was re-run on Fe master `89d07b9` (`tools/upstream_check.sh` with
+`FE=` set to that build). Three are already fixed there, so they were not filed; the other four were filed, as
+five issues:
+
+| # | Defect | On master `89d07b9` | Issue |
+|---|---|---|---|
+| 1 | Stack overflow, one large array in two messages | fixed (passes in 14.5 s) | not filed |
+| 2 | Minutes of compile time for large message arrays | fixed (1.9 s, was about 100 s) | not filed |
+| 3 | Native `read_word`/`write_word` little-endian | fixed (big-endian on EVM, native and wasm; `tests/defects/native_word_endianness_master.fe`) | not filed |
+| 4 | `black_box` on an array passes `fe check` | still present | [#1950](https://github.com/argotorg/fe/issues/1950) |
+| 5 | No warning past 24,576 bytes | still present | [#1951](https://github.com/argotorg/fe/issues/1951) |
+| 6 | Internal error, array stored into a nested array | still present | [#1952](https://github.com/argotorg/fe/issues/1952) |
+| 7 | Misleading diagnostics: event field; name clash | both still present | [#1953](https://github.com/argotorg/fe/issues/1953), [#1954](https://github.com/argotorg/fe/issues/1954) |
+
+The sections below are the original drafts, reproduced on `fe 26.5.1 (149c758)` on 2026-11-06.
 
 Withdrawn from the earlier list: "`fe test --backend native` fails on an ingot that contains a contract".
 A minimal file with a contract and a pure test passes on the native backend. The real limits are narrower:

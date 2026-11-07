@@ -2,6 +2,7 @@
 // data and the page inlined, so it opens from disk or any static host with nothing to install and no
 // network. usage: npm run build (generated/assets.json comes from tools/build_demo.sh).
 import { build } from 'esbuild';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 const at = (path) => new URL(path, import.meta.url);
@@ -22,6 +23,14 @@ const inline = (text) => text.replace(/<\/(script)/gi, '<\\/$1');
 const script = inline(result.outputFiles[0].text);
 const data = JSON.parse(readFileSync(at('generated/assets.json'), 'utf8'));
 data.numbers = JSON.parse(readFileSync(at('generated/numbers.json'), 'utf8'));
+// The WebAssembly build of the kernel (tools/build_wasm.sh), checked against its manifest.
+{
+  const manifest = JSON.parse(readFileSync(at('../wasm/out/tensile_wasm.manifest.json'), 'utf8'));
+  const wasm = readFileSync(at('../wasm/out/tensile_wasm.wasm'));
+  const sha256 = createHash('sha256').update(wasm).digest('hex');
+  if (sha256 !== manifest.module.sha256) throw new Error('wasm/out/tensile_wasm.wasm does not match its manifest');
+  data.wasm = { base64: wasm.toString('base64'), sha256, size: wasm.length, compiler: manifest.compiler, optimization: manifest.optimization };
+}
 const assets = inline(JSON.stringify(data));
 const page = readFileSync(at('src/index.html'), 'utf8')
   .replace('/*STYLE*/', () => readFileSync(at('src/style.css'), 'utf8'))

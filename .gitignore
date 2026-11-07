@@ -32,3 +32,7 @@ spike/**/build.log
 
 # The storage-proof spike went to another entrant (2026-11-06); it is not part of this entry.
 spike/proofs/
+
+# wasm spike scratch output
+spike/wasm/out/
+spike/wasm/*.log

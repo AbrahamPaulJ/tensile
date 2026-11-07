@@ -1,0 +1,22 @@
+// Repro: `MemSpan::read_word` / `MemBuffer::write_word` are documented as big-endian
+// Fe master spelling (MemBuffer::new); native_word_endianness.fe is the 26.5.1 spelling.
+// ("as a big-endian word", core/src/ptr.fe). True on the EVM, false on the native backend.
+//   fe test native_word_endianness.fe                   -> both pass
+//   fe test --backend native native_word_endianness.fe  -> both fail
+use core::ptr::{self, MemBuffer}
+
+#[test]
+fn write_word_is_big_endian() {
+    var buf = MemBuffer::new(32)
+    buf.write_word(offset: 0, value: 1)
+    // big-endian: the 1 is the last of the 32 bytes
+    assert!(buf.span().byte_at(31) == 1)
+    assert!(buf.span().byte_at(0) == 0)
+}
+
+#[test]
+fn read_word_is_big_endian() {
+    let buf = MemBuffer::new(32)
+    unsafe { *ptr::offset_bytes(buf.ptr(), 31) = 1 as u8 }
+    assert!(buf.span().read_word(0) == 1)
+}

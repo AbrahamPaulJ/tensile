@@ -1,0 +1,68 @@
+{
+  "manifest_version": 1,
+  "module": {
+    "file": "tensile_wasm.wasm",
+    "sha256": "4bfe8a6839bb2fa5f3c625ae939d4479106a3865e54015a2009e37b0263a896d",
+    "size": 37471,
+    "initial_memory_pages": 17
+  },
+  "contract_version": 1,
+  "optimization": "1",
+  "compiler": "fe 26.5.0 (89d07b9db)",
+  "imports": [
+    {
+      "module": "env",
+      "name": "pixel",
+      "kind": "function",
+      "type": {
+        "params": ["i32"],
+        "results": ["i32"]
+      }
+    }
+  ],
+  "exports": [
+    {
+      "name": "classify",
+      "kind": "function",
+      "params": [],
+      "result": {
+        "type": "u32",
+        "wasm": ["i32"]
+      }
+    },
+    {
+      "name": "hidden",
+      "kind": "function",
+      "params": [
+        {
+          "name": "j",
+          "type": "u32",
+          "wasm": ["i32"]
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "wasm": ["i32"]
+      }
+    },
+    {
+      "name": "logit",
+      "kind": "function",
+      "params": [
+        {
+          "name": "j",
+          "type": "u32",
+          "wasm": ["i32"]
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "wasm": ["i32"]
+      }
+    },
+    {
+      "name": "memory",
+      "kind": "memory"
+    }
+  ]
+}

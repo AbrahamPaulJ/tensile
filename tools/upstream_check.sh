@@ -3,11 +3,11 @@
 # compiler's output and the time taken. Nothing is filed by this script.
 #   wsl -e bash tools/upstream_check.sh
 export PATH="$HOME/.fe/bin:$HOME/.foundry/bin:$PATH"
-# FE=/path/to/fe re-runs everything on another build (for example a pinned master).
-fe() { "${FE:-$HOME/.fe/bin/fe}" "$@"; }
 root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+# FE=/path/to/fe re-runs everything on another build (for example a pinned master).
+if [ -n "${FE:-}" ]; then mkdir -p "$work/bin"; ln -s "$FE" "$work/bin/fe"; export PATH="$work/bin:$HOME/.local/node/bin:$PATH"; fi
 fe --version
 
 timed() { # timed <limit-seconds> <command...>: output (first 25 lines), exit status and wall time.

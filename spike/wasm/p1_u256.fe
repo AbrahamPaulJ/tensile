@@ -1,0 +1,22 @@
+// Probe: does u256 arithmetic work inside functions on the WebAssembly target?
+// The kernel's packed words are u256 (32 int8 lanes); only scalars cross the export.
+const SIGN_BITS: u256 = 0x8080808080808080808080808080808080808080808080808080808080808080
+
+fn mix(_ a: u256, _ b: u256) -> u256 {
+    ((a * b) + (a >> 7)) ^ (b << 200) ^ SIGN_BITS
+}
+
+/// Byte `i` (0 = lowest) of a 256-bit mix of `x`.
+pub fn probe(x: u32, i: u32) -> u32 {
+    let a: u256 = x as u256
+    let r = mix(a, 0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20)
+    let byte: u256 = (r >> (8 * i) as u256) & 0xff
+    byte.downcast_truncate()
+}
+
+#[test]
+fn probe_matches_python() {
+    // Expected values from spike/wasm/p1_expected.py
+    assert(probe(x: 3, i: 0) == 224)
+    assert(probe(x: 3, i: 31) == 153)
+}

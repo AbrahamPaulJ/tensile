@@ -781,3 +781,24 @@ machine are only what the README lists; `.github/workflows/ci.yml` will be the r
 Before this, `.gitignore`'s `out/` also ignored `ref/out`, so a fresh clone could not have run a single
 differential test, and `fe fmt --check` from the root, as in the starter's CI, stops with "No .fe files found" on
 this workspace. It needs `ingots`. Both would have surfaced only after publishing.
+
+## The WebAssembly target (2026-11-07, master `89d07b9`)
+
+Built with `cargo build --release -p fe --features "wasm cranelift"` (7.6 min on the i5-13420H; the build
+also needs the tree-sitter CLI, from `npm ci` in `crates/tree-sitter-fe`). What the kernel needed:
+
+- **No change to the kernel.** `ingots/tensile` and `ingots/model` compile for wasm unchanged, `u256`
+  words and all: the target lowers 256-bit arithmetic inside functions, and only the export boundary is
+  limited to `bool` and integers of at most 64 bits. All 26 unit tests pass on `--backend wasm`.
+- **Standalone files only.** `fe build --backend wasm` refuses an ingot, so `tools/gen_wasm.py` wraps each
+  source file in an inline `mod` and rewrites `ingot::` and dependency paths. Inner doc comments (`//!`)
+  are not allowed inside an inline `mod`, so they become `//`.
+- **Input through an import.** `HostText` gives an address and a length but no byte access from safe Fe,
+  so the 784 pixels come through `extern { fn pixel(_ i: u32) -> u32 }`, called in `unsafe { }`.
+- **Casts.** A lossless `as` must be lossless on every target, and `usize` is 32 bits here: `u32 as usize`
+  is fine, `usize as u32` and `i8 as u32` are refused (`.downcast_truncate()`, or `as i32` for an `i8`).
+- **Size and speed.** 37,471 bytes at `-O 1` (46,346 at `-O 0`, 37,304 at `-O 2`); 380 microseconds per
+  image in Node 22, against about 260 ms for the same forward pass on the in-page EVM. Two builds give
+  identical bytes.
+- Three of our 26.5.1 defects are fixed on this commit (stack overflow, compile time, native byte order);
+  `docs/upstream-reports.md` has the table and the issues filed for the rest.
