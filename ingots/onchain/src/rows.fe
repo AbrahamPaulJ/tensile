@@ -1,0 +1,48 @@
+//! The weights of layer 1, split over two contracts.
+//!
+//! Layer 1 has 784 x 32 = 25,088 weights, one byte of code each, and a
+//! contract may hold 24,576 bytes. Each contract here holds 16 rows.
+use model::layer1
+use tensile::Row
+
+/// Number of rows of layer 1 that one weight contract holds.
+pub const ROWS_PER_CONTRACT: usize = 16
+
+/// Asks a weight contract for one row of layer 1.
+pub msg RowMsg {
+    /// Row `j` of the weights of layer 1, as packed words.
+    #[selector = sol("row(uint256)")]
+    Row { j: usize } -> [u256; 25],
+}
+
+/// The 16 rows of layer 1 that start at row `first`.
+const fn rows_from(_ first: usize) -> [Row<784, 7>; ROWS_PER_CONTRACT] {
+    var rows: [Row<784, 7>; ROWS_PER_CONTRACT] = [layer1::row(first); ROWS_PER_CONTRACT]
+    var j: usize = 1
+    while j < ROWS_PER_CONTRACT {
+        rows[j] = layer1::row(first + j)
+        j += 1
+    }
+    rows
+}
+
+const LOW: [Row<784, 7>; ROWS_PER_CONTRACT] = rows_from(0)
+const HIGH: [Row<784, 7>; ROWS_PER_CONTRACT] = rows_from(ROWS_PER_CONTRACT)
+
+/// Holds rows 0..16 of layer 1. Any other row reverts.
+pub contract RowsLow {
+    recv RowMsg {
+        Row { j } -> [u256; 25] {
+            LOW[j].words()
+        }
+    }
+}
+
+/// Holds rows 16..32 of layer 1. Any other row reverts.
+pub contract RowsHigh {
+    recv RowMsg {
+        Row { j } -> [u256; 25] {
+            HIGH[j - ROWS_PER_CONTRACT].words()
+        }
+    }
+}

@@ -1,0 +1,104 @@
+// Q1: const-generic shapes. Matrix<R, C> over [[i32; C]; R].
+use core::ops::Mul
+
+pub struct Matrix<const R: usize, const C: usize> {
+    pub data: [[i32; C]; R],
+}
+
+impl<const R: usize, const C: usize> Matrix<R, C> {
+    pub fn zero() -> Self {
+        Matrix { data: [[0; C]; R] }
+    }
+
+    pub fn rows(self) -> usize {
+        R
+    }
+
+    pub fn cols(self) -> usize {
+        C
+    }
+
+    // Matrix<R, C> x Matrix<C, K> -> Matrix<R, K>
+    pub fn matmul<const K: usize>(self, _ other: Matrix<C, K>) -> Matrix<R, K> {
+        var out: Matrix<R, K> = Matrix<R, K>::zero()
+        var i: usize = 0
+        while i < R {
+            var j: usize = 0
+            while j < K {
+                var acc: i32 = 0
+                var k: usize = 0
+                while k < C {
+                    acc += self.data[i][k] * other.data[k][j]
+                    k += 1
+                }
+                out.data[i][j] = acc
+                j += 1
+            }
+            i += 1
+        }
+        out
+    }
+}
+
+// Operator form: a * b
+impl<const R: usize, const K: usize, const C: usize> Mul<Matrix<K, C>> for Matrix<R, K> {
+    type Output = Matrix<R, C>
+
+    fn mul(own self, _ other: own Matrix<K, C>) -> Matrix<R, C> {
+        self.matmul<C>(other)
+    }
+}
+
+#[test]
+fn matmul_2x3_times_3x2() {
+    let a: Matrix<2, 3> = Matrix { data: [[1, 2, 3], [4, 5, 6]] }
+    let b: Matrix<3, 2> = Matrix { data: [[7, 8], [9, 10], [11, -12]] }
+    let c: Matrix<2, 2> = a.matmul<2>(b)
+    assert!(c.data[0][0] == 58)
+    assert!(c.data[0][1] == -8)
+    assert!(c.data[1][0] == 139)
+    assert!(c.data[1][1] == 10)
+    assert!(c.rows() == 2 && c.cols() == 2)
+}
+
+#[test]
+fn operator_mul_infers_shape() {
+    let a: Matrix<2, 3> = Matrix { data: [[1, 2, 3], [4, 5, 6]] }
+    let b: Matrix<3, 2> = Matrix { data: [[7, 8], [9, 10], [11, -12]] }
+    let c = a * b
+    assert!(c.data[0][0] == 58)
+    assert!(c.data[1][1] == 10)
+    assert!(c.rows() == 2 && c.cols() == 2)
+}
+
+// Signed integer widths in arrays.
+const A8: [i8; 4] = [-128, -1, 0, 127]
+const A16: [i16; 3] = [-32768, -1, 32767]
+const A32: [i32; 3] = [-2147483648, -1, 2147483647]
+const A64: [i64; 3] = [-9223372036854775808, -1, 9223372036854775807]
+const A128: [i128; 2] = [-1, 170141183460469231731687303715884105727]
+const A256: [i256; 2] = [-1, 5]
+
+#[test]
+fn signed_types_in_arrays() {
+    var i: usize = 0
+    var s: i32 = 0
+    while i < 4 {
+        s += A8[i] as i32
+        i += 1
+    }
+    assert!(s == -2)
+    assert!(A16[0] as i32 + A16[2] as i32 == -1)
+    assert!(A32[0] + A32[2] == -1)
+    assert!(A64[0] + A64[2] == -1)
+    assert!(A128[0] == -1)
+    assert!(A256[0] + A256[1] == 4)
+    // widening i8 * i8 into i32 accumulator
+    let w: i8 = -128
+    let x: i8 = -128
+    let p: i32 = (w as i32) * (x as i32)
+    assert!(p == 16384)
+    // arithmetic shift right on negative i32
+    let n: i32 = -1000
+    assert!((n >> 3) == -125)
+}

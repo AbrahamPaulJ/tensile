@@ -1,0 +1,139 @@
+//! `cli audit`: the off-chain auditor of a claim (`docs/spec-dispute.md`
+//! section 8). It re-runs the network with the same kernel the contract uses
+//! and names the first check that fails, which is exactly the challenge to
+//! send to the arbiter.
+use core::marker::Copy
+use ingot::input::{Chunk, Word, read_chunk, read_i32}
+use ingot::output::write_int
+use model::{Input, Logits, layer1, layer2}
+use std::io::{Read, Write, read_char, write, write_char}
+use tensile::{Accumulators, Activations}
+
+/// The output of layer 1.
+pub type Hidden = Activations<32, 3>
+
+/// What a claim states (`docs/spec-dispute.md` section 3).
+pub struct Claim { pub x0: Input, pub hidden: Hidden, pub logits: Logits, pub class: usize }
+
+/// The first failing check of a claim, or none.
+pub enum Verdict {
+    /// Every hidden value, every logit and the class recompute.
+    Ok,
+    /// Neuron `j` of layer `l` recomputes to `expected`, the claim says
+    /// `claimed`: `Neuron(l, j, expected, claimed)`.
+    Neuron(usize, usize, i32, i32),
+    /// The argmax of the claimed logits is `expected`, the claim says
+    /// `claimed`: `Class(expected, claimed)`.
+    Class(usize, usize),
+}
+
+impl Copy for Verdict {}
+
+/// Walks the claim in order (`docs/spec-dispute.md` section 6): layer 1 on
+/// the input against the claimed hidden vector, layer 2 on the CLAIMED hidden
+/// vector against the claimed logits, then the argmax of the CLAIMED logits
+/// against the class. Each step compares two committed vectors, as the
+/// arbiter's challenges do, so the verdict names a challenge that succeeds.
+pub fn audit(_ claim: Claim) -> Verdict {
+    let hidden = layer1::apply(x: claim.x0)
+    for j in 0 .. 32 {
+        if hidden.get(j) != claim.hidden.get(j) {
+            return Verdict::Neuron(1, j, hidden.get(j) as i32, claim.hidden.get(j) as i32)
+        }
+    }
+    let logits = layer2::apply(x: claim.hidden)
+    for j in 0 .. 10 {
+        if logits.at(j).raw() != claim.logits.at(j).raw() {
+            return Verdict::Neuron(2, j, logits.at(j).raw(), claim.logits.at(j).raw())
+        }
+    }
+    let expected = claim.logits.argmax()
+    if expected != claim.class {
+        return Verdict::Class(expected, claim.class)
+    }
+    Verdict::Ok
+}
+
+/// What standard input held where the next claim was expected.
+pub enum Posted {
+    Full(Claim),
+    /// Nothing: the input ended on a claim boundary.
+    End,
+    /// A byte above 127 in a vector, a class outside the outputs, or the end
+    /// of input inside a claim.
+    Malformed,
+}
+
+/// Reads one claim: 784 input bytes, 32 hidden bytes (each 0..127), 10 logits
+/// as big-endian two's complement int32, one class byte.
+pub fn read_claim() -> Posted uses (r: mut Read) {
+    let x0: [i8; 784] = match read_chunk() {
+        Chunk::Full(values) => values,
+        Chunk::End => {
+            return Posted::End
+        },
+        Chunk::Malformed => {
+            return Posted::Malformed
+        },
+    }
+    let hidden: [i8; 32] = match read_chunk() {
+        Chunk::Full(values) => values,
+        Chunk::End => {
+            return Posted::Malformed
+        },
+        Chunk::Malformed => {
+            return Posted::Malformed
+        },
+    }
+    var logits: [i32; 10] = [0; 10]
+    for j in 0 .. 10 {
+        match read_i32() {
+            Word::Full(value) => {
+                logits[j] = value
+            },
+            Word::End => {
+                return Posted::Malformed
+            },
+        }
+    }
+    let class = read_char()
+    if class < 0 || class >= 10 {
+        return Posted::Malformed
+    }
+    Posted::Full(
+        Claim {
+            x0: Activations::pack(x0),
+            hidden: Activations::pack(hidden),
+            logits: Accumulators::from_raw(logits),
+            // In 0..9, checked above.
+            class: class.downcast_unchecked(),
+        },
+    )
+}
+
+/// Writes the verdict as one line: `ok`, `neuron l j expected claimed` or
+/// `class expected claimed`.
+pub fn write_verdict(_ verdict: Verdict) uses (w: mut Write) {
+    match verdict {
+        Verdict::Ok => {
+            write("ok")
+        },
+        Verdict::Neuron(layer, j, expected, claimed) => {
+            write("neuron ")
+            write_int(layer.downcast_truncate())
+            write_char(32)
+            write_int(j.downcast_truncate())
+            write_char(32)
+            write_int(expected)
+            write_char(32)
+            write_int(claimed)
+        },
+        Verdict::Class(expected, claimed) => {
+            write("class ")
+            write_int(expected.downcast_truncate())
+            write_char(32)
+            write_int(claimed.downcast_truncate())
+        },
+    }
+    write_char(10)
+}

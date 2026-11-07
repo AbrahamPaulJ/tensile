@@ -1,0 +1,45 @@
+// Q1: const generic arithmetic in type position: flat array of length R * C.
+pub struct Flat<const R: usize, const C: usize> {
+    pub data: [i32; { R * C }],
+}
+
+impl<const R: usize, const C: usize> Flat<R, C> {
+    pub fn zero() -> Self {
+        Flat { data: [0; { R * C }] }
+    }
+
+    pub fn get(self, _ r: usize, _ c: usize) -> i32 {
+        self.data[r * C + c]
+    }
+
+    pub fn matmul<const K: usize>(self, _ other: Flat<C, K>) -> Flat<R, K> {
+        var out: Flat<R, K> = Flat<R, K>::zero()
+        var i: usize = 0
+        while i < R {
+            var j: usize = 0
+            while j < K {
+                var acc: i32 = 0
+                var k: usize = 0
+                while k < C {
+                    acc += self.data[i * C + k] * other.data[k * K + j]
+                    k += 1
+                }
+                out.data[i * K + j] = acc
+                j += 1
+            }
+            i += 1
+        }
+        out
+    }
+}
+
+#[test]
+fn flat_matmul() {
+    let a: Flat<2, 3> = Flat { data: [1, 2, 3, 4, 5, 6] }
+    let b: Flat<3, 2> = Flat { data: [7, 8, 9, 10, 11, -12] }
+    let c: Flat<2, 2> = a.matmul<2>(b)
+    assert!(c.get(0, 0) == 58)
+    assert!(c.get(0, 1) == -8)
+    assert!(c.get(1, 0) == 139)
+    assert!(c.get(1, 1) == 10)
+}

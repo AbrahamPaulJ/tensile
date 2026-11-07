@@ -1,0 +1,6 @@
+// expect: assertion failed in const context
+// expect: assert!(values[i] >= 0)
+// An activation is in 0..127. A negative constant is rejected while the compiler packs it.
+use tensile::Activations
+
+pub const X: Activations<2, 7> = Activations::pack([1, -1])

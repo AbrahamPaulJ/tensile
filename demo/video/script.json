@@ -1,0 +1,25 @@
+{
+  "voice": "af_heart",
+  "speed": 1.03,
+  "note": "Each beat is one action in the recording (record.mjs, by id) and what is said over it. `say` overrides `text` where the speech engine needs help; `text` is the caption. Figures must match docs/numbers.md.",
+  "beats": [
+    { "id": "title", "text": "Tensile is one neural network kernel, written once in the Fe language. It runs natively to classify, and on the Ethereum Virtual Machine to settle disputes about the answer.", "say": "Tensile is one neural network kernel, written once in the F E language. It runs natively to classify, and on the Ethereum Virtual Machine to settle disputes about the answer." },
+    { "id": "page", "text": "This page is the demo. There is no server and no wallet. This browser tab is running an Ethereum virtual machine, with the contracts exactly as Fe's compiler built them.", "say": "This page is the demo. There is no server and no wallet. This browser tab is running an Ethereum virtual machine, with the contracts exactly as the F E compiler built them." },
+    { "id": "draw", "text": "Let's draw a seven." },
+    { "id": "cost", "text": "The network runs on the EVM, and gets it right. But look at the cost: about 1.9 million gas, for one answer. Nobody wants to pay that every time.", "say": "The network runs on the E V M, and gets it right. But look at the cost: about one point nine million gas, for one answer. Nobody wants to pay that every time." },
+    { "id": "claim", "text": "So nobody runs it on-chain. A claimant just posts the answer, with every intermediate value and a bond." },
+    { "id": "lie", "text": "Now let's be dishonest. We'll claim this seven is a one. And not clumsily: we forge hidden neurons, then compute everything after them correctly, so every later step checks out." },
+    { "id": "post", "text": "Posted, with a one ether bond of play money." },
+    { "id": "finding", "text": "A watcher re-runs the network off-chain and walks the claim in order. The first value that differs names the challenge." },
+    { "id": "wrong", "text": "First, what if the watcher only challenges the final answer? The contract refuses. The forged outputs really are consistent with the forged neurons, so a later check cannot see this lie." },
+    { "id": "right", "text": "Now the named challenge. The contract checks the vectors against the claim's hashes, proves the neuron's weights against the model's Merkle root, and re-runs just that one neuron." },
+    { "id": "result", "text": "Slashed. It took about 8 percent of the gas of the full run, and the bond now belongs to the watcher." },
+    { "id": "honest", "text": "An honest claim is different. Every challenge is refused, with the contract's own error." },
+    { "id": "final", "text": "Once the hour passes, it becomes final. Only then does the result read back, and each account pulls its own money." },
+    { "id": "types", "text": "Why Fe? Shapes and fixed-point scales live in the types. Layers of the wrong shape, or a bias at the wrong scale, do not compile. A model that could overflow on any input fails a static assertion.", "say": "Why F E? Shapes and fixed-point scales live in the types. Layers of the wrong shape, or a bias at the wrong scale, do not compile. A model that could overflow on any input fails a static assertion." },
+    { "id": "effects", "text": "Effects are in the signatures: only withdraw declares that it can send ether. And all of this is nearly free at run time. The types cost about 2 percent of a neuron's execution gas, the pure state machine under 1 percent." },
+    { "id": "evidence", "text": "The evidence. The NumPy reference, the native build and the EVM build agree bit for bit on all 10,000 test images. 45 fuzz and invariant tests pass. All 53 deliberate faults in the contract were caught. And a hand-written Solidity twin passes the same suite: Fe costs 1.26 times its gas per claim.", "say": "The evidence. The num pie reference, the native build and the E V M build agree bit for bit on all ten thousand test images. Forty-five fuzz and invariant tests pass. All fifty-three deliberate faults in the contract were caught. And a hand-written Solidity twin passes the same suite: F E costs one point two six times its gas per claim." },
+    { "id": "limits", "text": "The limits are in the readme. It needs at least one honest watcher, the model is small, and nothing here is audited or deployed. Everything you saw can be rebuilt from the repository." },
+    { "id": "end", "text": "Tensile. A false answer, caught by one neuron." }
+  ]
+}

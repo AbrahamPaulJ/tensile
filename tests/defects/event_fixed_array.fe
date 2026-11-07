@@ -1,0 +1,10 @@
+// A fixed-size array cannot be an event field (Fe 26.5.1), although it is a fine message field
+// and return type, and Solidity events accept `uint256[25]`.
+//
+//   fe check tests/defects/event_fixed_array.fe
+//   error[10-0007]: unsupported ABI field type: `[u256; 2]` is not supported as an event field
+//
+// Workaround: `std::abi::DynArray<u256>` (Solidity `uint256[]`), built with `DynArray::from_slice`,
+// or `std::abi::Bytes`.
+#[event]
+struct Posted { words: [u256; 2] }

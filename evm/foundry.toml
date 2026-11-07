@@ -1,0 +1,21 @@
+# Foundry project for the EVM side of Tensile: the differential test of the Fe contracts against the
+# NumPy reference vectors, the fuzz test of the Fe kernel against a plain Solidity implementation of
+# the spec, and the hand-written Solidity twin that is the gas baseline.
+#
+# Run through tools/evm_test.sh, which stages the Fe build artifacts in fe-out/ and the reference
+# vectors in ref-out/ (both are read by the tests through the paths below).
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = []
+solc = "0.8.38"
+evm_version = "osaka"
+via_ir = true
+optimizer = true
+optimizer_runs = 200
+gas_limit = "18446744073709551615"
+fs_permissions = [{ access = "read", path = "./fe-out" }, { access = "read", path = "./ref-out" }, { access = "read", path = "./test/fixtures" }, { access = "write", path = "./invariant-out" }]
+
+[fuzz]
+runs = 256

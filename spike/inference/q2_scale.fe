@@ -1,0 +1,90 @@
+// Q2: fixed-point scale (number of fractional bits) carried in the type.
+use core::ops::{Add, Mul}
+use core::marker::Copy
+
+pub struct Q<const F: usize> {
+    pub raw: i32,
+}
+
+impl<const F: usize> Q<F> {
+    pub const fn from_raw(_ raw: i32) -> Self {
+        Q { raw }
+    }
+
+    pub const fn raw(self) -> i32 {
+        self.raw
+    }
+
+    pub const fn frac_bits(self) -> usize {
+        F
+    }
+
+    // Explicit requantise: drop (F - G) fractional bits with an arithmetic shift.
+    // The const where predicate rejects G > F at compile time.
+    pub const fn requant<const G: usize>(self) -> Q<G> where G <= F {
+        Q { raw: self.raw >> (F - G).downcast_truncate() }
+    }
+}
+
+impl<const F: usize> Copy for Q<F> {}
+
+impl<const F: usize> Add for Q<F> {
+    const fn add(own self, _ other: own Self) -> Self {
+        Q { raw: self.raw + other.raw }
+    }
+}
+
+// Q<A> * Q<B> -> Q<{A + B}>: arithmetic on const generics in an associated type and return type.
+impl<const A: usize, const B: usize> Mul<Q<B>> for Q<A> {
+    type Output = Q<{ A + B }>
+
+    const fn mul(own self, _ other: own Q<B>) -> Q<{ A + B }> {
+        Q { raw: self.raw * other.raw }
+    }
+}
+
+// Same thing as a free function (in case the trait form is the fragile part).
+pub const fn qmul<const A: usize, const B: usize>(_ a: Q<A>, _ b: Q<B>) -> Q<{ A + B }> {
+    Q { raw: a.raw * b.raw }
+}
+
+#[test]
+fn add_same_scale() {
+    let a: Q<8> = Q<8>::from_raw(256)
+    let b: Q<8> = Q<8>::from_raw(128)
+    let c = a + b
+    assert!(c.raw() == 384)
+    assert!(c.frac_bits() == 8)
+}
+
+#[test]
+fn mul_adds_scales_free_fn() {
+    let a: Q<8> = Q<8>::from_raw(384)      // 1.5
+    let b: Q<4> = Q<4>::from_raw(-40)      // -2.5
+    let c: Q<12> = qmul(a, b)              // -3.75 in Q12
+    assert!(c.raw() == -15360)
+    assert!(c.frac_bits() == 12)
+    let d: Q<8> = c.requant<8>()
+    assert!(d.raw() == -960)
+    assert!(d.frac_bits() == 8)
+}
+
+#[test]
+fn mul_adds_scales_operator() {
+    let a: Q<8> = Q<8>::from_raw(384)
+    let b: Q<4> = Q<4>::from_raw(-40)
+    let c: Q<12> = a * b
+    assert!(c.raw() == -15360)
+    let d = (a * b).requant<8>()
+    assert!(d.raw() == -960)
+}
+
+// Evaluated at compile time too.
+const fn ct_demo() -> i32 {
+    let a: Q<8> = Q<8>::from_raw(384)
+    let b: Q<4> = Q<4>::from_raw(-40)
+    let c: Q<12> = qmul(a, b)
+    c.requant<8>().raw()
+}
+
+static_assert(ct_demo() == -960)

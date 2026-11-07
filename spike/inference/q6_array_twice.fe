@@ -1,0 +1,30 @@
+// Q6 repro attempt: the same large constant array used in TWO messages inside one function.
+// In the 784 x 32 workspace this pattern (two evm.call with x: weights::X, a [i8; 784]) halted with
+// EVM StackOverflow: the unrolled copy keeps every loaded element live on the stack for the second copy.
+const BIG: [i8; 784] = [7; 784]
+
+msg M {
+    #[selector = 0x01]
+    A { v: [i8; 784] } -> u256,
+    #[selector = 0x02]
+    B { v: [i8; 784] } -> u256,
+}
+
+pub contract C {
+    recv M {
+        A { v } -> u256 {
+            if v[0] == 7 && v[783] == 7 { 1 } else { 0 }
+        }
+        B { v } -> u256 {
+            if v[0] == 7 && v[783] == 7 { 2 } else { 0 }
+        }
+    }
+}
+
+#[test]
+fn same_array_in_two_calls() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let a: u256 = evm.call(addr: c, gas: 100000000, value: Wei::zero(), message: M::A { v: BIG })
+    let b: u256 = evm.call(addr: c, gas: 100000000, value: Wei::zero(), message: M::B { v: BIG })
+    assert!(a == 1 && b == 2)
+}

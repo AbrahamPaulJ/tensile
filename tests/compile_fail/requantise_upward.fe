@@ -1,0 +1,9 @@
+// expect: arithmetic overflow in const context
+// expect: in the return type of this call
+// A shift larger than the scale would mean a negative number of fractional bits: the scale
+// `F - SHIFT` of the result underflows while the compiler evaluates the type.
+use tensile::Accumulators
+
+pub fn hidden(acc: Accumulators<2, 14>) -> i8 {
+    acc.requantise<15>().get(0)
+}

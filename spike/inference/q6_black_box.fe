@@ -1,0 +1,11 @@
+// Q6 repro: core::hint::black_box on an array type-checks (fe check passes) but fails later in
+// MIR lowering, so the error appears as a codegen failure without a source location.
+use core::hint::black_box
+
+const X: [i8; 4] = [1, 2, 3, 4]
+
+#[test]
+fn t() {
+    let x = black_box(X)
+    assert!(x[0] == 1)
+}

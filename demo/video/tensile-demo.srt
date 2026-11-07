@@ -1,0 +1,135 @@
+1
+00:00:00,396 --> 00:00:04,945
+Tensile is one neural network kernel, written once in the Fe language.
+
+2
+00:00:04,945 --> 00:00:11,574
+It runs natively to classify, and on the Ethereum Virtual Machine to settle disputes about the answer.
+
+3
+00:00:11,944 --> 00:00:15,648
+This page is the demo. There is no server and no wallet.
+
+4
+00:00:15,648 --> 00:00:23,058
+This browser tab is running an Ethereum virtual machine, with the contracts exactly as Fe's compiler built them.
+
+5
+00:00:23,422 --> 00:00:24,659
+Let's draw a seven.
+
+6
+00:00:30,382 --> 00:00:37,998
+The network runs on the EVM, and gets it right. But look at the cost: about 1.9 million gas, for one answer.
+
+7
+00:00:37,998 --> 00:00:40,536
+Nobody wants to pay that every time.
+
+8
+00:00:40,910 --> 00:00:47,416
+So nobody runs it on-chain. A claimant just posts the answer, with every intermediate value and a bond.
+
+9
+00:00:47,781 --> 00:00:52,409
+Now let's be dishonest. We'll claim this seven is a one. And not clumsily:
+
+10
+00:00:52,409 --> 00:00:58,789
+we forge hidden neurons, then compute everything after them correctly, so every later step checks out.
+
+11
+00:00:59,150 --> 00:01:01,710
+Posted, with a one ether bond of play money.
+
+12
+00:01:02,088 --> 00:01:06,204
+A watcher re-runs the network off-chain and walks the claim in order.
+
+13
+00:01:06,204 --> 00:01:09,128
+The first value that differs names the challenge.
+
+14
+00:01:09,497 --> 00:01:14,480
+First, what if the watcher only challenges the final answer? The contract refuses.
+
+15
+00:01:14,480 --> 00:01:20,739
+The forged outputs really are consistent with the forged neurons, so a later check cannot see this lie.
+
+16
+00:01:21,099 --> 00:01:24,476
+The contract checks the vectors against the claim's hashes,
+
+17
+00:01:24,476 --> 00:01:25,850
+Now the named challenge.
+
+18
+00:01:25,850 --> 00:01:31,232
+proves the neuron's weights against the model's Merkle root, and re-runs just that one neuron.
+
+19
+00:01:32,267 --> 00:01:37,771
+Slashed. It took about 8 percent of the gas of the full run, and the bond now belongs to the watcher.
+
+20
+00:01:38,132 --> 00:01:43,124
+An honest claim is different. Every challenge is refused, with the contract's own error.
+
+21
+00:01:46,786 --> 00:01:53,762
+Once the hour passes, it becomes final. Only then does the result read back, and each account pulls its own money.
+
+22
+00:01:57,358 --> 00:02:00,911
+Why Fe? Shapes and fixed-point scales live in the types.
+
+23
+00:02:00,911 --> 00:02:05,479
+Layers of the wrong shape, or a bias at the wrong scale, do not compile.
+
+24
+00:02:05,479 --> 00:02:09,667
+A model that could overflow on any input fails a static assertion.
+
+25
+00:02:10,025 --> 00:02:14,885
+Effects are in the signatures: only withdraw declares that it can send ether.
+
+26
+00:02:14,885 --> 00:02:17,599
+And all of this is nearly free at run time.
+
+27
+00:02:17,599 --> 00:02:23,849
+The types cost about 2 percent of a neuron's execution gas, the pure state machine under 1 percent.
+
+28
+00:02:24,212 --> 00:02:32,348
+The evidence. The NumPy reference, the native build and the EVM build agree bit for bit on all 10,000 test images.
+
+29
+00:02:32,348 --> 00:02:38,558
+45 fuzz and invariant tests pass. All 53 deliberate faults in the contract were caught.
+
+30
+00:02:38,558 --> 00:02:45,268
+And a hand-written Solidity twin passes the same suite: Fe costs 1.26 times its gas per claim.
+
+31
+00:02:45,637 --> 00:02:47,390
+The limits are in the readme.
+
+32
+00:02:47,390 --> 00:02:53,315
+It needs at least one honest watcher, the model is small, and nothing here is audited or deployed.
+
+33
+00:02:53,315 --> 00:02:56,581
+Everything you saw can be rebuilt from the repository.
+
+34
+00:02:56,941 --> 00:02:59,714
+Tensile. A false answer, caught by one neuron.

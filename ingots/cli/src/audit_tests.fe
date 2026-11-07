@@ -1,0 +1,118 @@
+//! Tests of the auditor on reference sample 0: the honest claim passes, and
+//! one wrong hidden value, one wrong logit or a wrong class is named as the
+//! first failing check, with the value the kernel expects.
+use ingot::audit::{Claim, Verdict, audit}
+use model::reference
+use tensile::{Accumulators, Activations}
+
+fn honest() -> Claim {
+    Claim {
+        x0: reference::X0,
+        hidden: reference::HIDDEN1_0,
+        logits: reference::LOGITS0,
+        class: reference::CLASS0,
+    }
+}
+
+fn is_ok(_ verdict: Verdict) -> bool {
+    match verdict {
+        Verdict::Ok => true,
+        Verdict::Neuron(_, _, _, _) => false,
+        Verdict::Class(_, _) => false,
+    }
+}
+
+fn names_neuron(_ verdict: Verdict, layer: usize, j: usize, expected: i32, claimed: i32) -> bool {
+    match verdict {
+        Verdict::Ok => false,
+        Verdict::Neuron(l, n, e, c) => l == layer && n == j && e == expected && c == claimed,
+        Verdict::Class(_, _) => false,
+    }
+}
+
+fn names_class(_ verdict: Verdict, expected: usize, claimed: usize) -> bool {
+    match verdict {
+        Verdict::Ok => false,
+        Verdict::Neuron(_, _, _, _) => false,
+        Verdict::Class(e, c) => e == expected && c == claimed,
+    }
+}
+
+#[test]
+fn the_honest_claim_is_ok() {
+    assert!(is_ok(audit(honest())))
+}
+
+#[test]
+fn a_wrong_hidden_value_names_its_neuron() {
+    var values: [i8; 32] = [0; 32]
+    for i in 0 .. 32 {
+        values[i] = reference::HIDDEN1_0.get(i)
+    }
+    let right = values[7]
+    values[7] = if right == 127 { 0 } else { right + 1 }
+    var claim = honest()
+    claim.hidden = Activations::pack(values)
+    assert!(
+        names_neuron(
+            audit(claim),
+            layer: 1,
+            j: 7,
+            expected: right as i32,
+            claimed: values[7] as i32,
+        ),
+    )
+}
+
+#[test]
+fn a_wrong_logit_names_its_neuron_in_layer_2() {
+    var logits = reference::LOGITS0.values()
+    let right = logits[9]
+    logits[9] = right - 1
+    var claim = honest()
+    claim.logits = Accumulators::from_raw(logits)
+    assert!(
+        names_neuron(
+            audit(claim),
+            layer: 2,
+            j: 9,
+            expected: right,
+            claimed: right - 1,
+        ),
+    )
+}
+
+#[test]
+fn a_wrong_class_names_the_class() {
+    var claim = honest()
+    claim.class = (reference::CLASS0 + 1) % 10
+    assert!(
+        names_class(
+            audit(claim),
+            expected: reference::CLASS0,
+            claimed: claim.class,
+        ),
+    )
+}
+
+#[test]
+fn the_first_failing_check_wins() {
+    // A wrong hidden value and a wrong class: the hidden value is named.
+    var values: [i8; 32] = [0; 32]
+    for i in 0 .. 32 {
+        values[i] = reference::HIDDEN1_0.get(i)
+    }
+    values[0] = if values[0] == 127 { 0 } else { values[0] + 1 }
+    var claim = honest()
+    claim.hidden = Activations::pack(values)
+    claim.class = (reference::CLASS0 + 1) % 10
+    assert!(
+        names_neuron(
+            audit(claim),
+            layer: 1,
+            j: 0,
+            expected: reference::HIDDEN1_0.get(0) as i32,
+            claimed: values[0] as i32,
+        ),
+    )
+}

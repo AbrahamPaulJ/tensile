@@ -1,0 +1,16 @@
+//! The contracts that run the Tensile kernel on the EVM.
+//!
+//! - `Network` runs the whole forward pass of the model, reading the weights
+//!   of layer 1 from `RowsLow` and `RowsHigh`.
+//! - `NeuronCheck` re-runs one neuron from calldata.
+//! - `Arbiter` settles disputes about claimed inferences by re-running one
+//!   neuron, or the argmax, against the committed model
+//!   (`docs/spec-dispute.md`).
+//!
+//! All of them call the `model` ingot, which calls `tensile`: the code the
+//! native classifier runs.
+pub use arbiter::{Arbiter, ArbiterMsg}
+pub use commitment::leaf
+pub use network::{Network, NetworkMsg}
+pub use neuron_check::{NeuronCheck, NeuronMsg}
+pub use rows::{RowMsg, RowsHigh, RowsLow}

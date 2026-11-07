@@ -1,0 +1,156 @@
+//! Packed int8 vectors: the storage shared by weights and activations.
+use core::marker::Copy
+use core::num::IntWord
+use core::ops::{Eq, WrappingMul}
+use ingot::testing::sequence
+
+/// Number of 256-bit words that hold `n` packed int8 values.
+pub const fn word_count(_ n: usize) -> usize {
+    (n + 31) / 32
+}
+
+/// `N` int8 values, two's complement, packed 32 per 256-bit word.
+///
+/// Value `i` is byte `i % 32` of word `i / 32`, counting from the most
+/// significant byte, and the unused bytes of the last word are zero. Read in
+/// order, the words are the byte encoding of `docs/spec.md` section 7, the
+/// layout `core::bytes::PackedBytes` uses for unsigned bytes.
+///
+/// A constant of this type costs one byte of contract code per value, where a
+/// `[i8; N]` constant costs 32.
+pub struct Packed<const N: usize> { pub(ingot) words: [u256; word_count(N)] }
+
+impl<const N: usize> Copy for Packed<N> {}
+
+impl<const N: usize> Packed<N> {
+    /// Packs `values` in index order. The compiler does the packing when
+    /// `values` is a constant.
+    pub const fn pack(_ values: [i8; N]) -> Self {
+        var words: [u256; word_count(N)] = [0; word_count(N)]
+        var k: usize = 0
+        while k < word_count(N) {
+            // Each value pushes the earlier ones up one byte, so the first
+            // ends in the most significant byte. Past value `N - 1` the
+            // pushes go on with zeros.
+            var word: u256 = 0
+            var i: usize = k * 32
+            while i < (k + 1) * 32 {
+                word = word << 8
+                if i < N {
+                    word |= values[i].to_word() & 0xff
+                }
+                i += 1
+            }
+            words[k] = word
+            k += 1
+        }
+        Self { words }
+    }
+
+    /// Whether every byte past value `N - 1` is zero (`docs/spec.md` section
+    /// 7): the check `from_words` makes, as a value, for code that must reject
+    /// a malformed vector with its own error instead of failing.
+    pub const fn padded_with_zeros(_ words: [u256; word_count(N)]) -> bool {
+        if N % 32 == 0 { return true }
+        words[N / 32] << ((N % 32) * 8) as u256 == 0
+    }
+
+    /// Wraps words that are already packed. Fails if a byte past value `N - 1`
+    /// is not zero: at compile time for a constant, at run time otherwise.
+    pub const fn from_words(_ words: own [u256; word_count(N)]) -> Self {
+        assert!(Self::padded_with_zeros(words))
+        Self { words }
+    }
+
+    /// Value `i`.
+    pub const fn get(self, _ i: usize) -> i8 {
+        assert!(i < N)
+        (self.words[i / 32] >> shift_of(i)).downcast_truncate()
+    }
+}
+
+impl<const N: usize> Eq for Packed<N> {
+    const fn eq(self, _ other: Self) -> bool {
+        var k: usize = 0
+        while k < word_count(N) {
+            if self.words[k] != other.words[k] {
+                return false
+            }
+            k += 1
+        }
+        true
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        !self.eq(other)
+    }
+}
+
+/// The sum of the 32 bytes (lanes) of a word, read as unsigned.
+pub(ingot) const fn lane_sum(_ word: u256) -> u256 {
+    // Add neighbouring bytes: sixteen 16-bit lanes, each at most 510.
+    let pairs = (word & EVEN_LANES) + ((word >> 8) & EVEN_LANES)
+    // Multiplying by a one in every 16-bit lane leaves the sum of all sixteen
+    // in the top lane; the lanes that would lie above it wrap away.
+    pairs.wrapping_mul(WIDE_LANES) >> 240
+}
+
+/// 0xff in every second byte lane.
+const EVEN_LANES: u256 = 0x00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff
+
+/// 0x0001 in each of the sixteen 16-bit lanes.
+const WIDE_LANES: u256 = 0x0001000100010001000100010001000100010001000100010001000100010001
+
+/// Bit position of value `i` inside its word.
+const fn shift_of(_ i: usize) -> u256 {
+    ((31 - i % 32) * 8) as u256
+}
+
+const SAMPLE: [i8; 5] = [1, -1, 127, -128, 0]
+const SAMPLE_WORD: u256 = 0x01ff7f8000000000000000000000000000000000000000000000000000000000
+
+static_assert(Packed::pack(SAMPLE) == Packed<5>::from_words([SAMPLE_WORD]))
+static_assert(Packed::pack(SAMPLE).get(3) == -128)
+static_assert(word_count(0) == 0)
+static_assert(word_count(32) == 1)
+static_assert(word_count(33) == 2)
+static_assert(word_count(784) == 25)
+static_assert(Packed<5>::padded_with_zeros([SAMPLE_WORD]))
+static_assert(!Packed<3>::padded_with_zeros([SAMPLE_WORD]))
+static_assert(Packed<32>::padded_with_zeros([SAMPLE_WORD | 1]))
+static_assert(lane_sum(0xff * LANES) == 32 * 255)
+static_assert(lane_sum(SAMPLE_WORD) == 1 + 255 + 127 + 128)
+
+/// 0x01 in each of the 32 byte lanes.
+const LANES: u256 = 0x0101010101010101010101010101010101010101010101010101010101010101
+
+#[test]
+fn pack_uses_the_documented_layout() {
+    assert!(Packed::pack(SAMPLE).words[0] == SAMPLE_WORD)
+}
+
+#[test]
+fn get_returns_every_packed_value() {
+    let values: [i8; 300] = sequence(start: 100, step: 37, modulus: 256)
+    let packed = Packed::pack(values)
+    for i in 0 .. 300 {
+        assert!(packed.get(i) == values[i])
+    }
+}
+
+#[test]
+fn the_unused_bytes_of_the_last_word_are_zero() {
+    let packed = Packed<33>::pack([-1; 33])
+    assert!(
+        packed.words[1] == 0xff00000000000000000000000000000000000000000000000000000000000000,
+    )
+}
+
+#[test]
+fn equality_compares_every_word() {
+    let values: [i8; 40] = sequence(start: 0, step: 1, modulus: 256)
+    var other = values
+    other[39] = 0
+    assert!(Packed::pack(values) == Packed::pack(values))
+    assert!(Packed::pack(values) != Packed::pack(other))
+}

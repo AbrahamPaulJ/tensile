@@ -1,0 +1,252 @@
+// The one shared source: a quantised dense layer, pure Fe, no EVM or host dependencies.
+// int8 weights, int8 inputs, int32 accumulator, ReLU, requantise by arithmetic shift, clamp to int8.
+use core::num::IntWord
+
+// Generic over shape. Weights, bias and input are parameters.
+pub fn dense<const IN: usize, const OUT: usize>(
+    w: [[i8; IN]; OUT],
+    b: [i32; OUT],
+    x: [i8; IN],
+    shift: i32,
+) -> [i8; OUT] {
+    var out: [i8; OUT] = [0; OUT]
+    var o: usize = 0
+    while o < OUT {
+        var acc: i32 = b[o]
+        var i: usize = 0
+        while i < IN {
+            acc += (w[o][i] as i32) * (x[i] as i32)
+            i += 1
+        }
+        if acc < 0 {
+            acc = 0
+        }
+        acc = acc >> shift
+        if acc > 127 {
+            acc = 127
+        }
+        out[o] = acc.downcast_truncate()
+        o += 1
+    }
+    out
+}
+
+// Same arithmetic with overflow checks off (the accumulator bound is proven offline:
+// |acc| <= 10000 + IN * 128 * 127 fits i32 for IN <= 132,000).
+#[arithmetic(unchecked)]
+pub fn dense_unchecked<const IN: usize, const OUT: usize>(
+    w: [[i8; IN]; OUT],
+    b: [i32; OUT],
+    x: [i8; IN],
+    shift: i32,
+) -> [i8; OUT] {
+    var out: [i8; OUT] = [0; OUT]
+    var o: usize = 0
+    while o < OUT {
+        var acc: i32 = b[o]
+        var i: usize = 0
+        while i < IN {
+            acc += (w[o][i] as i32) * (x[i] as i32)
+            i += 1
+        }
+        if acc < 0 {
+            acc = 0
+        }
+        acc = acc >> shift
+        if acc > 127 {
+            acc = 127
+        }
+        out[o] = acc.downcast_truncate()
+        o += 1
+    }
+    out
+}
+
+// ---- Packed weights: 32 int8 weights per u256 word, each stored as (w + 128) in one byte. ----
+
+// Number of u256 words needed for n weights. Used in type position below.
+pub const fn words(_ n: usize) -> usize {
+    (n + 31) / 32
+}
+
+// Packs a weight matrix at compile time (also callable at runtime).
+pub const fn pack<const IN: usize, const OUT: usize>(_ w: [[i8; IN]; OUT]) -> [[u256; words(IN)]; OUT] {
+    var out: [[u256; words(IN)]; OUT] = [[0; words(IN)]; OUT]
+    var o: usize = 0
+    while o < OUT {
+        var i: usize = 0
+        while i < IN {
+            let biased: i32 = (w[o][i] as i32) + 128
+            let u: u256 = IntWord::to_word(biased as i256)
+            out[o][i / 32] = out[o][i / 32] | (u << ((i % 32) * 8) as u256)
+            i += 1
+        }
+        o += 1
+    }
+    out
+}
+
+// Same layer arithmetic as dense_unchecked, reading weights from the packed form.
+#[arithmetic(unchecked)]
+pub fn dense_packed<const IN: usize, const OUT: usize>(
+    w: [[u256; words(IN)]; OUT],
+    b: [i32; OUT],
+    x: [i8; IN],
+    shift: i32,
+) -> [i8; OUT] {
+    var out: [i8; OUT] = [0; OUT]
+    var o: usize = 0
+    while o < OUT {
+        var acc: i32 = b[o]
+        var i: usize = 0
+        var j: usize = 0
+        while i < IN {
+            var word: u256 = w[o][j]
+            var k: usize = 0
+            while k < 32 && i < IN {
+                let u: i32 = (word & 0xff).downcast_truncate()
+                acc += (u - 128) * (x[i] as i32)
+                word = word >> 8
+                i += 1
+                k += 1
+            }
+            j += 1
+        }
+        if acc < 0 {
+            acc = 0
+        }
+        acc = acc >> shift
+        if acc > 127 {
+            acc = 127
+        }
+        out[o] = acc.downcast_truncate()
+        o += 1
+    }
+    out
+}
+
+// Gas experiment: identical results, but the accumulator and operands are native 256-bit words
+// (no i32 sign-extension after every operation on the EVM). acc cannot overflow i32 by construction.
+#[arithmetic(unchecked)]
+pub fn dense_packed_wide<const IN: usize, const OUT: usize>(
+    w: [[u256; words(IN)]; OUT],
+    b: [i32; OUT],
+    x: [i8; IN],
+    shift: i32,
+) -> [i8; OUT] {
+    var out: [i8; OUT] = [0; OUT]
+    let sh: i256 = shift as i256
+    var o: usize = 0
+    while o < OUT {
+        var acc: i256 = b[o] as i256
+        var i: usize = 0
+        var j: usize = 0
+        while i < IN {
+            var word: u256 = w[o][j]
+            var k: usize = 0
+            while k < 32 && i < IN {
+                let u: i256 = i256::from_word(word & 0xff)
+                acc += (u - 128) * (x[i] as i256)
+                word = word >> 8
+                i += 1
+                k += 1
+            }
+            j += 1
+        }
+        if acc < 0 {
+            acc = 0
+        }
+        acc = acc >> sh
+        if acc > 127 {
+            acc = 127
+        }
+        out[o] = acc.downcast_truncate()
+        o += 1
+    }
+    out
+}
+
+pub fn infer_packed_wide(x: [i8; weights::IN]) -> [i8; weights::OUT] {
+    dense_packed_wide(w: weights::WP, b: weights::B, x: x, shift: weights::SHIFT)
+}
+
+// One output neuron from one packed weight row. Used by the per-row on-chain design.
+#[arithmetic(unchecked)]
+pub fn row_packed_wide<const IN: usize>(w: [u256; words(IN)], bias: i32, x: [i8; IN], shift: i32) -> i8 {
+    var acc: i256 = bias as i256
+    var i: usize = 0
+    var j: usize = 0
+    while i < IN {
+        var word: u256 = w[j]
+        var k: usize = 0
+        while k < 32 && i < IN {
+            let u: i256 = i256::from_word(word & 0xff)
+            acc += (u - 128) * (x[i] as i256)
+            word = word >> 8
+            i += 1
+            k += 1
+        }
+        j += 1
+    }
+    if acc < 0 {
+        acc = 0
+    }
+    acc = acc >> (shift as i256)
+    if acc > 127 {
+        acc = 127
+    }
+    acc.downcast_truncate()
+}
+
+pub fn infer_packed(x: [i8; weights::IN]) -> [i8; weights::OUT] {
+    dense_packed(w: weights::WP, b: weights::B, x: x, shift: weights::SHIFT)
+}
+
+// The embedded model: weights are compile-time constants in weights.fe.
+pub fn infer(x: [i8; weights::IN]) -> [i8; weights::OUT] {
+    dense(w: weights::W, b: weights::B, x: x, shift: weights::SHIFT)
+}
+
+pub fn infer_unchecked(x: [i8; weights::IN]) -> [i8; weights::OUT] {
+    dense_unchecked(w: weights::W, b: weights::B, x: x, shift: weights::SHIFT)
+}
+
+#[test]
+fn infer_matches_python_reference() {
+    let y = infer(x: weights::X)
+    var o: usize = 0
+    while o < weights::OUT {
+        assert!(y[o] == weights::EXPECTED[o])
+        o += 1
+    }
+}
+
+#[test]
+fn infer_unchecked_matches_python_reference() {
+    let y = infer_unchecked(x: weights::X)
+    var o: usize = 0
+    while o < weights::OUT {
+        assert!(y[o] == weights::EXPECTED[o])
+        o += 1
+    }
+}
+
+#[test]
+fn infer_packed_matches_python_reference() {
+    let y = infer_packed(x: weights::X)
+    var o: usize = 0
+    while o < weights::OUT {
+        assert!(y[o] == weights::EXPECTED[o])
+        o += 1
+    }
+}
+
+#[test]
+fn infer_packed_wide_matches_python_reference() {
+    let y = infer_packed_wide(x: weights::X)
+    var o: usize = 0
+    while o < weights::OUT {
+        assert!(y[o] == weights::EXPECTED[o])
+        o += 1
+    }
+}

@@ -1,0 +1,180 @@
+// Q4 alternative: weights live in two separate weight-holder contracts (each under the 24,576 byte
+// limit). The layer contract fetches each half with one STATICCALL and runs the same shared kernel.
+use std::evm::{Call, Ctx, Log}
+use nn::weights
+
+msg WeightsMsg {
+    #[selector = sol("weights()")]
+    Get -> [[u256; weights::WPR]; weights::HALF],
+}
+
+pub contract WeightsA {
+    recv WeightsMsg {
+        Get -> [[u256; weights::WPR]; weights::HALF] {
+            weights::WP_A
+        }
+    }
+}
+
+pub contract WeightsB {
+    recv WeightsMsg {
+        Get -> [[u256; weights::WPR]; weights::HALF] {
+            weights::WP_B
+        }
+    }
+}
+
+msg SplitMsg {
+    #[selector = sol("infer(int8[196])")]
+    Infer { x: [i8; weights::IN] } -> [i8; weights::OUT],
+}
+
+pub contract LayerSplit uses (call: Call) {
+    a: Address,
+    b: Address,
+
+    init(wa: Address, wb: Address) uses (mut a, mut b) {
+        a = wa
+        b = wb
+    }
+
+    recv SplitMsg {
+        Infer { x } -> [i8; weights::OUT] uses (call, a, b) {
+            // Whole-half fetch. At 784 x 32 this arm compiles to about 23 KB of unrolled
+            // word-by-word copy code (3,017 MSTOREs), so LayerSplit itself exceeds 24,576 bytes.
+            // See LayerRows below for the per-row variant that fits.
+            let ya = nn::dense_packed_wide(
+                w: a.static(WeightsMsg::Get {}),
+                b: weights::B_A,
+                x: x,
+                shift: weights::SHIFT,
+            )
+            let yb = nn::dense_packed_wide(
+                w: b.static(WeightsMsg::Get {}),
+                b: weights::B_B,
+                x: x,
+                shift: weights::SHIFT,
+            )
+            var out: [i8; weights::OUT] = [0; weights::OUT]
+            var o: usize = 0
+            while o < weights::HALF {
+                out[o] = ya[o]
+                out[o + weights::HALF] = yb[o]
+                o += 1
+            }
+            out
+        }
+    }
+}
+
+// ---- Per-row variant: one STATICCALL per output neuron, returning a single packed row. ----
+
+msg RowMsg {
+    #[selector = sol("row(uint256)")]
+    Row { o: usize } -> [u256; weights::WPR],
+}
+
+pub contract RowsA {
+    recv RowMsg {
+        Row { o } -> [u256; weights::WPR] {
+            weights::WP_A[o]
+        }
+    }
+}
+
+pub contract RowsB {
+    recv RowMsg {
+        Row { o } -> [u256; weights::WPR] {
+            weights::WP_B[o]
+        }
+    }
+}
+
+msg RowsLayerMsg {
+    #[selector = sol("infer(int8[196])")]
+    Infer { x: [i8; weights::IN] } -> [i8; weights::OUT],
+}
+
+pub contract LayerRows uses (call: Call) {
+    a: Address,
+    b: Address,
+
+    init(wa: Address, wb: Address) uses (mut a, mut b) {
+        a = wa
+        b = wb
+    }
+
+    recv RowsLayerMsg {
+        Infer { x } -> [i8; weights::OUT] uses (call, a, b) {
+            var out: [i8; weights::OUT] = [0; weights::OUT]
+            var o: usize = 0
+            while o < weights::HALF {
+                out[o] = nn::row_packed_wide(
+                    w: a.static(RowMsg::Row { o }),
+                    bias: weights::B_A[o],
+                    x: x,
+                    shift: weights::SHIFT,
+                )
+                out[o + weights::HALF] = nn::row_packed_wide(
+                    w: b.static(RowMsg::Row { o }),
+                    bias: weights::B_B[o],
+                    x: x,
+                    shift: weights::SHIFT,
+                )
+                o += 1
+            }
+            out
+        }
+    }
+}
+
+#[event]
+struct GasReport {
+    #[indexed]
+    tag: u256,
+    gas: u256,
+}
+
+// tag 8: LayerSplit through CALL (includes two STATICCALLs that return the weights).
+#[test]
+fn gas_contract_call_split() uses (evm: mut Evm) {
+    let wa = evm.create2<WeightsA>(value: Wei::zero(), args: (), salt: 0)
+    let wb = evm.create2<WeightsB>(value: Wei::zero(), args: (), salt: 0)
+    let layer = evm.create2<LayerSplit>(value: Wei::zero(), args: (wa, wb), salt: 0)
+    let g0 = evm.gas()
+    let y: [i8; weights::OUT] = evm.call(
+        addr: layer,
+        gas: 100000000,
+        value: Wei::zero(),
+        message: SplitMsg::Infer { x: weights::X },
+    )
+    let g1 = evm.gas()
+    evm.emit(GasReport { tag: 8, gas: g0 - g1 })
+    var o: usize = 0
+    while o < weights::OUT {
+        assert!(y[o] == weights::EXPECTED[o])
+        o += 1
+    }
+}
+
+// tag 9: LayerRows through CALL (one STATICCALL per output neuron).
+#[test]
+fn gas_contract_call_rows() uses (evm: mut Evm) {
+    let wa = evm.create2<RowsA>(value: Wei::zero(), args: (), salt: 0)
+    let wb = evm.create2<RowsB>(value: Wei::zero(), args: (), salt: 0)
+    let layer = evm.create2<LayerRows>(value: Wei::zero(), args: (wa, wb), salt: 0)
+    let g0 = evm.gas()
+    let y: [i8; weights::OUT] = evm.call(
+        addr: layer,
+        gas: 100000000,
+        value: Wei::zero(),
+        message: RowsLayerMsg::Infer { x: weights::X },
+    )
+    let g1 = evm.gas()
+    evm.emit(GasReport { tag: 9, gas: g0 - g1 })
+    var o: usize = 0
+    while o < weights::OUT {
+        assert!(y[o] == weights::EXPECTED[o])
+        o += 1
+    }
+}

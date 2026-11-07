@@ -1,0 +1,34 @@
+# Private planning material: never publish. The repo is public and the jury reads it.
+private/
+docs/research/
+docs/master-rubric.md
+docs/ideas.md
+docs/decision.md
+claude-yolo.bat
+CLAUDE.md
+HANDOFF.md
+
+# Build outputs and downloaded data. ref/out stays tracked: it is what the differential tests compare
+# against, and a judge should not have to download anything to run them.
+/out/
+/out-*/
+evm/out/
+evm/cache/
+ref/data/
+__pycache__/
+spike/**/out/
+spike/**/out-*/
+spike/**/gen/
+
+# Milestone 3 build outputs (the neuron Merkle tree, tools/gen_tree.py)
+build/
+
+# Demo: dependencies, and the recording's working files. dist/ and the final video are tracked.
+demo/node_modules/
+demo/video/work/
+
+# Spike build logs
+spike/**/build.log
+
+# The storage-proof spike went to another entrant (2026-11-06); it is not part of this entry.
+spike/proofs/

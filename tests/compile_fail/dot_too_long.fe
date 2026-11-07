@@ -1,0 +1,9 @@
+// expect: const requirement is not satisfied
+// expect: dot_fits_i32(IN)
+// 131,072 products of two int8 values can exceed an int32, so the unchecked kernel refuses
+// vectors that long.
+use tensile::{Activations, Q, Row, neuron}
+
+pub fn one(row: Row<131072, 7>, x: Activations<131072, 7>, bias: Q<14>) -> Q<14> {
+    neuron(row, x, bias)
+}

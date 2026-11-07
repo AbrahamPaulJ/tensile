@@ -1,0 +1,19 @@
+// Q3 limits: a 4096-entry table (cheap body).
+const fn table() -> [u8; 4096] {
+    var t: [u8; 4096] = [0; 4096]
+    var i: usize = 0
+    while i < 4096 {
+        t[i] = ((i * 7 + 3) % 251).downcast_truncate()
+        i += 1
+    }
+    t
+}
+
+const T: [u8; 4096] = table()
+
+static_assert(T[4095] == 54)
+
+#[test]
+fn t() {
+    assert!(T[core::hint::black_box(4095)] == 54)
+}

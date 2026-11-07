@@ -1,0 +1,113 @@
+//! `cli`: the native command-line classifier and auditor.
+//!
+//! Reads from standard input until it ends. A sample is one byte per input
+//! activation, each 0..127 (`ref/out/inputs.bin`, `docs/spec.md` section 6).
+//!
+//! - `cli` prints the predicted class of every sample, one per line.
+//! - `cli trace` prints, for every sample, one `hidden K v v ..` line per
+//!   hidden layer, then `logits v v ..`, then `class c`.
+//! - `cli audit` reads claims instead of samples (a sample, then the claimed
+//!   hidden bytes, the claimed logits as big-endian int32 and the claimed
+//!   class byte) and prints, per claim, `ok` or the first failing check:
+//!   `neuron l j expected claimed` or `class expected claimed`
+//!   (`docs/spec-dispute.md` section 8).
+//!
+//! Exit status: 0 on success, 1 for an unknown argument, 2 for malformed
+//! input (a byte above 127, a class outside the outputs, or input that ends
+//! inside a sample or claim).
+use model::{Input, classify, forward}
+use std::io::{Read, Write, host, write}
+use std::native::Args
+use tensile::{Activations, Probe}
+
+use audit::{Posted, audit, read_claim, write_verdict}
+use input::{Chunk, is_word, read_chunk}
+use output::{Printer, write_class, write_logits}
+
+const OK: i32 = 0
+const USAGE: i32 = 1
+const MALFORMED: i32 = 2
+
+/// What the command line asked for.
+enum Mode {
+    Classes,
+    Trace,
+    Audit,
+}
+
+/// The entry point: `cli`, `cli trace` or `cli audit`.
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    // `argc` and `argv` are the pair the entry bridge passes to `main`.
+    let args = unsafe {
+        Args::new(argc, argv)
+    }
+    let mode = if args.len() == 1 {
+        Mode::Classes
+    } else if args.len() == 2 && is_word(args.get(1), "trace") {
+        Mode::Trace
+    } else if args.len() == 2 && is_word(args.get(1), "audit") {
+        Mode::Audit
+    } else {
+        return USAGE
+    }
+    with (Read = host(), Write = host()) {
+        match mode {
+            Mode::Audit => audit_claims(),
+            Mode::Trace => run(trace: true),
+            Mode::Classes => run(trace: false),
+        }
+    }
+}
+
+/// Classifies every sample on standard input and returns the exit status.
+fn run(trace: bool) -> i32 uses (r: mut Read, w: mut Write) {
+    var status = OK
+    var reading = true
+    while reading {
+        match read_chunk() {
+            Chunk::Full(values) => {
+                let x: Input = Activations::pack(values)
+                if trace {
+                    var printer = Printer::new()
+                    let logits = with (Probe = printer) {
+                        forward(x)
+                    }
+                    write_logits(logits)
+                    write("class ")
+                    write_class(logits.argmax())
+                } else {
+                    write_class(classify(x))
+                }
+            },
+            Chunk::End => {
+                reading = false
+            },
+            Chunk::Malformed => {
+                status = MALFORMED
+                reading = false
+            },
+        }
+    }
+    status
+}
+
+/// Audits every claim on standard input and returns the exit status.
+fn audit_claims() -> i32 uses (r: mut Read, w: mut Write) {
+    var status = OK
+    var reading = true
+    while reading {
+        match read_claim() {
+            Posted::Full(claim) => {
+                write_verdict(audit(claim))
+            },
+            Posted::End => {
+                reading = false
+            },
+            Posted::Malformed => {
+                status = MALFORMED
+                reading = false
+            },
+        }
+    }
+    status
+}

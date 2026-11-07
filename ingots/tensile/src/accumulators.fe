@@ -1,0 +1,182 @@
+//! Int32 values at a typed scale: biases, accumulators and logits.
+use core::marker::Copy
+use core::ops::Eq
+use ingot::activations::Activations
+use ingot::packed::Packed
+
+/// One int32 with `F` fractional bits: the real value is `raw / 2^F`.
+pub struct Q<const F: usize> { raw: i32 }
+
+impl<const F: usize> Copy for Q<F> {}
+
+impl<const F: usize> Q<F> {
+    /// The value whose integer representation is `raw`.
+    pub const fn from_raw(_ raw: i32) -> Self {
+        Self { raw }
+    }
+
+    /// The integer representation.
+    pub const fn raw(self) -> i32 {
+        self.raw
+    }
+
+    /// Drops `SHIFT` fractional bits: `raw >> SHIFT`, an arithmetic shift, so
+    /// the result is rounded toward negative infinity (`-1 >> 1` is `-1`).
+    /// The shift is part of the type: a shift larger than `F` does not
+    /// compile, because the scale `F - SHIFT` of the result does not exist.
+    pub const fn shifted<const SHIFT: usize>(self) -> Q<{ F - SHIFT }> where SHIFT < 32 {
+        Q::from_raw(self.raw >> SHIFT.downcast_truncate())
+    }
+
+    /// The value as an activation at the same scale: `clamp(raw, 0, 127)`.
+    /// The lower clamp is the ReLU.
+    pub const fn clamped(self) -> i8 {
+        if self.raw < 0 {
+            0
+        } else if self.raw > 127 {
+            127
+        } else {
+            self.raw.downcast_truncate()
+        }
+    }
+}
+
+/// The biases of a layer: `N` int32 values with `F` fractional bits.
+pub struct Bias<const N: usize, const F: usize> { raw: [i32; N] }
+
+impl<const N: usize, const F: usize> Bias<N, F> {
+    /// The biases whose integer representations are `raw`.
+    pub const fn from_raw(_ raw: own [i32; N]) -> Self {
+        Self { raw }
+    }
+
+    /// The bias of neuron `j`.
+    pub const fn at(self, _ j: usize) -> Q<F> {
+        Q::from_raw(self.raw[j])
+    }
+}
+
+/// The accumulators of a layer: `N` int32 values with `F` fractional bits.
+/// The accumulators of the last layer are the logits.
+pub struct Accumulators<const N: usize, const F: usize> { raw: [i32; N] }
+
+impl<const N: usize, const F: usize> Accumulators<N, F> {
+    /// The accumulators whose integer representations are `raw`.
+    pub const fn from_raw(_ raw: own [i32; N]) -> Self {
+        Self { raw }
+    }
+
+    /// The accumulator of neuron `j`.
+    pub const fn at(self, _ j: usize) -> Q<F> {
+        Q::from_raw(self.raw[j])
+    }
+
+    /// The integer representations, in order.
+    pub const fn values(self) -> [i32; N] {
+        self.raw
+    }
+
+    /// Requantises to activations: every value becomes
+    /// `clamp(raw >> SHIFT, 0, 127)`. The shift is part of the type and the
+    /// result has `F - SHIFT` fractional bits, so a shift larger than `F`
+    /// does not compile.
+    pub const fn requantise<const SHIFT: usize>(self) -> Activations<N, { F - SHIFT }>
+    where SHIFT < 32
+    {
+        var values: [i8; N] = [0; N]
+        var j: usize = 0
+        while j < N {
+            values[j] = self.at(j).shifted<SHIFT>().clamped()
+            j += 1
+        }
+        Activations { values: Packed::pack(values) }
+    }
+
+    /// Index of the largest value. The lowest index wins a tie.
+    pub const fn argmax(self) -> usize where N > 0 {
+        var best: usize = 0
+        var j: usize = 1
+        while j < N {
+            if self.raw[j] > self.raw[best] {
+                best = j
+            }
+            j += 1
+        }
+        best
+    }
+}
+
+impl<const N: usize, const F: usize> Eq for Accumulators<N, F> {
+    const fn eq(self, _ other: Self) -> bool {
+        var j: usize = 0
+        while j < N {
+            if self.raw[j] != other.raw[j] {
+                return false
+            }
+            j += 1
+        }
+        true
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        !self.eq(other)
+    }
+}
+
+const ACC: Accumulators<5, 14> = Accumulators::from_raw([-1, 127, 128, 16255, 16384])
+
+static_assert(Q<1>::from_raw(-1).shifted<1>().raw() == -1)
+static_assert(Q<31>::from_raw(-2147483648).shifted<31>().raw() == -1)
+static_assert(Q<31>::from_raw(2147483647).shifted<31>().raw() == 0)
+static_assert(Q<0>::from_raw(-1).clamped() == 0)
+static_assert(Q<0>::from_raw(127).clamped() == 127)
+static_assert(Q<0>::from_raw(128).clamped() == 127)
+static_assert(ACC.requantise<7>() == Activations<5, 7>::pack([0, 0, 1, 126, 127]))
+static_assert(ACC.argmax() == 4)
+
+#[test]
+fn the_shift_rounds_toward_negative_infinity() {
+    let raw: [i32; 6] = [-1, -3, -128, -129, 255, -2147483648]
+    let floor: [i32; 6] = [-1, -2, -64, -65, 127, -1073741824]
+    for i in 0 .. 6 {
+        assert!(Q<7>::from_raw(raw[i]).shifted<1>().raw() == floor[i])
+    }
+}
+
+#[test]
+fn clamped_keeps_0_to_127() {
+    let raw: [i32; 6] = [-2147483648, -1, 0, 127, 128, 2147483647]
+    let clamped: [i8; 6] = [0, 0, 0, 127, 127, 127]
+    for i in 0 .. 6 {
+        assert!(Q<0>::from_raw(raw[i]).clamped() == clamped[i])
+    }
+}
+
+#[test]
+fn requantise_shifts_then_clamps() {
+    let y: Activations<5, 7> = ACC.requantise<7>()
+    assert!(y == Activations::pack([0, 0, 1, 126, 127]))
+}
+
+#[test]
+fn requantise_by_zero_only_clamps() {
+    let y: Activations<5, 14> = ACC.requantise<0>()
+    assert!(y == Activations::pack([0, 127, 127, 127, 127]))
+}
+
+#[test]
+fn argmax_prefers_the_lowest_index_on_a_tie() {
+    assert!(Accumulators<4, 0>::from_raw([3, 9, 9, -2]).argmax() == 1)
+    assert!(Accumulators<3, 0>::from_raw([-5, -5, -7]).argmax() == 0)
+    assert!(Accumulators<1, 0>::from_raw([-9]).argmax() == 0)
+}
+
+#[test]
+fn equality_compares_every_value() {
+    assert!(
+        ACC == Accumulators::from_raw([-1, 127, 128, 16255, 16384]),
+    )
+    assert!(
+        ACC != Accumulators::from_raw([-1, 127, 128, 16255, 16385]),
+    )
+}

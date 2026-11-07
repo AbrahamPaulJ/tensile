@@ -1,0 +1,6 @@
+// expect: assertion failed in const context
+// The bytes of a packed row past its last value must be zero: here the row has 2 weights and
+// the literal carries a third byte.
+use tensile::Row
+
+pub const ROW: Row<2, 7> = Row::from_words([0x0102030000000000000000000000000000000000000000000000000000000000])

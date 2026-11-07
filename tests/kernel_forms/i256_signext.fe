@@ -1,0 +1,35 @@
+//! Kernel form `i256-signext`: a 256-bit accumulator, every lane truncated to
+//! an `i8` and widened again, which is a SIGNEXTEND on the EVM.
+use ingot::dense::dot_fits_i32
+use ingot::packed::{Packed, word_count}
+
+/// Dot product of `N` int8 weights and `N` activations.
+///
+/// The arithmetic is unchecked, and the `where` clause is the proof that it
+/// cannot overflow.
+#[arithmetic(unchecked)]
+pub(ingot) fn dot<const N: usize>(weights: Packed<N>, activations: Packed<N>) -> i32
+where dot_fits_i32(N)
+{
+    var sum: i256 = 0
+    for k in 0 .. word_count(N) {
+        var u = weights.words[k]
+        var v = activations.words[k]
+        for lane in 0 .. 32 {
+            let weight: i8 = (u >> 248).downcast_truncate()
+            let activation: i8 = (v >> 248).downcast_truncate()
+            sum += (weight as i256) * (activation as i256)
+            u = u << 8
+            v = v << 8
+        }
+    }
+    sum.downcast_truncate()
+}
+
+#[test]
+fn dot_reaches_both_extremes_without_overflow() {
+    let low = Packed<64>::pack([-128; 64])
+    let high = Packed<64>::pack([127; 64])
+    assert!(dot(weights: high, activations: high) == 64 * 127 * 127)
+    assert!(dot(weights: low, activations: high) == -64 * 128 * 127)
+}

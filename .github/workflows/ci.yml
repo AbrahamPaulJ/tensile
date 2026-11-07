@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FE_VERSION: v26.5.1
+  FOUNDRY_VERSION: v1.9.0
+
+jobs:
+  fe:
+    name: Fe tests and milestone checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: sudo apt-get update && sudo apt-get install -y bc xxd
+      - run: fe --version
+      - run: fe fmt --check ingots
+      - run: fe test
+      - run: fe build
+      - run: bash tools/m1_check.sh
+      - run: bash tools/m2_check.sh
+      - run: bash tools/m3_check.sh
+
+  reference:
+    name: NumPy reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install numpy==2.3.3
+      - run: python ref/test_ref.py
+
+  demo:
+    name: Demo page
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: demo
+      - run: npm run build
+        working-directory: demo
+      - name: The committed page is the page these sources build
+        run: git diff --exit-code demo/dist/tensile-demo.html
+      - run: npm test
+        working-directory: demo
+      - run: npx playwright install --with-deps chromium
+        working-directory: demo
+      - run: npm run test:ui
+        working-directory: demo
+        env:
+          PLAYWRIGHT_BUNDLED: "1"

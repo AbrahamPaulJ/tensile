@@ -1,0 +1,13 @@
+//! The claim lifecycle of the Tensile arbiter as a pure state machine
+//! (`docs/spec-dispute.md` sections 4, 5 and 8).
+//!
+//! A claim is `Open` until a challenge proves it wrong before its deadline
+//! (`Slashed`, the bond goes to the challenger) or it is finalised at or after
+//! the deadline (`Final`, the bond goes back to the claimant). Both end states
+//! are terminal. `step` is the whole rule: it takes the claim, the time and
+//! the action, and returns what the contract must store and whom it must
+//! credit, or why nothing may happen. There is no storage, no clock and no
+//! ETH here, so the rule is unit-tested on both backends with time as a plain
+//! argument, and `static_assert`s state the deadline boundary in the source.
+pub use claim::{Claim, Status}
+pub use step::{Action, Payee, Rejection, Transition, step}

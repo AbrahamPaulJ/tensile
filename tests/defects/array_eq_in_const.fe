@@ -1,0 +1,12 @@
+// Language limit (Fe 26.5.1): `==` on arrays is not usable in a constant expression:
+//
+//   error[3-0024]: non-const function call in const context
+//   | static_assert(A == B)
+//   |               ^^^^^^ calls in const context must be `const fn`
+//
+// Reproduce: fe check tests/defects/array_eq_in_const.fe
+// Workaround: wrap the array in a struct with a `const fn eq` (see `tensile::Packed`).
+const A: [u256; 2] = [1, 2]
+const B: [u256; 2] = [1, 2]
+
+static_assert(A == B)

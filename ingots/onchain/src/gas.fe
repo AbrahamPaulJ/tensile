@@ -1,0 +1,48 @@
+//! Gas of the kernel measured inside the EVM, without a call or calldata:
+//! the difference of `gas()` around one neuron of each layer. Run with
+//! `fe test --show-logs`; `tools/kernel_gas.sh` reads the reports.
+use core::hint::black_box
+use model::{layer1, layer2, reference}
+use std::evm::{Ctx, Log}
+
+/// Gas used by neuron `neuron` of layer `layer` on reference sample 0.
+#[event]
+struct KernelGas {
+    #[indexed]
+    layer: u256,
+    gas: u256,
+}
+
+/// `words` with every word hidden from the optimiser, so that the neuron is
+/// computed at run time.
+fn at_run_time<const N: usize>(_ words: [u256; N]) -> [u256; N] {
+    var hidden = words
+    for k in 0 .. N {
+        hidden[k] = black_box(hidden[k])
+    }
+    hidden
+}
+
+#[test]
+fn gas_of_a_layer_1_neuron() uses (ctx: Ctx, log: mut Log) {
+    let row = at_run_time(layer1::row(0).words())
+    let x = at_run_time(reference::X0.words())
+    let bias = black_box(layer1::bias(0).raw())
+    let before = ctx.gas()
+    let y = layer1::neuron_from_words(row, x, bias)
+    let after = ctx.gas()
+    log.emit(KernelGas { layer: 1, gas: before - after })
+    assert!(y == reference::HIDDEN1_0.get(0))
+}
+
+#[test]
+fn gas_of_a_layer_2_neuron() uses (ctx: Ctx, log: mut Log) {
+    let row = at_run_time(layer2::row(0).words())
+    let x = at_run_time(reference::HIDDEN1_0.words())
+    let bias = black_box(layer2::bias(0).raw())
+    let before = ctx.gas()
+    let y = layer2::neuron_from_words(row, x, bias)
+    let after = ctx.gas()
+    log.emit(KernelGas { layer: 2, gas: before - after })
+    assert!(y == reference::LOGITS0.at(0).raw())
+}

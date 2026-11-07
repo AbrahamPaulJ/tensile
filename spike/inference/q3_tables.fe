@@ -1,0 +1,110 @@
+// Q3: lookup tables built by const fn at compile time.
+use core::hint::black_box
+use std::evm::{Ctx, Log}
+
+const ONE: u256 = 1 << 64
+
+// e^(1/16) in Q64 by Taylor series, computed at compile time (no pasted magic constant).
+const fn exp_sixteenth_q64() -> u256 {
+    var sum: u256 = ONE
+    var term: u256 = ONE
+    var n: u256 = 1
+    while n < 16 {
+        term = term / (16 * n)
+        sum += term
+        n += 1
+    }
+    sum
+}
+
+const E16: u256 = exp_sixteenth_q64()
+
+// sigmoid((i - 128) / 16) scaled to 0..255, for a table index i in 0..256.
+// Deliberately the slow per-entry form (a loop of up to 128 multiplies) so the
+// compile-time table costs real CTFE work and the runtime version costs real gas.
+pub const fn sigmoid_entry(_ i: usize) -> u8 {
+    let k: usize = if i >= 128 { i - 128 } else { 128 - i }
+    var p: u256 = ONE
+    var j: usize = 0
+    while j < k {
+        p = (p * E16) >> 64
+        j += 1
+    }
+    let num: u256 = if i >= 128 { p } else { ONE }
+    let den: u256 = ONE + p
+    let v: u256 = (num * 255 + den / 2) / den
+    v.downcast_truncate()
+}
+
+const fn sigmoid_table() -> [u8; 256] {
+    var t: [u8; 256] = [0; 256]
+    var i: usize = 0
+    while i < 256 {
+        t[i] = sigmoid_entry(i)
+        i += 1
+    }
+    t
+}
+
+// Clamped ReLU ("ReLU6" style) over an int8 input reinterpreted from the index byte:
+// index b in 0..256 stands for the i8 value (b < 128 ? b : b - 256); output clamp(x, 0, 96).
+const fn relu_clamp_table() -> [i8; 256] {
+    var t: [i8; 256] = [0; 256]
+    var b: usize = 0
+    while b < 128 {
+        t[b] = if b > 96 { 96 } else { b.downcast_truncate() }
+        b += 1
+    }
+    t
+}
+
+pub const SIGMOID: [u8; 256] = sigmoid_table()
+pub const RELU_CLAMP: [i8; 256] = relu_clamp_table()
+
+// Compile-time proofs that the tables were evaluated by the compiler.
+static_assert(SIGMOID[0] == 0)
+static_assert(SIGMOID[128] == 128)
+static_assert(SIGMOID[144] == 186)
+static_assert(SIGMOID[255] == 255)
+static_assert(RELU_CLAMP[5] == 5)
+static_assert(RELU_CLAMP[127] == 96)
+static_assert(RELU_CLAMP[200] == 0)
+
+#[event]
+struct GasReport {
+    lookup_gas: u256,
+    compute_gas: u256,
+    lookup_value: u256,
+    compute_value: u256,
+}
+
+#[test]
+fn table_matches_runtime_computation() {
+    var i: usize = 0
+    while i < 256 {
+        assert!(SIGMOID[i] == sigmoid_entry(black_box(i)))
+        i += 1
+    }
+}
+
+#[test]
+fn lookup_vs_compute_gas() uses (ctx: Ctx, log: mut Log) {
+    let i: usize = black_box(250)
+
+    let g0 = ctx.gas()
+    let a: u8 = black_box(SIGMOID[i])
+    let g1 = ctx.gas()
+    let b: u8 = black_box(sigmoid_entry(i))
+    let g2 = ctx.gas()
+
+    log.emit(
+        GasReport {
+            lookup_gas: g0 - g1,
+            compute_gas: g1 - g2,
+            lookup_value: a as u256,
+            compute_value: b as u256,
+        },
+    )
+    assert!(a == b)
+    assert!(g0 - g1 < g1 - g2)
+}

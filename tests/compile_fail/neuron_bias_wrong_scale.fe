@@ -1,0 +1,8 @@
+// expect: type mismatch
+// expect: expected `Q<13>`, but `Q<14>` is given
+// The single-neuron function applies the same rule as the layer: 6 + 7 fractional bits is 13.
+use tensile::{Activations, Q, Row, neuron}
+
+pub fn one(row: Row<4, 6>, x: Activations<4, 7>, bias: Q<14>) -> Q<14> {
+    neuron(row, x, bias)
+}

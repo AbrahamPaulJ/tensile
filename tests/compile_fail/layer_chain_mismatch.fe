@@ -1,0 +1,15 @@
+// expect: type mismatch
+// expect: expected `Activations<3, _>`, but `Activations<2, 3>` is given
+// The first layer has 2 outputs and the second expects 3 inputs.
+use tensile::{Accumulators, Activations, Bias, Weights, dense}
+
+pub fn network(
+    w1: Weights<2, 4, 7>,
+    b1: Bias<2, 14>,
+    w2: Weights<5, 3, 6>,
+    b2: Bias<5, 9>,
+    x: Activations<4, 7>,
+) -> Accumulators<5, 9> {
+    let hidden = dense(weights: w1, x, bias: b1).requantise<11>()
+    dense(weights: w2, x: hidden, bias: b2)
+}

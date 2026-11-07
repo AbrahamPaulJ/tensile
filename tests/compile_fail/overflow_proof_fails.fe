@@ -1,0 +1,9 @@
+// expect: static assertion failed
+// The compile-time overflow proof rejects a layer whose worst case does not fit an int32:
+// |2147483647| + 127 * 1 is larger than I32_MAX.
+use tensile::{Bias, I32_MAX, Row, Weights, worst_case}
+
+const WEIGHTS: Weights<1, 2, 7> = Weights::new([Row::pack([1, 0])])
+const BIAS: Bias<1, 14> = Bias::from_raw([2147483647])
+
+static_assert(worst_case(weights: WEIGHTS, bias: BIAS) <= I32_MAX)

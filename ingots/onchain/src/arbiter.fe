@@ -1,0 +1,375 @@
+//! `Arbiter`: optimistic verification of inference claims
+//! (`docs/spec-dispute.md`).
+//!
+//! Anyone posts a claimed inference with a bond; anyone can prove it wrong
+//! before the deadline by re-running one neuron or the argmax on-chain, with
+//! the model ingot's `neuron_from_words`: the code the forward pass runs. The
+//! lifecycle rule is `dispute::step`, a pure function; this contract reads the
+//! clock, loads and stores the claim, and moves credits. Credits are pulled
+//! with `withdraw`, the only handler that sends ETH, which its effect
+//! signature shows (`mut call`).
+use core::result::Result
+use dispute::{Action, Payee, Rejection, Status, Transition, step}
+use ingot::commitment::leaf
+use ingot::record::{Record, dynamic, logits_hash}
+use ingot::signals::{
+    BondTooSmall,
+    ClaimNotOpen,
+    ClassOutOfRange,
+    ClassSlashed,
+    Claimed,
+    Finalized,
+    InputMismatch,
+    MalformedHidden,
+    MalformedInput,
+    NeuronOutOfRange,
+    NeuronSlashed,
+    NoFraud,
+    NotCommitted,
+    NotFinal,
+    NothingToWithdraw,
+    OutputMismatch,
+    TooEarly,
+    TooLate,
+    TransferFailed,
+    UnknownClaim,
+    Withdrawn,
+}
+use model::{Input, Logits, layer1, layer2}
+use std::abi::{Bytes32, DynArray}
+use std::evm::{Address, Call, Ctx, Duration, Log, StorageMap, Timestamp, Wei, keccak_words, merkle}
+use tensile::Activations
+
+/// The output of layer 1.
+type Hidden = Activations<32, 3>
+
+/// Number of hidden neurons (layer 1 outputs).
+const HIDDEN: u256 = 32
+
+/// Number of classes (layer 2 outputs).
+const CLASSES: u8 = 10
+
+/// The arbiter's interface. Vectors are packed words (`docs/spec.md` section
+/// 7); `uint8` for a class, `int32` for a bias or logit, `bytes32[]` for a
+/// Merkle proof (siblings from the leaf up, as OpenZeppelin's `MerkleProof`).
+pub msg ArbiterMsg {
+    /// Posts a claim with at least `bond()` attached: for input `x0`, the
+    /// hidden activations are `hidden`, the logits `logits`, the class
+    /// `class`. Returns the claim number.
+    #[selector = sol("claim(uint256[25],uint256[1],int32[10],uint8)")]
+    Claim { x0: [u256; 25], hidden: [u256; 1], logits: [i32; 10], class: u8 } -> u256,
+    /// Proves claim `id` wrong at hidden neuron `j`: `x0` and `hidden` must be
+    /// the committed vectors, `row`, `bias` and `proof` a committed neuron of
+    /// layer 1. Reverts unless the neuron recomputes to another value.
+    #[selector = sol(
+        "challengeNeuron1(uint256,uint256,uint256[25],uint256[1],uint256[25],int32,bytes32[])",
+    )]
+    ChallengeNeuron1 {
+        id: u256,
+        j: u256,
+        x0: [u256; 25],
+        hidden: [u256; 1],
+        row: [u256; 25],
+        bias: i32,
+        proof: DynArray<Bytes32>,
+    },
+    /// Proves claim `id` wrong at logit `j`, from the committed hidden vector.
+    #[selector = sol(
+        "challengeNeuron2(uint256,uint256,uint256[1],int32[10],uint256[1],int32,bytes32[])",
+    )]
+    ChallengeNeuron2 {
+        id: u256,
+        j: u256,
+        hidden: [u256; 1],
+        logits: [i32; 10],
+        row: [u256; 1],
+        bias: i32,
+        proof: DynArray<Bytes32>,
+    },
+    /// Proves claim `id` wrong at the class: the argmax of the committed
+    /// logits (lowest index on a tie) is not the claimed class.
+    #[selector = sol("challengeClass(uint256,int32[10])")]
+    ChallengeClass { id: u256, logits: [i32; 10] },
+    /// Closes claim `id` at or after its deadline and credits the bond back.
+    #[selector = sol("finalize(uint256)")]
+    Finalize { id: u256 },
+    /// Sends the caller's credits to the caller. Returns the amount.
+    #[selector = sol("withdraw()")]
+    Withdraw -> Wei,
+    /// The class of a `Final` claim. Reverts for any other claim.
+    #[selector = sol("result(uint256)")]
+    ResultOf { id: u256 } -> u8,
+    /// Number of claims posted so far; claims are numbered from 0.
+    #[selector = sol("claimCount()")]
+    ClaimCount -> u256,
+    /// Claimant, bond, deadline, class and status code (1 open, 2 slashed,
+    /// 3 final) of claim `id`.
+    #[selector = sol("claimInfo(uint256)")]
+    ClaimInfo { id: u256 } -> (Address, Wei, Timestamp, u8, u8),
+    /// The committed hashes of claim `id`: input words, hidden words, logits.
+    #[selector = sol("claimHashes(uint256)")]
+    ClaimHashes { id: u256 } -> (u256, u256, u256),
+    /// What `account` can withdraw.
+    #[selector = sol("creditOf(address)")]
+    CreditOf { account: Address } -> Wei,
+    /// The model root the arbiter was deployed with.
+    #[selector = sol("modelRoot()")]
+    ModelRoot -> u256,
+    /// The bond a claim must attach.
+    #[selector = sol("bond()")]
+    Bond -> Wei,
+    /// How long a claim stays challengeable.
+    #[selector = sol("window()")]
+    Window -> Duration,
+}
+
+/// The arbiter for one model: deployed with the model root, the bond and the
+/// challenge window. Each handler names the effects it needs: only `Withdraw`
+/// can move ETH (`mut call`); the views touch nothing but storage.
+pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    root: u256,
+    bond: Wei,
+    window: Duration,
+    mut count: u256,
+    mut claims: StorageMap<u256, Record>,
+    mut credits: StorageMap<Address, Wei>,
+
+    init(model_root: u256, bond_required: Wei, challenge_window: Duration)
+    uses (mut root, mut bond, mut window)
+    {
+        root = model_root
+        bond = bond_required
+        window = challenge_window
+    }
+
+    recv ArbiterMsg {
+        #[payable]
+        Claim { x0, hidden, logits, class } -> u256
+        uses (ctx, bond, window, mut count, mut claims, mut log)
+        {
+            let paid = ctx.value()
+            if paid < bond {
+                revert_error(BondTooSmall { sent: paid, required: bond })
+            }
+            if !Input::well_formed(x0) {
+                revert_error(MalformedInput {})
+            }
+            if !Hidden::well_formed(hidden) {
+                revert_error(MalformedHidden {})
+            }
+            if class >= CLASSES {
+                revert_error(ClassOutOfRange { class })
+            }
+            let id = count
+            count = id + 1
+            let claimant = ctx.caller()
+            let deadline = ctx.timestamp() + window
+            claims[id] = Record {
+                claimant,
+                class,
+                status: Status::Open.code(),
+                bond: paid,
+                deadline,
+                x0_hash: keccak_words(x0),
+                hidden_hash: keccak_words(hidden),
+                logits_hash: logits_hash(logits),
+            }
+            log.emit(
+                Claimed {
+                    id,
+                    claimant,
+                    x0: dynamic(x0),
+                    hidden: dynamic(hidden),
+                    logits: dynamic(logits),
+                    class,
+                    bond: paid,
+                    deadline,
+                },
+            )
+            id
+        }
+
+        ChallengeNeuron1 { id, j, x0, hidden, row, bias, proof }
+        uses (ctx, root, count, mut claims, mut credits, mut log)
+        {
+            let record = load(id)
+            if j >= HIDDEN {
+                revert_error(NeuronOutOfRange { neuron: j })
+            }
+            if keccak_words(x0) != record.x0_hash {
+                revert_error(InputMismatch {})
+            }
+            if keccak_words(hidden) != record.hidden_hash {
+                revert_error(OutputMismatch {})
+            }
+            if !merkle::verify(proof, root, leaf: leaf(layer: 1, neuron: j, bias, row)) {
+                revert_error(NotCommitted {})
+            }
+            let recomputed = layer1::neuron_from_words(row, x: x0, bias)
+            let claimed = Hidden::from_words(hidden).get(j as usize)
+            let challenger = ctx.caller()
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Challenge(recomputed != claimed),
+                challenger,
+            )
+            log.emit(NeuronSlashed { id, challenger, layer: 1, neuron: j })
+        }
+
+        ChallengeNeuron2 { id, j, hidden, logits, row, bias, proof }
+        uses (ctx, root, count, mut claims, mut credits, mut log)
+        {
+            let record = load(id)
+            if j >= CLASSES as u256 {
+                revert_error(NeuronOutOfRange { neuron: j })
+            }
+            if keccak_words(hidden) != record.hidden_hash {
+                revert_error(InputMismatch {})
+            }
+            if logits_hash(logits) != record.logits_hash {
+                revert_error(OutputMismatch {})
+            }
+            if !merkle::verify(proof, root, leaf: leaf(layer: 2, neuron: j, bias, row)) {
+                revert_error(NotCommitted {})
+            }
+            let recomputed = layer2::neuron_from_words(row, x: hidden, bias)
+            let claimed = logits[j as usize]
+            let challenger = ctx.caller()
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Challenge(recomputed != claimed),
+                challenger,
+            )
+            log.emit(NeuronSlashed { id, challenger, layer: 2, neuron: j })
+        }
+
+        ChallengeClass { id, logits } uses (ctx, count, mut claims, mut credits, mut log) {
+            let record = load(id)
+            if logits_hash(logits) != record.logits_hash {
+                revert_error(OutputMismatch {})
+            }
+            let fraud = Logits::from_raw(logits).argmax() != record.class as usize
+            let challenger = ctx.caller()
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Challenge(fraud),
+                challenger,
+            )
+            log.emit(ClassSlashed { id, challenger })
+        }
+
+        Finalize { id } uses (ctx, count, mut claims, mut credits, mut log) {
+            let record = load(id)
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Finalize,
+                challenger: ctx.caller(),
+            )
+            log.emit(Finalized { id, class: record.class })
+        }
+
+        Withdraw -> Wei uses (ctx, mut call, mut credits, mut log) {
+            let account = ctx.caller()
+            let amount = credits[account]
+            if amount == Wei::zero() {
+                revert_error(NothingToWithdraw {})
+            }
+            // State first, then the transfer; a failed transfer reverts both.
+            credits[account] = Wei::zero()
+            if !call.send_value(addr: account, gas: ctx.gas(), value: amount).success() {
+                revert_error(TransferFailed {})
+            }
+            log.emit(Withdrawn { account, amount })
+            amount
+        }
+
+        ResultOf { id } -> u8 uses (count, claims) {
+            let record = load(id)
+            if record.status != Status::Final.code() {
+                revert_error(NotFinal { id })
+            }
+            record.class
+        }
+
+        ClaimCount -> u256 uses (count) {
+            count
+        }
+
+        ClaimInfo { id } -> (Address, Wei, Timestamp, u8, u8)
+        uses (count, claims)
+        {
+            let record = load(id)
+            (record.claimant, record.bond, record.deadline, record.class, record.status)
+        }
+
+        ClaimHashes { id } -> (u256, u256, u256) uses (count, claims) {
+            let record = load(id)
+            (record.x0_hash, record.hidden_hash, record.logits_hash)
+        }
+
+        CreditOf { account } -> Wei uses (credits) {
+            credits[account]
+        }
+
+        ModelRoot -> u256 uses (root) {
+            root
+        }
+
+        Bond -> Wei uses (bond) {
+            bond
+        }
+
+        Window -> Duration uses (window) {
+            window
+        }
+    }
+}
+
+/// Claim `id`, or `UnknownClaim`.
+fn load(_ id: u256) -> Record
+uses (count: u256, claims: StorageMap<u256, Record>)
+{
+    if id >= count {
+        revert_error(UnknownClaim { id })
+    }
+    claims[id]
+}
+
+/// Applies the lifecycle rule to claim `id`: stores the new status and
+/// credits the bond to the challenger or the claimant, or reverts with the
+/// rule's reason. `challenger` is the caller; it is paid only when the rule
+/// says so.
+fn settle(_ id: u256, _ record: Record, now: Timestamp, action: Action, challenger: Address)
+uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei>)
+{
+    let claim = dispute::Claim {
+        status: Status::from_code(record.status),
+        deadline: record.deadline.as_seconds(),
+    }
+    match step(claim, now: now.as_seconds(), action) {
+        Result::Err(why) => {
+            match why {
+                Rejection::NotOpen => revert_error(ClaimNotOpen { id }),
+                Rejection::TooLate => revert_error(TooLate { deadline: record.deadline }),
+                Rejection::TooEarly => revert_error(TooEarly { deadline: record.deadline }),
+                Rejection::NoFraud => revert_error(NoFraud {}),
+            }
+        },
+        Result::Ok(transition) => {
+            claims[id].status = transition.status.code()
+            let payee = match transition.bond_to {
+                Payee::Challenger => challenger,
+                Payee::Claimant => record.claimant,
+            }
+            credits[payee] = credits[payee] + record.bond
+        },
+    }
+}

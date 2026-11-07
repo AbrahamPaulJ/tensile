@@ -1,0 +1,73 @@
+//! Kernel form `u32-limbs`: 32-bit limbs, unsigned lanes, products summed per
+//! limb in 32 bits.
+use core::ops::WrappingMul
+use ingot::dense::dot_fits_i32
+use ingot::packed::{Packed, word_count}
+
+/// Dot product of `N` int8 weights and `N` activations in 0..127.
+#[arithmetic(unchecked)]
+pub(ingot) fn dot<const N: usize>(weights: Packed<N>, activations: Packed<N>) -> i32
+where dot_fits_i32(N)
+{
+    var products: u256 = 0
+    var inputs: u64 = 0
+    for k in 0 .. word_count(N) {
+        let u = weights.words[k] ^ SIGN_BITS
+        let v = activations.words[k]
+        products += dot4(limb(u >> 224), limb(v >> 224)) as u256
+            + dot4(limb(u >> 192), limb(v >> 192)) as u256
+            + dot4(limb(u >> 160), limb(v >> 160)) as u256
+            + dot4(limb(u >> 128), limb(v >> 128)) as u256
+            + dot4(limb(u >> 96), limb(v >> 96)) as u256
+            + dot4(limb(u >> 64), limb(v >> 64)) as u256
+            + dot4(limb(u >> 32), limb(v >> 32)) as u256
+            + dot4(limb(u), limb(v)) as u256
+        inputs += lane_sum(v)
+    }
+    let biased: i64 = products.downcast_truncate()
+    let offset: i64 = (128 * inputs).downcast_truncate()
+    (biased - offset).downcast_truncate()
+}
+
+/// The sign bit of each of the 32 values in a word.
+const SIGN_BITS: u256 = 0x8080808080808080808080808080808080808080808080808080808080808080
+
+/// The low 32 bits of a word.
+#[inline(always)]
+fn limb(_ word: u256) -> u32 {
+    word.downcast_truncate()
+}
+
+/// Dot product of the four unsigned bytes in each of two limbs.
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn dot4(_ a: u32, _ b: u32) -> u32 {
+    lane(a, 0) * lane(b, 0) + lane(a, 8) * lane(b, 8) + lane(a, 16) * lane(b, 16) + (a >> 24) * (b >> 24)
+}
+
+/// The unsigned byte `shift` bits above the bottom of a limb.
+#[inline(always)]
+fn lane(_ a: u32, _ shift: u32) -> u32 {
+    (a >> shift) & 0xff
+}
+
+/// The sum of the 32 bytes of a word, each at most 127.
+#[inline(always)]
+fn lane_sum(_ word: u256) -> u64 {
+    let pairs = (word & EVEN_LANES) + ((word >> 8) & EVEN_LANES)
+    (pairs.wrapping_mul(WIDE_LANES) >> 240).downcast_truncate()
+}
+
+/// 0xff in every second byte lane.
+const EVEN_LANES: u256 = 0x00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff
+
+/// 0x0001 in each of the sixteen 16-bit lanes.
+const WIDE_LANES: u256 = 0x0001000100010001000100010001000100010001000100010001000100010001
+
+#[test]
+fn dot_reaches_both_extremes_without_overflow() {
+    let low = Packed<64>::pack([-128; 64])
+    let high = Packed<64>::pack([127; 64])
+    assert!(dot(weights: high, activations: high) == 64 * 127 * 127)
+    assert!(dot(weights: low, activations: high) == -64 * 128 * 127)
+}

@@ -1,0 +1,40 @@
+{
+ "classify": 1896043,
+ "neuron_fe": 92608,
+ "neuron_sol_best": 74673,
+ "neuron_sol_loop": 118248,
+ "typed_exec": 54588,
+ "raw_exec": 53466,
+ "step_finalize": 48942,
+ "inline_finalize": 48559,
+ "calls": {
+  "claim": {
+   "fe": 246141,
+   "sol": 195155
+  },
+  "challengeNeuron1 (784 inputs)": {
+   "fe": 156380,
+   "sol": 121096
+  },
+  "challengeNeuron2 (32 inputs)": {
+   "fe": 67977,
+   "sol": 59377
+  },
+  "challengeClass": {
+   "fe": 58358,
+   "sol": 53971
+  },
+  "finalize": {
+   "fe": 48942,
+   "sol": 44311
+  },
+  "withdraw (4 bonds)": {
+   "fe": 30096,
+   "sol": 29895
+  }
+ },
+ "arbiter_bytes": {
+  "fe": 11550,
+  "sol": 4838
+ }
+}

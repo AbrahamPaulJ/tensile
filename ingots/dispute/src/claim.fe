@@ -1,0 +1,87 @@
+//! The state of one claim.
+use core::marker::Copy
+use core::ops::Eq
+
+/// Where a claim is in its lifecycle.
+pub enum Status {
+    /// Posted, not yet decided: it can still be slashed or finalised.
+    Open,
+    /// Proven wrong before the deadline. Terminal.
+    Slashed,
+    /// Unchallenged until the deadline and finalised. Terminal.
+    Final,
+}
+
+impl Copy for Status {}
+
+impl Status {
+    /// The status as a small integer, for storage: `Open` is 1, `Slashed` 2,
+    /// `Final` 3. Zero is left for a claim that does not exist.
+    pub const fn code(self) -> u8 {
+        match self {
+            Status::Open => 1,
+            Status::Slashed => 2,
+            Status::Final => 3,
+        }
+    }
+
+    /// The status with `code`, the inverse of `code`. Fails for any other value.
+    pub const fn from_code(_ code: u8) -> Self {
+        assert!(code >= 1 && code <= 3)
+        if code == 1 {
+            Status::Open
+        } else if code == 2 {
+            Status::Slashed
+        } else {
+            Status::Final
+        }
+    }
+
+    /// Whether the claim can still change.
+    pub const fn is_open(self) -> bool {
+        match self {
+            Status::Open => true,
+            Status::Slashed => false,
+            Status::Final => false,
+        }
+    }
+}
+
+impl Eq for Status {
+    const fn eq(self, _ other: Self) -> bool {
+        self.code() == other.code()
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        self.code() != other.code()
+    }
+}
+
+/// What the lifecycle rule needs to know about a claim: its status and the
+/// time (in seconds) from which it can be finalised and can no longer be
+/// challenged.
+pub struct Claim { pub status: Status, pub deadline: u256 }
+
+impl Copy for Claim {}
+
+impl Claim {
+    /// A claim just posted, challengeable until `deadline`.
+    pub const fn open(deadline: u256) -> Self {
+        Self { status: Status::Open, deadline }
+    }
+}
+
+static_assert(Status::from_code(Status::Open.code()) == Status::Open)
+static_assert(Status::from_code(Status::Slashed.code()) == Status::Slashed)
+static_assert(Status::from_code(Status::Final.code()) == Status::Final)
+static_assert(Status::Open.is_open())
+static_assert(!Status::Slashed.is_open() && !Status::Final.is_open())
+
+#[test]
+fn codes_round_trip() {
+    let all: [Status; 3] = [Status::Open, Status::Slashed, Status::Final]
+    for i in 0 .. 3 {
+        assert!(all[i].code() as usize == i + 1)
+        assert!(Status::from_code(all[i].code()) == all[i])
+    }
+}

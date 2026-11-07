@@ -1,0 +1,40 @@
+// Not a compile error: a performance surprise of the native backend. `usize` is documented as
+// 64-bit natively, but arithmetic on it runs at the speed of `u256`. Measured in the Tensile
+// kernel (docs/fe-notes.md, milestone 2): the same lane code took 2.1 s in `u64`, 30 s in `usize`
+// and 17 s with the lanes widened to `u256`, for 256 million multiply-adds at -O 1.
+//
+// To reproduce: build this file natively, run it with `time`, and compare the two loops by
+// changing `main` to call the other one (both return the same value). Measured on 2026-11-05:
+// `sum_usize` 17.8 s, `sum_u64` 0.36 s (fe 26.5.1, -O 1, WSL2 x86-64).
+//     fe build --backend native -O 1 --out-dir out usize_native_speed.fe && time out/usize_native_speed
+
+#[arithmetic(unchecked)]
+fn sum_u64(_ n: u64) -> u64 {
+    var sum: u64 = 0
+    var i: u64 = 0
+    while i < n {
+        sum += ((i >> 3) & 0xff) * (i & 0xff)
+        i += 1
+    }
+    sum
+}
+
+#[arithmetic(unchecked)]
+fn sum_usize(_ n: usize) -> usize {
+    var sum: usize = 0
+    var i: usize = 0
+    while i < n {
+        sum += ((i >> 3) & 0xff) * (i & 0xff)
+        i += 1
+    }
+    sum
+}
+
+pub fn main() -> i32 {
+    // Change to `sum_u64(256000000) == 0` for the fast loop.
+    if sum_usize(256000000) == 0 {
+        1
+    } else {
+        0
+    }
+}

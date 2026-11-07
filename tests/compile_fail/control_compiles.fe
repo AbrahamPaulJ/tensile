@@ -1,0 +1,8 @@
+// expect-success
+// The harness check: the same layer as the failing cases, with nothing wrong. If this stops
+// compiling, the other cases fail for a reason of their own and prove nothing.
+use tensile::{Activations, Bias, Weights, dense}
+
+pub fn layer(weights: Weights<2, 4, 7>, x: Activations<4, 7>, bias: Bias<2, 14>) -> Activations<2, 3> {
+    dense(weights, x, bias).requantise<11>()
+}

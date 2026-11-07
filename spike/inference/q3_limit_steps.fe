@@ -1,0 +1,17 @@
+// Q3 limits: a const fn loop of 2,000,000 iterations (CTFE step limit is 1,000,000 in machine.rs).
+const fn spin() -> u256 {
+    var acc: u256 = 0
+    var i: u256 = 0
+    while i < 2000000 {
+        acc += i & 3
+        i += 1
+    }
+    acc
+}
+
+const SPUN: u256 = spin()
+
+#[test]
+fn t() {
+    assert!(SPUN == 3000000)
+}

@@ -1,0 +1,197 @@
+//! Unit tests: the deployed contracts against the first three reference
+//! vectors of the `model` ingot, and the rejection of malformed words.
+use ingot::{Network, NetworkMsg, NeuronCheck, NeuronMsg, RowsHigh, RowsLow}
+use model::{Input, Logits, layer1, layer2, reference}
+use std::evm::Address
+use tensile::Activations
+
+/// Gas given to every call: the Osaka limit of one transaction.
+const GAS: u256 = 16777216
+
+fn deploy_network() -> Address uses (evm: mut Evm) {
+    let low = evm.create2<RowsLow>(value: Wei::zero(), args: (), salt: 0)
+    let high = evm.create2<RowsHigh>(value: Wei::zero(), args: (), salt: 0)
+    evm.create2<Network>(value: Wei::zero(), args: (low, high), salt: 0)
+}
+
+fn deploy_neuron_check() -> Address uses (evm: mut Evm) {
+    evm.create2<NeuronCheck>(value: Wei::zero(), args: (), salt: 0)
+}
+
+/// Whether a freshly deployed `Network` returns the reference class, hidden
+/// activations and logits for `x`.
+fn network_matches(x: Input, hidden: Activations<32, 3>, logits: Logits, class: usize) -> bool
+uses (evm: mut Evm)
+{
+    let network = deploy_network()
+    let words = x.words()
+    let got_class: u256 = evm
+        .call(
+            addr: network,
+            gas: GAS,
+            value: Wei::zero(),
+            message: NetworkMsg::Classify { x: words },
+        )
+    let trace: ([u256; 1], [i32; 10]) = evm
+        .call(
+            addr: network,
+            gas: GAS,
+            value: Wei::zero(),
+            message: NetworkMsg::Trace { x: words },
+        )
+    got_class == class as u256
+        && Activations::from_words(trace.0) == hidden
+        && Logits::from_raw(trace.1) == logits
+}
+
+/// Whether `NeuronCheck` returns the reference value for every neuron of
+/// both layers.
+fn neurons_match(x: Input, hidden: Activations<32, 3>, logits: Logits) -> bool
+uses (evm: mut Evm)
+{
+    let check = deploy_neuron_check()
+    var equal = true
+    for j in 0 .. 32 {
+        let y: i8 = evm
+            .call(
+                addr: check,
+                gas: GAS,
+                value: Wei::zero(),
+                message: NeuronMsg::Neuron1 {
+                    row: layer1::row(j).words(),
+                    x: x.words(),
+                    bias: layer1::bias(j).raw(),
+                },
+            )
+        equal = equal && y == hidden.get(j)
+    }
+    for j in 0 .. 10 {
+        let logit: i32 = evm
+            .call(
+                addr: check,
+                gas: GAS,
+                value: Wei::zero(),
+                message: NeuronMsg::Neuron2 {
+                    row: layer2::row(j).words(),
+                    x: hidden.words(),
+                    bias: layer2::bias(j).raw(),
+                },
+            )
+        equal = equal && logit == logits.at(j).raw()
+    }
+    equal
+}
+
+/// Calls `neuron1` on row 0 with the input words `x`.
+fn neuron1(x: [u256; 25]) -> i8 uses (evm: mut Evm) {
+    evm.call(
+        addr: deploy_neuron_check(),
+        gas: GAS,
+        value: Wei::zero(),
+        message: NeuronMsg::Neuron1 { row: layer1::row(0).words(), x, bias: 0 },
+    )
+}
+
+#[test]
+fn network_matches_reference_sample_0() uses (evm: mut Evm) {
+    assert!(
+        network_matches(
+            x: reference::X0,
+            hidden: reference::HIDDEN1_0,
+            logits: reference::LOGITS0,
+            class: reference::CLASS0,
+        ),
+    )
+}
+
+#[test]
+fn network_matches_reference_sample_1() uses (evm: mut Evm) {
+    assert!(
+        network_matches(
+            x: reference::X1,
+            hidden: reference::HIDDEN1_1,
+            logits: reference::LOGITS1,
+            class: reference::CLASS1,
+        ),
+    )
+}
+
+#[test]
+fn network_matches_reference_sample_2() uses (evm: mut Evm) {
+    assert!(
+        network_matches(
+            x: reference::X2,
+            hidden: reference::HIDDEN1_2,
+            logits: reference::LOGITS2,
+            class: reference::CLASS2,
+        ),
+    )
+}
+
+#[test]
+fn neuron_check_matches_reference_sample_0() uses (evm: mut Evm) {
+    assert!(
+        neurons_match(
+            x: reference::X0,
+            hidden: reference::HIDDEN1_0,
+            logits: reference::LOGITS0,
+        ),
+    )
+}
+
+#[test]
+fn neuron_check_matches_reference_sample_1() uses (evm: mut Evm) {
+    assert!(
+        neurons_match(
+            x: reference::X1,
+            hidden: reference::HIDDEN1_1,
+            logits: reference::LOGITS1,
+        ),
+    )
+}
+
+#[test]
+fn neuron_check_matches_reference_sample_2() uses (evm: mut Evm) {
+    assert!(
+        neurons_match(
+            x: reference::X2,
+            hidden: reference::HIDDEN1_2,
+            logits: reference::LOGITS2,
+        ),
+    )
+}
+
+#[test]
+fn neuron_check_accepts_the_largest_activation() uses (evm: mut Evm) {
+    var x: [u256; 25] = [0; 25]
+    x[0] = 0x7f << 248
+    assert!(neuron1(x) >= 0)
+}
+
+#[test(should_revert)]
+fn neuron_check_rejects_an_activation_above_127() uses (evm: mut Evm) {
+    var x: [u256; 25] = [0; 25]
+    x[0] = 0x80 << 248
+    neuron1(x)
+}
+
+#[test(should_revert)]
+fn neuron_check_rejects_padding_that_is_not_zero() uses (evm: mut Evm) {
+    var x: [u256; 25] = [0; 25]
+    x[24] = 1
+    neuron1(x)
+}
+
+#[test(should_revert)]
+fn network_rejects_an_activation_above_127() uses (evm: mut Evm) {
+    var x: [u256; 25] = [0; 25]
+    x[3] = 0x80
+    let network = deploy_network()
+    let class: u256 = evm
+        .call(
+            addr: network,
+            gas: GAS,
+            value: Wei::zero(),
+            message: NetworkMsg::Classify { x },
+        )
+}

@@ -1,0 +1,35 @@
+//! Kernel form `i256-loop`: a 256-bit accumulator, the 32 lanes of a word read
+//! from its top byte in a loop (the form of the feasibility spike).
+use core::num::IntWord
+use ingot::dense::dot_fits_i32
+use ingot::packed::{Packed, word_count}
+
+/// Dot product of `N` int8 weights and `N` activations.
+///
+/// The arithmetic is unchecked, and the `where` clause is the proof that it
+/// cannot overflow. An arithmetic shift brings the top byte of the weights
+/// down with its sign.
+#[arithmetic(unchecked)]
+pub(ingot) fn dot<const N: usize>(weights: Packed<N>, activations: Packed<N>) -> i32
+where dot_fits_i32(N)
+{
+    var sum: i256 = 0
+    for k in 0 .. word_count(N) {
+        var u = i256::from_word(weights.words[k])
+        var v = activations.words[k]
+        for lane in 0 .. 32 {
+            sum += (u >> 248) * i256::from_word(v >> 248)
+            u = u << 8
+            v = v << 8
+        }
+    }
+    sum.downcast_truncate()
+}
+
+#[test]
+fn dot_reaches_both_extremes_without_overflow() {
+    let low = Packed<64>::pack([-128; 64])
+    let high = Packed<64>::pack([127; 64])
+    assert!(dot(weights: high, activations: high) == 64 * 127 * 127)
+    assert!(dot(weights: low, activations: high) == -64 * 128 * 127)
+}

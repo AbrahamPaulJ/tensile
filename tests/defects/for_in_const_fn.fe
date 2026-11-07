@@ -1,0 +1,19 @@
+// Language limit (Fe 26.5.1): a `for` loop cannot be used in a `const fn`, because the range
+// iteration calls trait methods that are not `const fn`:
+//
+//   error[8-0062]: non-const call in `const fn`
+//   |     for i in 0..N {
+//   |     ...             `start` is not a `const fn`
+//
+// (When the function is called from a constant, the report is `error[3-0024]: non-const function
+// call in const context` at the range instead.)
+//
+// Reproduce: fe check tests/defects/for_in_const_fn.fe
+// Workaround: a `while` loop with an explicit counter.
+pub const fn total<const N: usize>(_ values: [u8; N]) -> u256 {
+    var sum: u256 = 0
+    for i in 0..N {
+        sum += values[i] as u256
+    }
+    sum
+}

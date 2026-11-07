@@ -1,0 +1,97 @@
+// Q5: the same nn ingot, built as a native executable.
+// Prints the layer output for the embedded test input, then for every IN-byte sample read from stdin
+// (each byte is one int8 input, two's complement).
+use std::io::{Read, Write, host, read_char, write_char}
+use nn::weights
+
+fn print_int(_ v: i32) uses (w: mut Write) {
+    var n: i32 = v
+    if n < 0 {
+        write_char(45)
+        n = 0 - n
+    }
+    var digits: [i32; 12] = [0; 12]
+    var len: usize = 0
+    if n == 0 {
+        len = 1
+    }
+    while n > 0 {
+        digits[len] = n % 10
+        n = n / 10
+        len += 1
+    }
+    while len > 0 {
+        len -= 1
+        write_char(48 + digits[len])
+    }
+}
+
+fn print_line(_ y: [i8; weights::OUT]) uses (w: mut Write) {
+    var o: usize = 0
+    while o < weights::OUT {
+        if o > 0 {
+            write_char(32)
+        }
+        print_int(y[o] as i32)
+        o += 1
+    }
+    write_char(10)
+}
+
+fn same(_ a: [i8; weights::OUT], _ b: [i8; weights::OUT]) -> bool {
+    var o: usize = 0
+    var ok: bool = true
+    while o < weights::OUT {
+        if a[o] != b[o] {
+            ok = false
+        }
+        o += 1
+    }
+    ok
+}
+
+// Runs all four kernels and returns the packed-wide result; exit code 3 if they ever disagree.
+fn run(_ x: [i8; weights::IN]) -> [i8; weights::OUT] uses (w: mut Write) {
+    let y = nn::infer_packed_wide(x: x)
+    print_line(y)
+    y
+}
+
+pub fn main() -> i32 {
+    var status: i32 = 0
+    with (Read = host(), Write = host()) {
+        let y0 = run(weights::X)
+        if !same(y0, nn::infer(x: weights::X)) || !same(y0, nn::infer_unchecked(x: weights::X))
+            || !same(y0, nn::infer_packed(x: weights::X))
+        {
+            status = 3
+        }
+        var done: bool = false
+        while !done {
+            var x: [i8; weights::IN] = [0; weights::IN]
+            var i: usize = 0
+            while i < weights::IN && !done {
+                let c = read_char()
+                if c < 0 {
+                    done = true
+                } else {
+                    x[i] = c.downcast_truncate()
+                    i += 1
+                }
+            }
+            if i == weights::IN {
+                let y = run(x)
+                if !same(y, nn::infer_unchecked(x: x)) || !same(y, nn::infer_packed(x: x)) {
+                    status = 3
+                }
+            }
+        }
+    }
+    status
+}
+
+#[test]
+fn cli_kernels_agree() {
+    assert!(same(nn::infer(x: weights::X), nn::infer_packed_wide(x: weights::X)))
+    assert!(same(nn::infer(x: weights::X), weights::EXPECTED))
+}

@@ -1,0 +1,18 @@
+//! Deterministic data for the unit tests of this ingot.
+
+/// `N` int8 values: `(start + i * step) % modulus`, reduced to an int8 by
+/// dropping the high bits. A modulus of 256 walks the whole int8 range and a
+/// modulus of 128 stays in 0..127.
+pub(ingot) const fn sequence<const N: usize>(start: usize, step: usize, modulus: usize) -> [i8; N] {
+    var values: [i8; N] = [0; N]
+    var i: usize = 0
+    while i < N {
+        values[i] = ((start + i * step) % modulus).downcast_truncate()
+        i += 1
+    }
+    values
+}
+
+static_assert(sequence<4>(start: 126, step: 1, modulus: 256)[1] == 127)
+static_assert(sequence<4>(start: 126, step: 1, modulus: 256)[2] == -128)
+static_assert(sequence<4>(start: 126, step: 1, modulus: 128)[2] == 0)

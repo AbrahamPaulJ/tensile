@@ -1,0 +1,75 @@
+//! Kernel form `usize-limbs`: 64-bit limbs held in `usize`, the weights read
+//! as unsigned bytes and corrected once per word.
+use ingot::dense::dot_fits_i32
+use ingot::packed::{Packed, word_count}
+
+/// Dot product of `N` int8 weights and `N` activations in 0..127.
+///
+/// Flipping the sign bit of every weight turns `w` into the unsigned byte
+/// `w + 128`, so every lane is a product of two unsigned bytes, and
+/// `sum(w * x) = sum((w + 128) * x) - 128 * sum(x)`.
+///
+/// Each word is read as four 64-bit limbs held in `usize`: a register
+/// natively, a whole stack word on the EVM, so neither target narrows a
+/// value inside the loop. The arithmetic is unchecked, and the `where` clause
+/// is the proof that it cannot overflow.
+#[arithmetic(unchecked)]
+pub(ingot) fn dot<const N: usize>(weights: Packed<N>, activations: Packed<N>) -> i32
+where dot_fits_i32(N)
+{
+    var products: usize = 0
+    var inputs: usize = 0
+    for k in 0 .. word_count(N) {
+        let u = weights.words[k] ^ SIGN_BITS
+        let v = activations.words[k]
+        products += dot8(limb(u, 192), limb(v, 192))
+            + dot8(limb(u, 128), limb(v, 128))
+            + dot8(limb(u, 64), limb(v, 64))
+            + dot8(limb(u, 0), limb(v, 0))
+        inputs += sum8(limb(v, 192)) + sum8(limb(v, 128)) + sum8(limb(v, 64)) + sum8(limb(v, 0))
+    }
+    let biased: i64 = products.downcast_truncate()
+    let offset: i64 = (128 * inputs).downcast_truncate()
+    (biased - offset).downcast_truncate()
+}
+
+/// The sign bit of each of the 32 values in a word.
+const SIGN_BITS: u256 = 0x8080808080808080808080808080808080808080808080808080808080808080
+
+/// The 64 bits of `word` that start at bit `shift`.
+fn limb(_ word: u256, _ shift: u256) -> usize {
+    let bits: u64 = (word >> shift).downcast_truncate()
+    bits as usize
+}
+
+/// Dot product of the eight unsigned bytes in each of two limbs.
+#[arithmetic(unchecked)]
+fn dot8(_ a: usize, _ b: usize) -> usize {
+    lane(a, 0) * lane(b, 0)
+        + lane(a, 8) * lane(b, 8)
+        + lane(a, 16) * lane(b, 16)
+        + lane(a, 24) * lane(b, 24)
+        + lane(a, 32) * lane(b, 32)
+        + lane(a, 40) * lane(b, 40)
+        + lane(a, 48) * lane(b, 48)
+        + lane(a, 56) * lane(b, 56)
+}
+
+/// Sum of the eight unsigned bytes of a limb, each at most 127.
+#[arithmetic(unchecked)]
+fn sum8(_ a: usize) -> usize {
+    lane(a, 0) + lane(a, 8) + lane(a, 16) + lane(a, 24) + lane(a, 32) + lane(a, 40) + lane(a, 48) + lane(a, 56)
+}
+
+/// The unsigned byte `shift` bits above the bottom of a limb.
+fn lane(_ a: usize, _ shift: usize) -> usize {
+    (a >> shift) & 0xff
+}
+
+#[test]
+fn dot_reaches_both_extremes_without_overflow() {
+    let low = Packed<64>::pack([-128; 64])
+    let high = Packed<64>::pack([127; 64])
+    assert!(dot(weights: high, activations: high) == 64 * 127 * 127)
+    assert!(dot(weights: low, activations: high) == -64 * 128 * 127)
+}

@@ -1,0 +1,102 @@
+//! Weight matrices, stored one packed row per output neuron.
+use core::marker::Copy
+use core::ops::Eq
+use ingot::packed::{Packed, word_count}
+
+/// The `IN` int8 weights of one neuron, each with `FW` fractional bits.
+pub struct Row<const IN: usize, const FW: usize> { pub(ingot) weights: Packed<IN> }
+
+impl<const IN: usize, const FW: usize> Copy for Row<IN, FW> {}
+
+impl<const IN: usize, const FW: usize> Row<IN, FW> {
+    /// Packs `weights` in index order. The compiler does the packing when
+    /// `weights` is a constant.
+    pub const fn pack(_ weights: [i8; IN]) -> Self {
+        Self { weights: Packed::pack(weights) }
+    }
+
+    /// Wraps a row that is already packed (see `Packed::from_words`).
+    pub const fn from_words(_ words: own [u256; word_count(IN)]) -> Self {
+        Self { weights: Packed::from_words(words) }
+    }
+
+    /// The packed words, the form a contract message carries.
+    pub const fn words(self) -> [u256; word_count(IN)] {
+        self.weights.words
+    }
+
+    /// Weight `i`.
+    pub const fn get(self, _ i: usize) -> i8 {
+        self.weights.get(i)
+    }
+}
+
+impl<const IN: usize, const FW: usize> Eq for Row<IN, FW> {
+    const fn eq(self, _ other: Self) -> bool {
+        self.weights == other.weights
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        self.weights != other.weights
+    }
+}
+
+/// The weights of a dense layer: `OUT` rows of `IN` int8 values with `FW`
+/// fractional bits.
+pub struct Weights<const OUT: usize, const IN: usize, const FW: usize> {
+    pub(ingot) rows: [Row<IN, FW>; OUT],
+}
+
+impl<const OUT: usize, const IN: usize, const FW: usize> Weights<OUT, IN, FW> {
+    /// A matrix from its rows, row `j` feeding output `j`.
+    pub const fn new(_ rows: own [Row<IN, FW>; OUT]) -> Self {
+        Self { rows }
+    }
+
+    /// Row `j`, the weights of output `j`.
+    pub const fn row(self, _ j: usize) -> Row<IN, FW> {
+        self.rows[j]
+    }
+
+    /// Whether this matrix is the packed form of `weights`. In a
+    /// `static_assert` it makes the compiler repeat the packing and compare.
+    pub const fn is_packed_from(self, _ weights: [[i8; IN]; OUT]) -> bool {
+        var j: usize = 0
+        while j < OUT {
+            if self.rows[j] != Row::pack(weights[j]) {
+                return false
+            }
+            j += 1
+        }
+        true
+    }
+}
+
+const INT8: [[i8; 3]; 2] = [[1, -2, 3], [-127, 0, 127]]
+const PACKED: Weights<2, 3, 7> = Weights::new(
+    [
+        Row::from_words(
+            [0x01fe030000000000000000000000000000000000000000000000000000000000],
+        ),
+        Row::from_words(
+            [0x81007f0000000000000000000000000000000000000000000000000000000000],
+        ),
+    ],
+)
+
+static_assert(PACKED.is_packed_from(INT8))
+static_assert(!PACKED.is_packed_from([[1, -2, 3], [-127, 0, 126]]))
+
+#[test]
+fn rows_keep_their_weights() {
+    for j in 0 .. 2 {
+        for i in 0 .. 3 {
+            assert!(PACKED.rows[j].get(i) == INT8[j][i])
+        }
+    }
+}
+
+#[test]
+fn packing_at_run_time_matches_the_compiler() {
+    assert!(PACKED.is_packed_from(INT8))
+}

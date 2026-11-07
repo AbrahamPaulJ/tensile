@@ -1,0 +1,52 @@
+//! Kernel form `i256-unrolled`: a 256-bit accumulator, the 32 lanes of a word
+//! written out, each brought to the top byte and shifted down.
+use core::num::IntWord
+use ingot::dense::dot_fits_i32
+use ingot::packed::{Packed, word_count}
+
+/// Dot product of `N` int8 weights and `N` activations.
+///
+/// The arithmetic is unchecked, and the `where` clause is the proof that it
+/// cannot overflow.
+#[arithmetic(unchecked)]
+pub(ingot) fn dot<const N: usize>(weights: Packed<N>, activations: Packed<N>) -> i32
+where dot_fits_i32(N)
+{
+    var sum: i256 = 0
+    for k in 0 .. word_count(N) {
+        let u = i256::from_word(weights.words[k])
+        let v = i256::from_word(activations.words[k])
+        sum += dot8(u, v, 0) + dot8(u, v, 64) + dot8(u, v, 128) + dot8(u, v, 192)
+    }
+    sum.downcast_truncate()
+}
+
+/// Dot product of the eight lanes that start `skip` bits below the top.
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn dot8(_ u: i256, _ v: i256, _ skip: i256) -> i256 {
+    lane(u, v, skip)
+        + lane(u, v, skip + 8)
+        + lane(u, v, skip + 16)
+        + lane(u, v, skip + 24)
+        + lane(u, v, skip + 32)
+        + lane(u, v, skip + 40)
+        + lane(u, v, skip + 48)
+        + lane(u, v, skip + 56)
+}
+
+/// Product of the lane `skip` bits below the top of each word. The arithmetic
+/// shift keeps the sign of the weight; an activation has none.
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn lane(_ u: i256, _ v: i256, _ skip: i256) -> i256 {
+    ((u << skip) >> 248) * ((v << skip) >> 248)
+}
+
+#[test]
+fn dot_reaches_both_extremes_without_overflow() {
+    let low = Packed<64>::pack([-128; 64])
+    let high = Packed<64>::pack([127; 64])
+    assert!(dot(weights: high, activations: high) == 64 * 127 * 127)
+    assert!(dot(weights: low, activations: high) == -64 * 128 * 127)
+}

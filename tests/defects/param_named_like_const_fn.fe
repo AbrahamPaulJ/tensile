@@ -1,0 +1,16 @@
+// Compiler surprise (Fe 26.5.1): a parameter with the same name as a const fn used in its own
+// type makes that type unresolvable, and the message does not mention the name clash:
+//
+//   error[8-0064]: const value must be resolvable during type checking
+//   | pub fn first<const N: usize>(_ half: [u256; half(N)]) -> u256 {
+//   |                                             ^^^^ requires fully-resolved const value
+//
+// Reproduce: fe check tests/defects/param_named_like_const_fn.fe
+// Workaround: give the parameter (or the function) another name.
+const fn half(_ n: usize) -> usize {
+    n / 2
+}
+
+pub fn first<const N: usize>(_ half: [u256; half(N)]) -> u256 {
+    half[0]
+}

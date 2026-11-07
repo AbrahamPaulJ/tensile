@@ -1,0 +1,302 @@
+//! The transition rule: `(claim, now, action) -> result`.
+use core::marker::Copy
+use core::ops::Eq
+use core::result::Result
+use ingot::claim::{Claim, Status}
+
+/// What someone is trying to do to a claim.
+pub enum Action {
+    /// A challenge has been checked; the payload says whether it proved the
+    /// claim wrong (a recomputed neuron or the argmax differed).
+    Challenge(bool),
+    /// Close the claim after its deadline.
+    Finalize,
+}
+
+impl Copy for Action {}
+
+/// Who receives the bond when a claim ends.
+pub enum Payee {
+    /// The account that proved the claim wrong.
+    Challenger,
+    /// The account that posted the claim.
+    Claimant,
+}
+
+impl Copy for Payee {}
+
+/// Why an action was refused. Nothing changes; a contract reverts.
+pub enum Rejection {
+    /// The claim is already `Slashed` or `Final`.
+    NotOpen,
+    /// A challenge at or after the deadline.
+    TooLate,
+    /// A finalisation before the deadline.
+    TooEarly,
+    /// A challenge that did not prove the claim wrong.
+    NoFraud,
+}
+
+impl Copy for Rejection {}
+
+/// What an accepted action does: the claim's new, terminal status and who
+/// is credited the whole bond.
+pub struct Transition { pub status: Status, pub bond_to: Payee }
+
+impl Copy for Transition {}
+
+/// The lifecycle rule (`docs/spec-dispute.md` sections 4 and 5).
+///
+/// - A challenge is accepted while the claim is open and `now < deadline`,
+///   and only if it proved fraud: the claim becomes `Slashed` and the bond
+///   goes to the challenger.
+/// - Finalising is accepted while the claim is open and `now >= deadline`:
+///   the claim becomes `Final` and the bond returns to the claimant.
+/// - Anything else is rejected and nothing changes, so a terminal claim can
+///   never move again and a bond is credited exactly once.
+pub const fn step(_ claim: Claim, now: u256, action: Action) -> Result<Rejection, Transition> {
+    if !claim.status.is_open() {
+        return Result::Err(Rejection::NotOpen)
+    }
+    match action {
+        Action::Challenge(fraud) => {
+            if now >= claim.deadline {
+                Result::Err(Rejection::TooLate)
+            } else if !fraud {
+                Result::Err(Rejection::NoFraud)
+            } else {
+                Result::Ok(
+                    Transition { status: Status::Slashed, bond_to: Payee::Challenger },
+                )
+            }
+        },
+        Action::Finalize => {
+            if now < claim.deadline {
+                Result::Err(Rejection::TooEarly)
+            } else {
+                Result::Ok(
+                    Transition { status: Status::Final, bond_to: Payee::Claimant },
+                )
+            }
+        },
+    }
+}
+
+impl Eq for Payee {
+    const fn eq(self, _ other: Self) -> bool {
+        index_of_payee(self) == index_of_payee(other)
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        !self.eq(other)
+    }
+}
+
+impl Eq for Rejection {
+    const fn eq(self, _ other: Self) -> bool {
+        index_of_rejection(self) == index_of_rejection(other)
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        !self.eq(other)
+    }
+}
+
+const fn index_of_payee(_ payee: Payee) -> u8 {
+    match payee {
+        Payee::Challenger => 0,
+        Payee::Claimant => 1,
+    }
+}
+
+const fn index_of_rejection(_ rejection: Rejection) -> u8 {
+    match rejection {
+        Rejection::NotOpen => 0,
+        Rejection::TooLate => 1,
+        Rejection::TooEarly => 2,
+        Rejection::NoFraud => 3,
+    }
+}
+
+/// Whether `result` is the given transition.
+const fn moves_to(_ result: Result<Rejection, Transition>, status: Status, bond_to: Payee) -> bool {
+    match result {
+        Result::Ok(transition) => transition.status == status && transition.bond_to == bond_to,
+        Result::Err(_) => false,
+    }
+}
+
+/// Whether `result` is the given rejection.
+const fn rejects(_ result: Result<Rejection, Transition>, _ why: Rejection) -> bool {
+    match result {
+        Result::Ok(_) => false,
+        Result::Err(rejection) => rejection == why,
+    }
+}
+
+const DEADLINE: u256 = 1_000
+const OPEN: Claim = Claim::open(deadline: DEADLINE)
+const SLASHED: Claim = Claim { status: Status::Slashed, deadline: DEADLINE }
+const FINAL: Claim = Claim { status: Status::Final, deadline: DEADLINE }
+
+// P5, stated in the source: challenges succeed only before the deadline, finalising only at or
+// after it.
+static_assert(moves_to(
+    step(OPEN, now: DEADLINE - 1, action: Action::Challenge(true)),
+    status: Status::Slashed,
+    bond_to: Payee::Challenger,
+))
+static_assert(rejects(
+    step(OPEN, now: DEADLINE, action: Action::Challenge(true)),
+    Rejection::TooLate,
+))
+static_assert(rejects(
+    step(OPEN, now: DEADLINE - 1, action: Action::Finalize),
+    Rejection::TooEarly,
+))
+static_assert(moves_to(
+    step(OPEN, now: DEADLINE, action: Action::Finalize),
+    status: Status::Final,
+    bond_to: Payee::Claimant,
+))
+
+#[test]
+fn a_proven_challenge_before_the_deadline_slashes() {
+    let times: [u256; 3] = [0, 1, DEADLINE - 1]
+    for i in 0 .. 3 {
+        let result = step(OPEN, now: times[i], action: Action::Challenge(true))
+        assert!(
+            moves_to(
+                result,
+                status: Status::Slashed,
+                bond_to: Payee::Challenger,
+            ),
+        )
+    }
+}
+
+#[test]
+fn a_challenge_at_or_after_the_deadline_is_too_late() {
+    let times: [u256; 3] = [DEADLINE, DEADLINE + 1, u256::max()]
+    for i in 0 .. 3 {
+        assert!(
+            rejects(
+                step(OPEN, now: times[i], action: Action::Challenge(true)),
+                Rejection::TooLate,
+            ),
+        )
+        assert!(
+            rejects(
+                step(OPEN, now: times[i], action: Action::Challenge(false)),
+                Rejection::TooLate,
+            ),
+        )
+    }
+}
+
+#[test]
+fn a_challenge_without_fraud_changes_nothing() {
+    assert!(
+        rejects(
+            step(OPEN, now: 0, action: Action::Challenge(false)),
+            Rejection::NoFraud,
+        ),
+    )
+    assert!(
+        rejects(
+            step(OPEN, now: DEADLINE - 1, action: Action::Challenge(false)),
+            Rejection::NoFraud,
+        ),
+    )
+}
+
+#[test]
+fn finalising_before_the_deadline_is_too_early() {
+    let times: [u256; 3] = [0, 1, DEADLINE - 1]
+    for i in 0 .. 3 {
+        assert!(
+            rejects(
+                step(OPEN, now: times[i], action: Action::Finalize),
+                Rejection::TooEarly,
+            ),
+        )
+    }
+}
+
+#[test]
+fn finalising_at_or_after_the_deadline_returns_the_bond() {
+    let times: [u256; 3] = [DEADLINE, DEADLINE + 1, u256::max()]
+    for i in 0 .. 3 {
+        let result = step(OPEN, now: times[i], action: Action::Finalize)
+        assert!(
+            moves_to(result, status: Status::Final, bond_to: Payee::Claimant),
+        )
+    }
+}
+
+#[test]
+fn a_claim_with_deadline_zero_can_only_be_finalised() {
+    let claim = Claim::open(deadline: 0)
+    assert!(
+        rejects(
+            step(claim, now: 0, action: Action::Challenge(true)),
+            Rejection::TooLate,
+        ),
+    )
+    assert!(
+        moves_to(
+            step(claim, now: 0, action: Action::Finalize),
+            status: Status::Final,
+            bond_to: Payee::Claimant,
+        ),
+    )
+}
+
+#[test]
+fn terminal_claims_never_change() {
+    // P4: every action at every time is rejected as `NotOpen`, before any other reason.
+    let terminal: [Claim; 2] = [SLASHED, FINAL]
+    let times: [u256; 4] = [0, DEADLINE - 1, DEADLINE, u256::max()]
+    let actions: [Action; 3] = [Action::Challenge(true), Action::Challenge(false), Action::Finalize]
+    for c in 0 .. 2 {
+        for t in 0 .. 4 {
+            for a in 0 .. 3 {
+                assert!(
+                    rejects(
+                        step(terminal[c], now: times[t], action: actions[a]),
+                        Rejection::NotOpen,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+#[test]
+fn an_accepted_transition_is_terminal() {
+    // Whatever ends a claim leaves it where no second transition is accepted.
+    let ended: [Result<Rejection, Transition>; 2] = [
+        step(OPEN, now: 0, action: Action::Challenge(true)),
+        step(OPEN, now: DEADLINE, action: Action::Finalize),
+    ]
+    for i in 0 .. 2 {
+        match ended[i] {
+            Result::Ok(transition) => {
+                let after = Claim { status: transition.status, deadline: DEADLINE }
+                assert!(
+                    rejects(
+                        step(after, now: 0, action: Action::Challenge(true)),
+                        Rejection::NotOpen,
+                    ),
+                )
+                assert!(
+                    rejects(
+                        step(after, now: DEADLINE, action: Action::Finalize),
+                        Rejection::NotOpen,
+                    ),
+                )
+            },
+            Result::Err(_) => assert!(false),
+        }
+    }
+}

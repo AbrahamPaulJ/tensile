@@ -1,0 +1,47 @@
+// Q1: deliberately failing. Operator-form mismatch, flat-length mismatch, inference without turbofish.
+use core::ops::Mul
+
+pub struct Matrix<const R: usize, const C: usize> {
+    pub data: [[i32; C]; R],
+}
+
+impl<const R: usize, const C: usize> Matrix<R, C> {
+    pub fn zero() -> Self {
+        Matrix { data: [[0; C]; R] }
+    }
+}
+
+impl<const R: usize, const K: usize, const C: usize> Mul<Matrix<K, C>> for Matrix<R, K> {
+    type Output = Matrix<R, C>
+
+    fn mul(own self, _ other: own Matrix<K, C>) -> Matrix<R, C> {
+        Matrix<R, C>::zero()
+    }
+}
+
+pub struct Flat<const R: usize, const C: usize> {
+    pub data: [i32; { R * C }],
+}
+
+#[test]
+fn operator_mismatch() {
+    let a: Matrix<2, 3> = Matrix<2, 3>::zero()
+    let b: Matrix<4, 2> = Matrix<4, 2>::zero()
+    let c = a * b
+    assert!(c.data[0][0] == 0)
+}
+
+#[test]
+fn flat_wrong_length() {
+    // 2 * 3 = 6 elements needed, 5 given.
+    let a: Flat<2, 3> = Flat { data: [1, 2, 3, 4, 5] }
+    assert!(a.data[0] == 1)
+}
+
+#[test]
+fn wrong_result_annotation() {
+    let a: Matrix<2, 3> = Matrix<2, 3>::zero()
+    let b: Matrix<3, 5> = Matrix<3, 5>::zero()
+    let c: Matrix<2, 4> = a * b
+    assert!(c.data[0][0] == 0)
+}

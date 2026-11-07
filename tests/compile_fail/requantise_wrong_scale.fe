@@ -1,0 +1,8 @@
+// expect: type mismatch
+// expect: expected `Activations<2, 7>`, but `Activations<2, 3>` is given
+// Dropping 11 of 14 fractional bits leaves 3, not 7.
+use tensile::{Accumulators, Activations}
+
+pub fn hidden(acc: Accumulators<2, 14>) -> Activations<2, 7> {
+    acc.requantise<11>()
+}

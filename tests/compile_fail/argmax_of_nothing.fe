@@ -1,0 +1,8 @@
+// expect: const requirement is not satisfied
+// expect: N > 0
+// An empty vector has no largest element.
+use tensile::Accumulators
+
+pub fn class(logits: Accumulators<0, 9>) -> usize {
+    logits.argmax()
+}

@@ -1,0 +1,8 @@
+// expect: const requirement is not satisfied
+// expect: SHIFT < 32
+// An int32 has no shift by 32 or more.
+use tensile::{Accumulators, Activations}
+
+pub fn hidden(acc: Accumulators<2, 40>) -> Activations<2, 8> {
+    acc.requantise<32>()
+}

@@ -1,0 +1,143 @@
+// Q4: the shared layer as a contract function, weights embedded in code as constants.
+use core::hint::black_box
+use std::evm::{Ctx, Log}
+use nn::weights
+
+msg LayerMsg {
+    #[selector = sol("infer(int8[196])")]
+    Infer { x: [i8; weights::IN] } -> [i8; weights::OUT],
+    #[selector = sol("inferUnchecked(int8[196])")]
+    InferUnchecked { x: [i8; weights::IN] } -> [i8; weights::OUT],
+}
+
+pub contract Layer {
+    recv LayerMsg {
+        Infer { x } -> [i8; weights::OUT] {
+            nn::infer(x: x)
+        }
+        InferUnchecked { x } -> [i8; weights::OUT] {
+            nn::infer_unchecked(x: x)
+        }
+    }
+}
+
+msg PackedMsg {
+    #[selector = sol("infer(int8[196])")]
+    Infer { x: [i8; weights::IN] } -> [i8; weights::OUT],
+}
+
+// Same layer, weights packed 32 per u256 word (1 byte of code per weight).
+pub contract LayerPacked {
+    recv PackedMsg {
+        Infer { x } -> [i8; weights::OUT] {
+            nn::infer_packed(x: x)
+        }
+    }
+}
+
+#[event]
+struct GasReport {
+    #[indexed]
+    tag: u256,
+    gas: u256,
+}
+
+// black_box only takes scalars, so launder one element to keep the input a runtime value.
+fn runtime_input() -> [i8; weights::IN] {
+    var x: [i8; weights::IN] = weights::X
+    x[0] = black_box(x[0])
+    x
+}
+
+fn check(_ y: [i8; weights::OUT]) {
+    var o: usize = 0
+    while o < weights::OUT {
+        assert!(y[o] == weights::EXPECTED[o])
+        o += 1
+    }
+}
+
+// tag 1: pure function, checked arithmetic, measured inside the test contract.
+#[test]
+fn gas_pure_checked() uses (ctx: Ctx, log: mut Log) {
+    let x = runtime_input()
+    let g0 = ctx.gas()
+    let y = nn::infer(x: x)
+    let g1 = ctx.gas()
+    log.emit(GasReport { tag: 1, gas: g0 - g1 })
+    check(y)
+}
+
+// tag 2: pure function, unchecked arithmetic.
+#[test]
+fn gas_pure_unchecked() uses (ctx: Ctx, log: mut Log) {
+    let x = runtime_input()
+    let g0 = ctx.gas()
+    let y = nn::infer_unchecked(x: x)
+    let g1 = ctx.gas()
+    log.emit(GasReport { tag: 2, gas: g0 - g1 })
+    check(y)
+}
+
+// tag 3 and 4: through the deployed contract (includes ABI encode, CALL, decode, layer, encode, decode).
+#[test]
+fn gas_contract_call() uses (evm: mut Evm) {
+    let layer = evm.create2<Layer>(value: Wei::zero(), args: (), salt: 0)
+    let g0 = evm.gas()
+    let y: [i8; weights::OUT] = evm.call(
+        addr: layer,
+        gas: 100000000,
+        value: Wei::zero(),
+        message: LayerMsg::Infer { x: weights::X },
+    )
+    let g1 = evm.gas()
+    let y2: [i8; weights::OUT] = evm.call(
+        addr: layer,
+        gas: 100000000,
+        value: Wei::zero(),
+        message: LayerMsg::InferUnchecked { x: weights::X },
+    )
+    let g2 = evm.gas()
+    evm.emit(GasReport { tag: 3, gas: g0 - g1 })
+    evm.emit(GasReport { tag: 4, gas: g1 - g2 })
+    check(y)
+    check(y2)
+}
+
+// tag 5: pure function, packed weights, unchecked arithmetic.
+#[test]
+fn gas_pure_packed() uses (ctx: Ctx, log: mut Log) {
+    let x = runtime_input()
+    let g0 = ctx.gas()
+    let y = nn::infer_packed(x: x)
+    let g1 = ctx.gas()
+    log.emit(GasReport { tag: 5, gas: g0 - g1 })
+    check(y)
+}
+
+// tag 6: packed contract through CALL.
+#[test]
+fn gas_contract_call_packed() uses (evm: mut Evm) {
+    let layer = evm.create2<LayerPacked>(value: Wei::zero(), args: (), salt: 0)
+    let g0 = evm.gas()
+    let y: [i8; weights::OUT] = evm.call(
+        addr: layer,
+        gas: 100000000,
+        value: Wei::zero(),
+        message: PackedMsg::Infer { x: weights::X },
+    )
+    let g1 = evm.gas()
+    evm.emit(GasReport { tag: 6, gas: g0 - g1 })
+    check(y)
+}
+
+// tag 7: pure function, packed weights, 256-bit accumulator variant.
+#[test]
+fn gas_pure_packed_wide() uses (ctx: Ctx, log: mut Log) {
+    let x = runtime_input()
+    let g0 = ctx.gas()
+    let y = nn::infer_packed_wide(x: x)
+    let g1 = ctx.gas()
+    log.emit(GasReport { tag: 7, gas: g0 - g1 })
+    check(y)
+}

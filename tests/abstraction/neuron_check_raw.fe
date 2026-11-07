@@ -1,0 +1,94 @@
+//! `NeuronCheck` with the abstractions taken away, for `tools/m4_numbers.sh`: the same messages, the
+//! same validation and the same arithmetic as the real contract, written over plain words. No
+//! `Packed`, `Row`, `Activations`, `Q` or scale parameters, no `model` or `tensile` ingot. The gas
+//! difference from the real `NeuronCheck` is what those abstractions cost at run time.
+//!
+//! It replaces `ingots/onchain/src/neuron_check.fe` in a scratch copy of the workspace. It is never
+//! part of the project's own build.
+use core::ops::WrappingMul
+
+pub msg NeuronMsg {
+    #[selector = sol("neuron1(uint256[25],uint256[25],int32)")]
+    Neuron1 { row: [u256; 25], x: [u256; 25], bias: i32 } -> i8,
+    #[selector = sol("neuron2(uint256[1],uint256[1],int32)")]
+    Neuron2 { row: [u256; 1], x: [u256; 1], bias: i32 } -> i32,
+}
+
+pub contract NeuronCheck {
+    recv NeuronMsg {
+        Neuron1 { row, x, bias } -> i8 {
+            // 784 values leave the low 16 bytes of the last word as padding.
+            assert!(row[24] << 128 == 0)
+            assert!(x[24] << 128 == 0)
+            for k in 0 .. 25 {
+                assert!(x[k] & SIGN_BITS == 0)
+            }
+            let value = (bias + dot(row, x)) >> 11
+            if value < 0 {
+                0
+            } else if value > 127 {
+                127
+            } else {
+                value.downcast_truncate()
+            }
+        }
+
+        Neuron2 { row, x, bias } -> i32 {
+            assert!(x[0] & SIGN_BITS == 0)
+            bias + dot(row, x)
+        }
+    }
+}
+
+const SIGN_BITS: u256 = 0x8080808080808080808080808080808080808080808080808080808080808080
+const EVEN_LANES: u256 = 0x00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff
+const WIDE_LANES: u256 = 0x0001000100010001000100010001000100010001000100010001000100010001
+
+#[arithmetic(unchecked)]
+fn dot<const WORDS: usize>(_ weights: [u256; WORDS], _ activations: [u256; WORDS]) -> i32 {
+    var products: u64 = 0
+    var inputs: u64 = 0
+    for k in 0 .. WORDS {
+        let u = weights[k] ^ SIGN_BITS
+        let v = activations[k]
+        products += dot32(u, v) as u64
+        let pairs = (v & EVEN_LANES) + ((v >> 8) & EVEN_LANES)
+        let sum: u256 = pairs.wrapping_mul(WIDE_LANES) >> 240
+        inputs += sum.downcast_truncate()
+    }
+    let biased: i64 = products.downcast_truncate()
+    let offset: i64 = (128 * inputs).downcast_truncate()
+    (biased - offset).downcast_truncate()
+}
+
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn dot32(_ u: u256, _ v: u256) -> u32 {
+    dot4(limb(u >> 224), limb(v >> 224))
+        + dot4(limb(u >> 192), limb(v >> 192))
+        + dot4(limb(u >> 160), limb(v >> 160))
+        + dot4(limb(u >> 128), limb(v >> 128))
+        + dot4(limb(u >> 96), limb(v >> 96))
+        + dot4(limb(u >> 64), limb(v >> 64))
+        + dot4(limb(u >> 32), limb(v >> 32))
+        + dot4(limb(u), limb(v))
+}
+
+#[inline(always)]
+fn limb(_ word: u256) -> u32 {
+    word.downcast_truncate()
+}
+
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn dot4(_ a: u32, _ b: u32) -> u32 {
+    lane(a, 0) * lane(b, 0)
+        + lane(a, 8) * lane(b, 8)
+        + lane(a, 16) * lane(b, 16)
+        + (a >> 24) * (b >> 24)
+}
+
+#[inline(always)]
+fn lane(_ a: u32, _ shift: u32) -> u32 {
+    (a >> shift) & 0xff
+}

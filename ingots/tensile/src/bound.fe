@@ -1,0 +1,123 @@
+//! The compile-time overflow proof: the largest accumulator a layer can reach.
+//!
+//! The bound is computed 32 weights at a time, on whole packed words, because
+//! one compile-time evaluation is limited to 1,000,000 steps and a layer of
+//! 784 x 32 weights visited one by one needs more.
+use core::num::UnsignedAbs
+use ingot::accumulators::{Bias, Q}
+use ingot::packed::{lane_sum, word_count}
+use ingot::testing::sequence
+use ingot::weights::{Row, Weights}
+
+/// The largest int32, the limit `worst_case` is compared with.
+pub const I32_MAX: u256 = 2147483647
+
+/// The largest `neuron_bound` of a layer. A `static_assert` that this is at
+/// most `I32_MAX` proves at compile time that no accumulator of the layer can
+/// overflow an int32, for any input in 0..127.
+pub const fn worst_case<const OUT: usize, const IN: usize, const FW: usize, const S: usize>(
+    weights: Weights<OUT, IN, FW>,
+    bias: Bias<OUT, S>,
+) -> u256 {
+    var worst: u256 = 0
+    var j: usize = 0
+    while j < OUT {
+        let bound = neuron_bound(row: weights.rows[j], bias: bias.at(j))
+        if bound > worst {
+            worst = bound
+        }
+        j += 1
+    }
+    worst
+}
+
+/// The largest absolute accumulator of one neuron over every input in 0..127:
+/// `|bias| + 127 * max(P, N)`, where `P` is the sum of the positive weights
+/// and `N` the sum of the negative ones, negated.
+///
+/// It also bounds every partial sum, in any order of summation.
+pub const fn neuron_bound<const IN: usize, const FW: usize, const S: usize>(
+    row: Row<IN, FW>,
+    bias: Q<S>,
+) -> u256 {
+    var magnitudes: u256 = 0
+    var negative: u256 = 0
+    var k: usize = 0
+    while k < word_count(IN) {
+        let word = row.weights.words[k]
+        // 0x01 in every lane that holds a negative value, then 0xff.
+        let sign = (word >> 7) & LANES
+        let mask = sign * 0xff
+        // Negating the negative lanes (flip the bits, add one) leaves |value|
+        // in every lane. It is at most 128, so no lane carries into the next.
+        let magnitude = (word ^ mask) + sign
+        magnitudes += lane_sum(magnitude)
+        negative += lane_sum(magnitude & mask)
+        k += 1
+    }
+    let positive = magnitudes - negative
+    let largest = if positive > negative {
+        positive
+    } else {
+        negative
+    }
+    bias.raw().unsigned_abs() as u256 + 127 * largest
+}
+
+/// 0x01 in each of the 32 byte lanes.
+const LANES: u256 = 0x0101010101010101010101010101010101010101010101010101010101010101
+
+/// The bound as its definition reads, one weight at a time.
+fn plain_bound<const N: usize>(weights: [i8; N], bias: i32) -> u256 {
+    var positive: u256 = 0
+    var negative: u256 = 0
+    for i in 0 .. N {
+        if weights[i] > 0 {
+            positive += weights[i].unsigned_abs() as u256
+        } else {
+            negative += weights[i].unsigned_abs() as u256
+        }
+    }
+    let largest = if positive > negative {
+        positive
+    } else {
+        negative
+    }
+    bias.unsigned_abs() as u256 + 127 * largest
+}
+
+fn neuron_bound_equals_plain_bound<const N: usize>(start: usize, bias: i32) -> bool {
+    let weights: [i8; N] = sequence(start, step: 37, modulus: 256)
+    neuron_bound(row: Row<N, 7>::pack(weights), bias: Q<14>::from_raw(bias))
+        == plain_bound(weights, bias)
+}
+
+const W: Weights<2, 4, 7> = Weights::new(
+    [Row::pack([100, -50, 0, 27]), Row::pack([-127, -128, 1, 0])],
+)
+const B: Bias<2, 14> = Bias::from_raw([-1000, 7])
+
+static_assert(neuron_bound(row: W.rows[0], bias: B.at(0)) == 1000 + 127 * 127)
+static_assert(neuron_bound(row: W.rows[1], bias: B.at(1)) == 7 + 127 * 255)
+static_assert(worst_case(weights: W, bias: B) == 7 + 127 * 255)
+static_assert(worst_case(weights: W, bias: B) <= I32_MAX)
+
+#[test]
+fn neuron_bound_equals_the_plain_bound() {
+    assert!(neuron_bound_equals_plain_bound<1>(start: 128, bias: 0))
+    assert!(neuron_bound_equals_plain_bound<31>(start: 90, bias: -77))
+    assert!(
+        neuron_bound_equals_plain_bound<32>(start: 0, bias: 2147483647),
+    )
+    assert!(
+        neuron_bound_equals_plain_bound<33>(start: 255, bias: -2147483648),
+    )
+    assert!(
+        neuron_bound_equals_plain_bound<784>(start: 61, bias: 123456),
+    )
+}
+
+#[test]
+fn worst_case_at_run_time_matches_the_compiler() {
+    assert!(worst_case(weights: W, bias: B) == 7 + 127 * 255)
+}

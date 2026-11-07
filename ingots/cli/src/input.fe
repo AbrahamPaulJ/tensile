@@ -1,0 +1,130 @@
+//! Reading samples and arguments.
+use core::AsBytes
+use std::io::{Read, read_char}
+use std::native::Arg
+
+/// What standard input held where the next `N` activations were expected.
+pub enum Chunk<const N: usize> {
+    /// `N` bytes, each 0..127.
+    Full([i8; N]),
+    /// Nothing: the input ended on a sample boundary.
+    End,
+    /// A byte above 127, or the end of input inside a sample.
+    Malformed,
+}
+
+/// Reads the next `N` activations, one byte each.
+pub fn read_chunk<const N: usize>() -> Chunk<N> uses (r: mut Read) {
+    var values: [i8; N] = [0; N]
+    for i in 0 .. N {
+        let byte = read_char()
+        if byte < 0 && i == 0 {
+            return Chunk::End
+        }
+        if byte < 0 || byte > 127 {
+            return Chunk::Malformed
+        }
+        // In 0..127, checked above, so the conversion loses nothing.
+        values[i] = byte.downcast_unchecked()
+    }
+    Chunk::Full(values)
+}
+
+/// What standard input held where a 32-bit integer was expected.
+pub enum Word {
+    /// Four bytes, big-endian two's complement.
+    Full(i32),
+    /// The input ended before four bytes.
+    End,
+}
+
+/// Reads one int32 as four big-endian bytes.
+pub fn read_i32() -> Word uses (r: mut Read) {
+    var value: i64 = 0
+    for _ in 0 .. 4 {
+        let byte = read_char()
+        if byte < 0 {
+            return Word::End
+        }
+        value = (value << 8) | byte as i64
+    }
+    if value >= 2147483648 {
+        value -= 4294967296
+    }
+    // In the int32 range by construction.
+    Word::Full(value.downcast_truncate())
+}
+
+/// Whether a command-line argument is exactly `word`.
+pub fn is_word<const N: usize>(_ arg: Arg, _ word: String<N>) -> bool {
+    if arg.len() != N {
+        return false
+    }
+    let bytes = word.as_bytes()
+    for i in 0 .. N {
+        if arg.byte_at(i) != bytes[i] {
+            return false
+        }
+    }
+    true
+}
+
+/// A `Read` that replays fixed bytes and then reports the end of input.
+struct Replay { bytes: [i32; 5], next: usize }
+
+impl Read for Replay {
+    fn read_char(mut self) -> i32 {
+        if self.next == 5 {
+            return -1
+        }
+        self.next += 1
+        self.bytes[self.next - 1]
+    }
+}
+
+/// 0 for a full chunk of two bytes summing to `sum`, 1 for the end, 2 for malformed input.
+fn outcome(_ chunk: Chunk<2>, sum: i8) -> usize {
+    match chunk {
+        Chunk::Full(values) => if values[0] + values[1] == sum { 0 } else { 3 },
+        Chunk::End => 1,
+        Chunk::Malformed => 2,
+    }
+}
+
+#[test]
+fn read_chunk_returns_full_chunks_then_the_end() {
+    var input = Replay { bytes: [1, 127, 0, 5, 9], next: 1 }
+    with (Read = input) {
+        assert!(outcome(read_chunk(), sum: 127) == 0)
+        assert!(outcome(read_chunk(), sum: 14) == 0)
+        assert!(outcome(read_chunk(), sum: 0) == 1)
+    }
+}
+
+#[test]
+fn read_i32_reads_big_endian_twos_complement() {
+    // -2 is 0xfffffffe; then 0x00000105 = 261.
+    var input = Replay { bytes: [255, 255, 255, 254, 0], next: 0 }
+    with (Read = input) {
+        match read_i32() {
+            Word::Full(value) => assert!(value == -2),
+            Word::End => assert!(false),
+        }
+        match read_i32() {
+            Word::Full(_) => assert!(false),
+            Word::End => (),
+        }
+    }
+}
+
+#[test]
+fn read_chunk_rejects_a_byte_above_127_and_a_short_sample() {
+    var high = Replay { bytes: [1, 2, 3, 4, 128], next: 3 }
+    var short = Replay { bytes: [1, 2, 3, 4, 5], next: 4 }
+    with (Read = high) {
+        assert!(outcome(read_chunk(), sum: 0) == 2)
+    }
+    with (Read = short) {
+        assert!(outcome(read_chunk(), sum: 0) == 2)
+    }
+}

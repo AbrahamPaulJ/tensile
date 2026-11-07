@@ -1,0 +1,9 @@
+// expect: type mismatch
+// expect: expected `Bias<2, 14>`, but `Bias<2, 15>` is given
+// Weights with 7 fractional bits times activations with 7 give accumulators with 14, so the
+// bias must have 14 as well.
+use tensile::{Accumulators, Activations, Bias, Weights, dense}
+
+pub fn layer(weights: Weights<2, 4, 7>, x: Activations<4, 7>, bias: Bias<2, 15>) -> Accumulators<2, 15> {
+    dense(weights, x, bias)
+}

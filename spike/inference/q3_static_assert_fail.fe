@@ -1,0 +1,20 @@
+// Q3: deliberately failing. A wrong static_assert on a table entry must be a compile error.
+const fn squares() -> [u16; 16] {
+    var t: [u16; 16] = [0; 16]
+    var i: usize = 0
+    while i < 16 {
+        t[i] = (i * i).downcast_truncate()
+        i += 1
+    }
+    t
+}
+
+const SQ: [u16; 16] = squares()
+
+static_assert(SQ[15] == 225)
+static_assert(SQ[4] == 17)
+
+#[test]
+fn t() {
+    assert!(SQ[3] == 9)
+}

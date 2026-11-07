@@ -1,0 +1,92 @@
+//! Activation vectors: the input of a layer and the output of a hidden one.
+use core::ops::Eq
+use ingot::packed::{Packed, word_count}
+
+/// `N` activations, each an int8 in 0..127 with `F` fractional bits (the real
+/// value is the integer divided by `2^F`).
+///
+/// Both the length and the scale are part of the type, so a vector of the
+/// wrong length or at the wrong scale is rejected by the compiler.
+pub struct Activations<const N: usize, const F: usize> { pub(ingot) values: Packed<N> }
+
+impl<const N: usize, const F: usize> Activations<N, F> {
+    /// Packs `values`. Fails if one is negative: at compile time for a
+    /// constant, at run time otherwise.
+    pub const fn pack(_ values: [i8; N]) -> Self {
+        var i: usize = 0
+        while i < N {
+            assert!(values[i] >= 0)
+            i += 1
+        }
+        Self { values: Packed::pack(values) }
+    }
+
+    /// Whether `words` are a well-formed packed activation vector: every
+    /// byte in 0..127 and zero padding (`docs/spec.md` sections 2 and 7).
+    /// This is what a contract checks on an untrusted vector before it
+    /// commits to it; `from_words` requires it.
+    pub const fn well_formed(_ words: [u256; word_count(N)]) -> bool {
+        var k: usize = 0
+        while k < word_count(N) {
+            if words[k] & SIGN_BITS != 0 {
+                return false
+            }
+            k += 1
+        }
+        Packed<N>::padded_with_zeros(words)
+    }
+
+    /// Wraps activations that are already packed (see `Packed`). Fails like
+    /// `pack` if one is negative, or if an unused byte is not zero.
+    pub const fn from_words(_ words: own [u256; word_count(N)]) -> Self {
+        assert!(Self::well_formed(words))
+        Self { values: Packed { words } }
+    }
+
+    /// The packed words, the form a contract message carries.
+    pub const fn words(self) -> [u256; word_count(N)] {
+        self.values.words
+    }
+
+    /// Activation `i`.
+    pub const fn get(self, _ i: usize) -> i8 {
+        self.values.get(i)
+    }
+}
+
+impl<const N: usize, const F: usize> Eq for Activations<N, F> {
+    const fn eq(self, _ other: Self) -> bool {
+        self.values == other.values
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        self.values != other.values
+    }
+}
+
+/// The sign bit of each of the 32 values in a word.
+const SIGN_BITS: u256 = 0x8080808080808080808080808080808080808080808080808080808080808080
+
+const X: Activations<3, 7> = Activations::pack([0, 64, 127])
+const X_WORD: u256 = 0x00407f0000000000000000000000000000000000000000000000000000000000
+
+static_assert(X.get(1) == 64)
+static_assert(X == Activations::from_words([X_WORD]))
+static_assert(Activations<3, 7>::well_formed([X_WORD]))
+// A value of 128 (a sign bit), and a non-zero padding byte.
+static_assert(!Activations<3, 7>::well_formed([X_WORD | (0x80 << 232)]))
+static_assert(!Activations<3, 7>::well_formed([X_WORD | 1]))
+
+#[test]
+fn get_returns_every_packed_value() {
+    assert!(X.get(0) == 0)
+    assert!(X.get(1) == 64)
+    assert!(X.get(2) == 127)
+}
+
+#[test]
+fn from_words_agrees_with_pack() {
+    let words: [u256; 1] = [X_WORD]
+    assert!(Activations<3, 7>::from_words(words) == X)
+    assert!(Activations<3, 7>::pack([0, 64, 126]) != X)
+}

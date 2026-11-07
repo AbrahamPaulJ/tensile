@@ -1,0 +1,8 @@
+// expect: type mismatch
+// expect: expected `Activations<4, _>`, but `Activations<5, 7>` is given
+// A matrix with 4 columns cannot take a vector of 5 activations.
+use tensile::{Accumulators, Activations, Bias, Weights, dense}
+
+pub fn layer(weights: Weights<2, 4, 7>, x: Activations<5, 7>, bias: Bias<2, 14>) -> Accumulators<2, 14> {
+    dense(weights, x, bias)
+}

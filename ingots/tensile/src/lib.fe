@@ -1,0 +1,25 @@
+//! Tensile: an integer-only neural network inference kernel.
+//!
+//! Every tensor carries its shape and its fixed-point scale (a number of
+//! fractional bits) in its type, so a layer fed a vector of the wrong length,
+//! a bias at the wrong scale, or a requantisation that would add precision is
+//! a compile error. The arithmetic is specified in `docs/spec.md`.
+//!
+//! ```fe
+//! use tensile::{Activations, dense}
+//!
+//! // WEIGHTS: Weights<32, 784, 7>, BIAS: Bias<32, 14>
+//! fn hidden(x: Activations<784, 7>) -> Activations<32, 3> {
+//!     dense(weights: WEIGHTS, x: x, bias: BIAS).requantise<11>()
+//! }
+//! ```
+//!
+//! The ingot is pure: it imports nothing from the EVM or the host, so the
+//! same code runs in a contract and in a native executable.
+pub use accumulators::{Accumulators, Bias, Q}
+pub use activations::Activations
+pub use bound::{I32_MAX, neuron_bound, worst_case}
+pub use dense::{dense, dot_fits_i32, neuron}
+pub use packed::{Packed, word_count}
+pub use probe::{Blind, Probe}
+pub use weights::{Row, Weights}

@@ -1,0 +1,4 @@
+[workspace]
+name = "layer"
+version = "0.1.0"
+members = [{ path = "nn", name = "nn" }, { path = "onchain", name = "onchain" }, { path = "onchain_split", name = "onchain_split" }, { path = "cli", name = "cli" }]

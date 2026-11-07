@@ -1,0 +1,19 @@
+// Q3 limits: a 65536-entry table (cheap body). Fails on purpose: exceeds the CTFE step limit.
+const fn table() -> [u8; 65536] {
+    var t: [u8; 65536] = [0; 65536]
+    var i: usize = 0
+    while i < 65536 {
+        t[i] = ((i * 7 + 3) % 251).downcast_truncate()
+        i += 1
+    }
+    t
+}
+
+const T: [u8; 65536] = table()
+
+static_assert(T[65535] == 171)
+
+#[test]
+fn t() {
+    assert!(T[core::hint::black_box(65535)] == 171)
+}

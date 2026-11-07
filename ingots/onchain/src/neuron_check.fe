@@ -1,0 +1,26 @@
+//! `NeuronCheck`: one neuron of the network, recomputed from calldata.
+use model::{layer1, layer2}
+
+/// One neuron of each layer. The row of weights and the layer's input are
+/// packed words (`docs/spec.md` section 7); a malformed row or input reverts.
+pub msg NeuronMsg {
+    /// The activation of a layer 1 neuron: 784 weights, 784 inputs.
+    #[selector = sol("neuron1(uint256[25],uint256[25],int32)")]
+    Neuron1 { row: [u256; 25], x: [u256; 25], bias: i32 } -> i8,
+    /// The logit of a layer 2 neuron: 32 weights, 32 inputs.
+    #[selector = sol("neuron2(uint256[1],uint256[1],int32)")]
+    Neuron2 { row: [u256; 1], x: [u256; 1], bias: i32 } -> i32,
+}
+
+/// Re-runs a single neuron with the code the full forward pass runs for every
+/// row. It holds no weights and no state: everything arrives in calldata.
+pub contract NeuronCheck {
+    recv NeuronMsg {
+        Neuron1 { row, x, bias } -> i8 {
+            layer1::neuron_from_words(row, x, bias)
+        }
+        Neuron2 { row, x, bias } -> i32 {
+            layer2::neuron_from_words(row, x, bias)
+        }
+    }
+}

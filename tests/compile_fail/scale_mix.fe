@@ -1,0 +1,9 @@
+// expect: type mismatch
+// expect: expected `Activations<4, 7>`, but `Activations<4, 3>` is given
+// Two vectors of the same length at different scales are different types: they cannot be
+// compared, or stand in for one another.
+use tensile::Activations
+
+pub fn same(a: Activations<4, 7>, b: Activations<4, 3>) -> bool {
+    a == b
+}

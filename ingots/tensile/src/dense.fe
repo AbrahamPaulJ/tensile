@@ -1,0 +1,112 @@
+//! The kernel: one neuron, and a dense layer as `OUT` neurons.
+use ingot::accumulators::{Accumulators, Bias, Q}
+use ingot::activations::Activations
+use ingot::dot::dot
+use ingot::testing::sequence
+use ingot::weights::{Row, Weights}
+
+/// Whether the dot product of two int8 vectors of length `n` fits an int32
+/// whatever their values: every product is at most `128 * 128`.
+pub const fn dot_fits_i32(_ n: usize) -> bool {
+    n * 128 * 128 <= 2147483647
+}
+
+/// The accumulator of one neuron, `bias + sum of row[i] * x[i]`
+/// (`docs/spec.md` section 3).
+///
+/// The bias must have `F + FW` fractional bits, the scale of a weight times an
+/// activation; a bias at another scale is a type error. A dense layer is this
+/// function once per row, so re-running a single neuron (as an on-chain
+/// dispute does) executes the same code as the full forward pass.
+///
+/// The sum of products cannot overflow (see `dot_fits_i32`). Adding the bias
+/// is checked arithmetic; `worst_case` proves at compile time that the check
+/// cannot fail for a given layer.
+pub fn neuron<const IN: usize, const FW: usize, const F: usize>(
+    row: Row<IN, FW>,
+    x: Activations<IN, F>,
+    bias: Q<{ F + FW }>,
+) -> Q<{ F + FW }>
+where dot_fits_i32(IN)
+{
+    Q::from_raw(
+        bias.raw() + dot(weights: row.weights, activations: x.values),
+    )
+}
+
+/// The accumulators of a dense layer: `neuron` for each of the `OUT` rows.
+pub fn dense<const OUT: usize, const IN: usize, const FW: usize, const F: usize>(
+    weights: Weights<OUT, IN, FW>,
+    x: Activations<IN, F>,
+    bias: Bias<OUT, { F + FW }>,
+) -> Accumulators<OUT, { F + FW }>
+where dot_fits_i32(IN)
+{
+    var raw: [i32; OUT] = [0; OUT]
+    for j in 0 .. OUT {
+        raw[j] = neuron(row: weights.rows[j], x, bias: bias.at(j)).raw()
+    }
+    Accumulators::from_raw(raw)
+}
+
+/// The sum `neuron` must produce, written the obvious way over plain arrays.
+fn plain_sum<const N: usize>(weights: [i8; N], x: [i8; N], bias: i32) -> i32 {
+    var sum = bias
+    for i in 0 .. N {
+        sum += (weights[i] as i32) * (x[i] as i32)
+    }
+    sum
+}
+
+/// Compares `neuron` with `plain_sum` on `N` weights over the whole int8
+/// range and `N` activations over 0..127.
+fn neuron_equals_plain_sum<const N: usize>(start: usize) -> bool
+where dot_fits_i32(N)
+{
+    let weights: [i8; N] = sequence(start, step: 37, modulus: 256)
+    let x: [i8; N] = sequence(start, step: 11, modulus: 128)
+    let bias = Q<14>::from_raw(-1234)
+    let got = neuron(
+        row: Row<N, 7>::pack(weights),
+        x: Activations<N, 7>::pack(x),
+        bias,
+    )
+    got.raw() == plain_sum(weights, x, bias: -1234)
+}
+
+#[test]
+fn neuron_equals_the_plain_sum_at_every_word_boundary() {
+    assert!(neuron_equals_plain_sum<1>(start: 200))
+    assert!(neuron_equals_plain_sum<8>(start: 3))
+    assert!(neuron_equals_plain_sum<31>(start: 77))
+    assert!(neuron_equals_plain_sum<32>(start: 128))
+    assert!(neuron_equals_plain_sum<33>(start: 255))
+    assert!(neuron_equals_plain_sum<784>(start: 19))
+}
+
+#[test]
+fn neuron_of_nothing_is_the_bias() {
+    let row = Row<0, 7>::pack([])
+    let x = Activations<0, 7>::pack([])
+    assert!(neuron(row, x, bias: Q<14>::from_raw(42)).raw() == 42)
+}
+
+#[test]
+fn dense_is_neuron_for_every_row() {
+    let x: [i8; 70] = sequence(start: 9, step: 5, modulus: 128)
+    let first: [i8; 70] = sequence(start: 1, step: 3, modulus: 256)
+    let second: [i8; 70] = sequence(start: 130, step: 7, modulus: 256)
+    let weights = Weights<2, 70, 6>::new([Row::pack(first), Row::pack(second)])
+    let bias = Bias<2, 13>::from_raw([1000, -2000])
+    let acc = dense(weights, x: Activations<70, 7>::pack(x), bias)
+    assert!(
+        acc.at(0).raw() == plain_sum(weights: first, x, bias: 1000),
+    )
+    assert!(
+        acc.at(1).raw() == plain_sum(weights: second, x, bias: -2000),
+    )
+}
+
+static_assert(dot_fits_i32(784))
+static_assert(dot_fits_i32(131071))
+static_assert(!dot_fits_i32(131072))

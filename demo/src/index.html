@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tensile Dispute Demo</title>
+<meta name="description" content="Draw a digit, post a false claim about it, and watch a contract written in Fe catch the lie by re-running one neuron. Runs entirely in this tab.">
+<style>/*STYLE*/</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Tensile</h1>
+    <p>A false answer posted on a blockchain, caught by re-running one neuron.</p>
+  </div>
+  <nav id="steps" aria-label="Steps">
+    <button data-act="draw" class="on"><b>1</b> Draw</button>
+    <button data-act="claim"><b>2</b> Claim</button>
+    <button data-act="dispute"><b>3</b> Dispute</button>
+    <button data-act="settle"><b>4</b> Settle</button>
+    <button data-act="fe"><b>5</b> Why Fe</button>
+  </nav>
+</header>
+
+<section id="ledger" aria-label="Accounts on the private chain">
+  <div class="cell"><span>Claimant</span><b id="l-claimant">100 ETH</b><i id="l-claimant-credit"></i></div>
+  <div class="cell"><span>Watcher</span><b id="l-watcher">100 ETH</b><i id="l-watcher-credit"></i></div>
+  <div class="cell"><span>Arbiter contract holds</span><b id="l-arbiter">0 ETH</b></div>
+  <div class="cell"><span>Current claim</span><b id="l-claim">none</b><i id="l-deadline"></i></div>
+  <div class="cell wide" id="engine"><span>This tab is the blockchain</span><b id="l-engine">starting the EVM</b></div>
+</section>
+
+<main>
+  <!-- 1 ------------------------------------------------------------------------------------- -->
+  <section class="act on" id="act-draw">
+    <div class="lede">
+      <h2>Draw a digit. The network runs on an EVM, inside this page.</h2>
+      <p>The network is 784 inputs, 32 hidden neurons, 10 outputs, integers only, written in Fe. What runs here is the bytecode <code>fe build</code> produced, unchanged: no model in JavaScript, no server.</p>
+    </div>
+    <div class="grid draw-grid">
+      <div class="panel pad-panel">
+        <canvas id="pad" width="280" height="280" aria-label="Drawing area for a digit"></canvas>
+        <div class="row"><button id="clear" class="ghost">Clear</button><span class="hint">Draw with a mouse or a finger, large and centred.</span></div>
+        <p class="label">Or take an image from the MNIST test set</p>
+        <div id="samples" class="samples"></div>
+      </div>
+      <div class="panel net">
+        <div class="net-col">
+          <p class="label">Input, 28 x 28</p>
+          <canvas id="input" width="28" height="28"></canvas>
+        </div>
+        <div class="net-col">
+          <p class="label">32 hidden neurons</p>
+          <div id="hidden" class="hidden-grid"></div>
+        </div>
+        <div class="net-col grow">
+          <p class="label">10 outputs</p>
+          <div id="logits" class="logits"></div>
+        </div>
+        <div class="net-col answer">
+          <p class="label">Answer</p>
+          <div id="answer" class="digit">?</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <p id="run-note" class="note">Waiting for a digit.</p>
+      <button id="to-claim" class="primary" disabled>Post a claim about this image</button>
+    </div>
+  </section>
+
+  <!-- 2 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-claim">
+    <div class="lede">
+      <h2>That run was expensive. So nobody runs it on-chain. They just claim the answer.</h2>
+      <p>A claimant posts the answer and every intermediate value, with a bond. The contract checks nothing about the answer yet. Choose what the claimant says.</p>
+    </div>
+    <div class="grid claim-grid">
+      <div class="panel" id="lies">
+        <label class="lie"><input type="radio" name="lie" value="honest" checked><span><b>Tell the truth</b><i>Post what the network computed.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="class"><span><b>Lie about the answer</b><i>Honest numbers, wrong final answer. A clumsy lie.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="logit"><span><b>Forge one output</b><i>Raise one output so the answer looks right. Better.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="hidden"><span><b>Forge hidden neurons</b><i>Everything after the forgery is computed correctly, so every later check passes. The strongest lie.</i></span></label>
+      </div>
+      <div class="panel">
+        <p class="label">Answer to claim</p>
+        <div id="targets" class="targets"></div>
+        <table class="compare">
+          <thead><tr><th></th><th>What the network computed</th><th>What will be posted</th></tr></thead>
+          <tbody>
+            <tr><th>Answer</th><td id="c-true-class"></td><td id="c-claim-class"></td></tr>
+            <tr><th>Hidden neurons</th><td>32 values</td><td id="c-claim-hidden"></td></tr>
+            <tr><th>Outputs</th><td>10 values</td><td id="c-claim-logits"></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="foot">
+      <p class="note" id="claim-note">The bond is 1 ETH of play money. The challenge window is one hour of simulated time.</p>
+      <button id="post" class="primary" disabled>Post claim with a 1 ETH bond</button>
+    </div>
+  </section>
+
+  <!-- 3 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-dispute">
+    <div class="lede">
+      <h2 id="dispute-title">Anyone can check the claim. It takes one neuron to prove it false.</h2>
+      <p>A watcher re-runs the network off-chain and walks the claim in order: hidden neurons, outputs, answer. The first value that differs is the challenge to send. (In production that is the native Fe auditor. Here it is the run from step 1.)</p>
+    </div>
+    <div class="grid dispute-grid">
+      <div class="panel">
+        <p class="label">The watcher's finding</p>
+        <div id="finding" class="finding">No claim yet.</div>
+        <div class="row wrap">
+          <button id="send-named" class="primary" disabled>Send this challenge</button>
+        </div>
+        <details id="tries">
+          <summary>Try a different challenge yourself</summary>
+          <p class="hint">Nothing here is gated by the page. Every refusal comes from the contract.</p>
+          <div class="row wrap">
+            <button id="try-class" class="ghost">Challenge the answer</button>
+            <span class="pick"><button id="try-l2" class="ghost">Challenge output</button><input id="pick-l2" type="number" min="0" max="9" value="0" aria-label="Output number"></span>
+            <span class="pick"><button id="try-l1" class="ghost">Challenge hidden neuron</button><input id="pick-l1" type="number" min="0" max="31" value="0" aria-label="Hidden neuron number"></span>
+          </div>
+        </details>
+        <p class="label spaced">Cost of settling this, against running everything</p>
+        <div id="gas-bars" class="bars"></div>
+      </div>
+      <div class="panel verdict-panel">
+        <p class="label">What the contract does with a challenge</p>
+        <ol id="checks" class="checks"></ol>
+        <p class="label spaced">Merkle proof of the neuron's weights, 42 neurons in one root</p>
+        <svg id="tree" viewBox="0 0 560 104" role="img" aria-label="Merkle tree of the 42 neurons"></svg>
+        <div id="verdict" class="verdict" aria-live="polite"></div>
+      </div>
+    </div>
+    <div class="foot">
+      <p id="dispute-note" class="note"></p>
+      <button id="to-settle" class="primary">Go to settlement</button>
+    </div>
+  </section>
+
+  <!-- 4 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-settle">
+    <div class="lede">
+      <h2>If nobody proves it false within the hour, it stands.</h2>
+      <p>Only then does <code>result(id)</code> answer. Bonds are never sent out automatically: each account pulls its own credit with <code>withdraw()</code>.</p>
+    </div>
+    <div class="grid settle-grid">
+      <div class="panel">
+        <p class="label">Clock and outcome</p>
+        <div class="row wrap">
+          <button id="forward" class="ghost">Move the clock forward one hour</button>
+          <button id="finalize" class="ghost">Finalize the claim</button>
+          <button id="read-result" class="ghost">Read result(id)</button>
+        </div>
+        <div id="settle-out" class="finding small">No claim yet.</div>
+        <p class="label spaced">Pull your money</p>
+        <div class="row wrap">
+          <button id="w-claimant" class="ghost">Claimant withdraws</button>
+          <button id="w-watcher" class="ghost">Watcher withdraws</button>
+        </div>
+        <div class="row spaced"><button id="again" class="primary">Post another claim</button></div>
+      </div>
+      <div class="panel">
+        <p class="label">Every transaction so far, as mined in this tab</p>
+        <div class="log-wrap"><table id="log" class="log">
+          <thead><tr><th>Who</th><th>Call</th><th class="n">Gas</th><th>Outcome</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-fe">
+    <div class="lede">
+      <h2>Why this is written in Fe</h2>
+      <p>Shapes and fixed-point scales live in the types, so a wrong model does not compile. Effects are in the signatures, so you can see which handler can move money. All of this is real compiler output and quoted source.</p>
+    </div>
+    <div class="grid fe-grid">
+      <div class="panel">
+        <p class="label">What the compiler refuses</p>
+        <div id="fe-tabs" class="tabs"></div>
+        <pre id="fe-diag" class="code diag"></pre>
+        <p class="label spaced">What the abstractions cost, measured on real transactions</p>
+        <table class="cost" id="fe-costs"></table>
+      </div>
+      <div class="panel">
+        <p class="label">Effects: only one handler can send ETH</p>
+        <pre id="fe-effects" class="code"></pre>
+        <p class="label spaced">The neuron: the same code off-chain and on-chain</p>
+        <pre id="fe-neuron" class="code"></pre>
+        <p class="note" id="fe-build"></p>
+      </div>
+    </div>
+  </section>
+</main>
+<script>window.TENSILE_ASSETS=/*ASSETS*/null;</script>
+<script>/*SCRIPT*/</script>
+</body>
+</html>

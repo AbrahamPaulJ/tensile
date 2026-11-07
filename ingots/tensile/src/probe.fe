@@ -1,0 +1,26 @@
+//! Observation of a forward pass, as an effect.
+use ingot::activations::Activations
+
+/// A capability that is shown the output of every hidden layer while a
+/// network runs. A forward pass declares `uses (probe: mut Probe)` and the
+/// caller decides what observes it: nothing (`Blind`), a printer, a hasher
+/// that commits to the activations.
+pub trait Probe {
+    /// Called once per hidden layer, in order. `layer` counts from 1.
+    fn hidden<const N: usize, const F: usize>(
+        mut self,
+        layer: usize,
+        _ activations: Activations<N, F>,
+    )
+}
+
+/// The probe that looks at nothing.
+pub struct Blind {}
+
+impl Probe for Blind {
+    fn hidden<const N: usize, const F: usize>(
+        mut self,
+        layer: usize,
+        _ activations: Activations<N, F>,
+    ) {}
+}

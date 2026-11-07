@@ -1,0 +1,38 @@
+// Q6 repro: compile time. Both tests PASS at -O 1 (a single use of a 600 or 1,100 element array in a
+// message is fine at run time), but this 37-line file takes about 110 s to compile at -O 1 and did not
+// finish in 240 s at -O 0. For the EVM StackOverflow see q6_array_twice.fe.
+// (When the logged run was made the second test was still named array_arg_1100_stack_overflow.)
+const SMALL: [u8; 600] = [7; 600]
+const BIG: [u8; 1100] = [7; 1100]
+
+msg M {
+    #[selector = 0x01]
+    Small { v: [u8; 600] } -> u256,
+    #[selector = 0x02]
+    Big { v: [u8; 1100] } -> u256,
+}
+
+pub contract C {
+    recv M {
+        Small { v } -> u256 {
+            (v[0] as u256) + (v[599] as u256)
+        }
+        Big { v } -> u256 {
+            (v[0] as u256) + (v[1099] as u256)
+        }
+    }
+}
+
+#[test]
+fn array_arg_600_ok() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let out: u256 = evm.call(addr: c, gas: 100000000, value: Wei::zero(), message: M::Small { v: SMALL })
+    assert!(out == 14)
+}
+
+#[test]
+fn array_arg_1100_ok() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let out: u256 = evm.call(addr: c, gas: 100000000, value: Wei::zero(), message: M::Big { v: BIG })
+    assert!(out == 14)
+}

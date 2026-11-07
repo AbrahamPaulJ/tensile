@@ -1,0 +1,23 @@
+// Q1: deliberately failing. Shape mismatch must not compile.
+pub struct Matrix<const R: usize, const C: usize> {
+    pub data: [[i32; C]; R],
+}
+
+impl<const R: usize, const C: usize> Matrix<R, C> {
+    pub fn zero() -> Self {
+        Matrix { data: [[0; C]; R] }
+    }
+
+    pub fn matmul<const K: usize>(self, _ other: Matrix<C, K>) -> Matrix<R, K> {
+        Matrix<R, K>::zero()
+    }
+}
+
+#[test]
+fn mismatch() {
+    let a: Matrix<2, 3> = Matrix<2, 3>::zero()
+    let b: Matrix<4, 2> = Matrix<4, 2>::zero()
+    // 2x3 times 4x2: inner dimensions 3 and 4 differ.
+    let c = a.matmul(b)
+    assert!(c.data[0][0] == 0)
+}

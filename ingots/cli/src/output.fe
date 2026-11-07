@@ -1,0 +1,127 @@
+//! Printing results as text.
+use std::io::{HostIo, Write, host, write, write_char}
+use tensile::{Accumulators, Activations, Probe}
+
+const SPACE: i32 = 32
+const NEWLINE: i32 = 10
+const MINUS: i32 = 45
+const ZERO: i32 = 48
+
+/// Writes the class and ends the line.
+pub fn write_class(_ class: usize) uses (w: mut Write) {
+    write_int(class.downcast_truncate())
+    write_char(NEWLINE)
+}
+
+/// Writes the line `logits v v ..`.
+pub fn write_logits<const N: usize, const F: usize>(_ logits: Accumulators<N, F>)
+uses (w: mut Write)
+{
+    write("logits")
+    for j in 0 .. N {
+        write_char(SPACE)
+        write_int(logits.at(j).raw())
+    }
+    write_char(NEWLINE)
+}
+
+/// Writes an integer in decimal.
+pub fn write_int(_ value: i32) uses (w: mut Write) {
+    // Widened so that the most negative int32 can be negated.
+    var rest: i64 = value as i64
+    if rest < 0 {
+        write_char(MINUS)
+        rest = -rest
+    }
+    var digits: [i32; 10] = [0; 10]
+    var count: usize = 0
+    while rest > 0 || count == 0 {
+        digits[count] = (rest % 10).downcast_truncate()
+        rest = rest / 10
+        count += 1
+    }
+    while count > 0 {
+        count -= 1
+        write_char(ZERO + digits[count])
+    }
+}
+
+/// The probe of trace mode: prints every hidden vector it is shown as the
+/// line `hidden K v v ..`, where `K` is the layer.
+pub struct Printer { out: HostIo }
+
+impl Printer {
+    pub fn new() -> Self {
+        Self { out: host() }
+    }
+}
+
+impl Probe for Printer {
+    fn hidden<const N: usize, const F: usize>(
+        mut self,
+        layer: usize,
+        _ activations: Activations<N, F>,
+    ) {
+        with (Write = self.out) {
+            write("hidden ")
+            write_int(layer.downcast_truncate())
+            for i in 0 .. N {
+                write_char(SPACE)
+                write_int(activations.get(i) as i32)
+            }
+            write_char(NEWLINE)
+        }
+    }
+}
+
+/// A `Write` that keeps what it is given, for the tests.
+struct Captured { bytes: [u8; 64], len: usize }
+
+impl Write for Captured {
+    fn write_char(mut self, c: i32) {
+        self.bytes[self.len] = c.downcast_truncate()
+        self.len += 1
+    }
+}
+
+impl Captured {
+    fn new() -> Self {
+        Self { bytes: [0; 64], len: 0 }
+    }
+
+    fn holds<const N: usize>(self, _ text: String<N>) -> bool {
+        if self.len != N {
+            return false
+        }
+        let expected = text.as_bytes()
+        for i in 0 .. N {
+            if self.bytes[i] != expected[i] {
+                return false
+            }
+        }
+        true
+    }
+}
+
+#[test]
+fn write_int_prints_zero_and_both_extremes() {
+    var out = Captured::new()
+    with (Write = out) {
+        write_int(0)
+        write_char(SPACE)
+        write_int(-2147483648)
+        write_char(SPACE)
+        write_int(2147483647)
+    }
+    assert!(out.holds("0 -2147483648 2147483647"))
+}
+
+#[test]
+fn write_logits_prints_one_line() {
+    var out = Captured::new()
+    with (Write = out) {
+        write_logits(Accumulators<3, 9>::from_raw([-12, 0, 345]))
+        write_class(7)
+    }
+    assert!(out.holds("logits -12 0 345\n7\n"))
+}

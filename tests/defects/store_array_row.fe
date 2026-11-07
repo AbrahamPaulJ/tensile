@@ -1,0 +1,25 @@
+// Compiler defect (Fe 26.5.1): storing a whole array into an element of a nested array whose inner
+// length is a const fn of a const generic fails with an internal error, not a diagnostic:
+//
+//   error[16-0004]: internal access checking error in `fn double_rows`
+//   normalized body verification failed: StoreType { value: NValueId(..), destination: Root(..) }
+//
+// Reproduce: fe check tests/defects/store_array_row.fe
+// Workaround: write the elements one by one (`out[j][i] = ..`), or wrap the row in a struct.
+const fn half(_ n: usize) -> usize {
+    n / 2
+}
+
+const fn zeros<const N: usize>() -> [u256; half(N)] {
+    [0; half(N)]
+}
+
+pub const fn double_rows<const OUT: usize, const N: usize>() -> [[u256; half(N)]; OUT] {
+    var out: [[u256; half(N)]; OUT] = [[0; half(N)]; OUT]
+    var j: usize = 0
+    while j < OUT {
+        out[j] = zeros<N>()
+        j += 1
+    }
+    out
+}

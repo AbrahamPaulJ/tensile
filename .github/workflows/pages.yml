@@ -1,0 +1,29 @@
+name: Demo page
+
+# Publishes demo/dist/tensile-demo.html, so that the demo needs not even a download.
+# One setup step in the repository: Settings, Pages, Source: GitHub Actions.
+on:
+  push:
+    branches: [main]
+    paths: [demo/dist/**]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: mkdir site && cp demo/dist/tensile-demo.html site/index.html
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

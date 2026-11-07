@@ -1,0 +1,95 @@
+// Q6 repro: bytes of contract code per element of a constant array.
+// Each contract reads one element of a 1,024-element (or 32-element) constant at a runtime index.
+// The contents come from a linear congruential generator. (A first version filled the tables with
+// (i * 37 + 11) % 256; the optimiser then replaced TABLE[i] by that formula and emitted no table at
+// all: ConstU8 was 72 bytes of runtime code.)
+const fn lcg(_ s: u256) -> u256 {
+    (s * 1664525 + 1013904223) % 4294967296
+}
+const fn bytes_table() -> [i8; 1024] {
+    var t: [i8; 1024] = [0; 1024]
+    var i: usize = 0
+    var s: u256 = 12345
+    while i < 1024 {
+        s = lcg(s)
+        t[i] = ((s >> 16) % 256).downcast_truncate()
+        i += 1
+    }
+    t
+}
+
+const fn u8_table() -> [u8; 1024] {
+    var t: [u8; 1024] = [0; 1024]
+    var i: usize = 0
+    var s: u256 = 12345
+    while i < 1024 {
+        s = lcg(s)
+        t[i] = ((s >> 16) % 256).downcast_truncate()
+        i += 1
+    }
+    t
+}
+
+const fn word_table() -> [u256; 32] {
+    var t: [u256; 32] = [0; 32]
+    var i: usize = 0
+    var s: u256 = 12345
+    while i < 32 {
+        var k: usize = 0
+        var w: u256 = 0
+        while k < 32 {
+            s = lcg(s)
+            w = (w << 8) | ((s >> 16) % 256)
+            k += 1
+        }
+        t[i] = w
+        i += 1
+    }
+    t
+}
+
+const I8S: [i8; 1024] = bytes_table()
+const U8S: [u8; 1024] = u8_table()
+const WORDS: [u256; 32] = word_table()
+
+msg M {
+    #[selector = 0x01]
+    Get { i: usize } -> u256,
+}
+
+// 1,024 x i8 constant
+pub contract ConstI8 {
+    recv M {
+        Get { i } -> u256 {
+            let v: i8 = I8S[i]
+            if v < 0 { 1 } else { 2 }
+        }
+    }
+}
+
+// 1,024 x u8 constant
+pub contract ConstU8 {
+    recv M {
+        Get { i } -> u256 {
+            U8S[i] as u256
+        }
+    }
+}
+
+// 32 x u256 constant (the same 1,024 bytes of information)
+pub contract ConstWords {
+    recv M {
+        Get { i } -> u256 {
+            WORDS[i]
+        }
+    }
+}
+
+// no table: baseline code size
+pub contract NoTable {
+    recv M {
+        Get { i } -> u256 {
+            i as u256
+        }
+    }
+}
