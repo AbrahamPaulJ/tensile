@@ -50,6 +50,9 @@ jobs:
           ref: ${{ env.FE_MASTER }}
           path: fe-master
           submodules: recursive
+          # Full history, so `fe --version` abbreviates the commit as a local clone does (89d07b9db):
+          # the manifest records that string, and the committed module must match byte for byte.
+          fetch-depth: 0
       - uses: actions/cache@v4
         with:
           path: |

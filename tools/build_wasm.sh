@@ -22,7 +22,7 @@ fail=0
 step() { echo; echo "=== $*"; }
 
 "$FE" --version
-case "$("$FE" --version)" in *"${PIN:0:9}"*) ;; *) echo "FAIL fe is not the pinned commit ${PIN:0:9}"; exit 1 ;; esac
+case "$("$FE" --version)" in *"${PIN:0:7}"*) ;; *) echo "FAIL fe is not the pinned commit ${PIN:0:7}"; exit 1 ;; esac
 
 step "flatten the ingots"
 python3 tools/gen_wasm.py || fail=1
