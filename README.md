@@ -244,7 +244,9 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   flattening two ingots into one file, because the target does not take ingots yet. Only the kernel and
   the model are built for it; the dispute logic and the auditor are not.
 
-Compiler defects found along the way, with minimal examples: `docs/upstream-reports.md`.
+Compiler defects found along the way, with minimal examples: `docs/upstream-reports.md`. Five were filed
+(argotorg/fe#1950 to #1954), and the Fe team fixed all five on master (PRs #1955 to #1959). This entry still builds with
+the pinned versions it names, so none of those fixes are in the figures here.
 
 ## Declaration
 

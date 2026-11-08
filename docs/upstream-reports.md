@@ -9,10 +9,10 @@ five issues:
 | 1 | Stack overflow, one large array in two messages | fixed (passes in 14.5 s) | not filed |
 | 2 | Minutes of compile time for large message arrays | fixed (1.9 s, was about 100 s) | not filed |
 | 3 | Native `read_word`/`write_word` little-endian | fixed (big-endian on EVM, native and wasm; `tests/defects/native_word_endianness_master.fe`) | not filed |
-| 4 | `black_box` on an array passes `fe check` | still present | [#1950](https://github.com/argotorg/fe/issues/1950) |
-| 5 | No warning past 24,576 bytes | still present | [#1951](https://github.com/argotorg/fe/issues/1951) |
-| 6 | Internal error, array stored into a nested array | still present | [#1952](https://github.com/argotorg/fe/issues/1952) |
-| 7 | Misleading diagnostics: event field; name clash | both still present | [#1953](https://github.com/argotorg/fe/issues/1953), [#1954](https://github.com/argotorg/fe/issues/1954) |
+| 4 | `black_box` on an array passes `fe check` | present when filed | [#1950](https://github.com/argotorg/fe/issues/1950), fixed by [PR #1955](https://github.com/argotorg/fe/pull/1955) |
+| 5 | No warning past 24,576 bytes | present when filed | [#1951](https://github.com/argotorg/fe/issues/1951), fixed by [PR #1956](https://github.com/argotorg/fe/pull/1956) |
+| 6 | Internal error, array stored into a nested array | present when filed | [#1952](https://github.com/argotorg/fe/issues/1952), fixed by [PR #1957](https://github.com/argotorg/fe/pull/1957) |
+| 7 | Misleading diagnostics: event field; name clash | both present when filed | [#1953](https://github.com/argotorg/fe/issues/1953), fixed by [PR #1958](https://github.com/argotorg/fe/pull/1958); [#1954](https://github.com/argotorg/fe/issues/1954), fixed by [PR #1959](https://github.com/argotorg/fe/pull/1959) |
 
 The sections below are the original drafts, reproduced on `fe 26.5.1 (149c758)` on 2026-11-06.
 
