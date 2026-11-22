@@ -7,15 +7,17 @@ its types, runs natively and in WebAssembly to classify, and on the EVM to settl
 answer posted on-chain is proven false by re-running a single neuron, at 9.4% of the gas of running the
 whole network.
 
-**[Try it: `demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html)** is one self-contained file. Download it and open
-it in a browser: no wallet, no install, no network. **[Watch it: `demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4)**, two
-and a quarter minutes.
+**[Try it live: abrahampaulj.github.io/tensile/demo](https://abrahampaulj.github.io/tensile/demo/)**, in the browser:
+no wallet, no install, no server. **[Watch it](https://abrahampaulj.github.io/tensile/#video)**, two and a quarter
+minutes. **[The project page](https://abrahampaulj.github.io/tensile/)** has both. The same page is
+[`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained file that also opens from disk, and the video is
+[`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
 
 **For a judge with five minutes**, from the repository root:
 
 | Command | Needs | What it shows | Time |
 |---|---|---|---|
-| open `demo/dist/tensile-demo.html` | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
+| open [the live demo](https://abrahampaulj.github.io/tensile/demo/) | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
 | `fe test` | Fe 26.5.1 | 72 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
 | `node wasm/diff.mjs` | Node 20+ | the committed WebAssembly module against the NumPy reference: 10,000 images, 0 mismatches | 4 s |
 | `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 14 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message | 17 s |
@@ -212,7 +214,8 @@ head -c 784 ref/out/inputs.bin | out-native/cli trace    # every hidden value, e
 
 ## Demo
 
-Open [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html). Draw a digit and the bytecode from `fe build` classifies it,
+Open [the live demo](https://abrahampaulj.github.io/tensile/demo/), or [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html) from disk
+(the hosted copy is that file, published with the project page in `site/` by `.github/workflows/pages.yml`). Draw a digit and the bytecode from `fe build` classifies it,
 on an EVM running in the tab, and the WebAssembly build of the same source classifies it again, in well
 under a millisecond, with every hidden value and output equal. Post a claim, honest or forged, and watch the watcher name the wrong value
 and the contract settle it. Every refusal you see is the contract's own error, and no button is gated by

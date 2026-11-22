@@ -1,11 +1,12 @@
 name: Demo page
 
-# Publishes demo/dist/tensile-demo.html, so that the demo needs not even a download.
+# Publishes the landing page (site/), the demo (demo/dist/tensile-demo.html, at /demo/) and the video,
+# so that nothing needs a download.
 # One setup step in the repository: Settings, Pages, Source: GitHub Actions.
 on:
   push:
     branches: [main]
-    paths: [demo/dist/**]
+    paths: [demo/dist/**, site/**, demo/video/tensile-demo.mp4, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -23,9 +24,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
-      - run: mkdir site && cp demo/dist/tensile-demo.html site/index.html
+      - run: |
+          mkdir -p _site/demo
+          cp site/* _site/
+          cp demo/dist/tensile-demo.html _site/demo/index.html
+          cp demo/video/tensile-demo.mp4 _site/
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: site
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
