@@ -6,7 +6,7 @@ reference sample 0, each result checked against the NumPy reference or the proto
 is recorded. The demo page's chain reproduces the Fe figures of sections 1 and 2 exactly
 (`demo/test/run.mjs` compares them).
 
-fe 26.5.1 (149c758); forge Version: 1.9.0; solc 0.8.38, via-IR, optimiser 200 runs. Whole script: 806.3 s.
+fe 26.5.1 (149c758); forge Version: 1.9.0; solc 0.8.38, via-IR, optimiser 200 runs. Whole script: 747.7 s.
 
 ## 1. What the dispute saves
 
@@ -90,12 +90,35 @@ Each form is the same dot product, run through both backends and checked against
 
 | Form | gas() | per multiply-add | Transaction | Runtime bytes | Native, 10,000 samples |
 |---|---|---|---|---|---|
-| **kept: `u32` limbs** | 48,427 | 61.7 | 92,608 | 4,301 | 6.63 s (0 mismatches) |
-| `i256_loop` | 74,029 | 94.4 | 118,242 | 2,059 | 35.37 s (0 mismatches) |
-| `i256_signext` | 98,029 | 125.0 | 196,772 | 2,155 | 41.48 s (0 mismatches) |
-| `i256_unrolled` | 35,286 | 45.0 | 79,467 | 2,946 | 46.19 s (0 mismatches) |
-| `i64_lanes` | 105,641 | 134.7 | 165,039 | 2,722 | 4.29 s (0 mismatches) |
-| `u32_acc256` | 47,041 | 60.0 | 91,222 | 4,223 | 6.67 s (0 mismatches) |
-| `u64_acc256` | 51,941 | 66.2 | 96,122 | 3,911 | 6.71 s (0 mismatches) |
-| `u64_limbs` | 63,043 | 80.4 | 107,308 | 4,277 | 2.96 s (0 mismatches) |
-| `usize_limbs` | 60,075 | 76.6 | 104,461 | 2,723 | 39.93 s (0 mismatches) |
+| **kept: `u32` limbs** | 48,427 | 61.7 | 92,608 | 4,301 | 4.68 s (0 mismatches) |
+| `i256_loop` | 74,029 | 94.4 | 118,242 | 2,059 | 29.06 s (0 mismatches) |
+| `i256_signext` | 98,029 | 125.0 | 196,772 | 2,155 | 33.88 s (0 mismatches) |
+| `i256_unrolled` | 35,286 | 45.0 | 79,467 | 2,946 | 38.03 s (0 mismatches) |
+| `i64_lanes` | 105,641 | 134.7 | 165,039 | 2,722 | 2.85 s (0 mismatches) |
+| `u32_acc256` | 47,041 | 60.0 | 91,222 | 4,223 | 5.45 s (0 mismatches) |
+| `u64_acc256` | 51,941 | 66.2 | 96,122 | 3,911 | 6.15 s (0 mismatches) |
+| `u64_limbs` | 63,043 | 80.4 | 107,308 | 4,277 | 2.77 s (0 mismatches) |
+| `usize_limbs` | 60,075 | 76.6 | 104,461 | 2,723 | 34.46 s (0 mismatches) |
+
+## 6. Other compiler settings
+
+Everything above is Fe at `-O 1` (the default, and what ships) against solc via-IR. The same sources
+at Fe `-O 2`, and the same Solidity through solc's legacy pipeline (optimiser on, 200 runs), with the
+same result checks:
+
+| Call | Fe `-O 1`, shipped | Fe `-O 2` | Solidity, via-IR | Solidity, legacy |
+|---|---|---|---|---|
+| `Network.classify` | 1,896,043 | 1,895,787 | | |
+| one layer 1 neuron, transaction | 92,608 | 92,608 | 74,673 | 86,486 |
+| `claim` | 246,113 | 246,096 | 195,155 | does not compile |
+| `challengeNeuron1 (784 inputs)` | 178,662 | 178,656 | 143,442 | does not compile |
+| `challengeNeuron2 (32 inputs)` | 73,142 | 73,122 | 64,601 | does not compile |
+| `challengeClass` | 63,540 | 63,534 | 59,217 | does not compile |
+| `finalize` | 49,034 | 49,028 | 44,311 | does not compile |
+| `withdraw (4 credits)` | 30,096 | 30,096 | 29,895 | does not compile |
+| `Arbiter` runtime bytes | 11,649 | 11,613 | 4,940 | does not compile |
+| `NeuronCheck` / `NeuronTwin` runtime bytes | 4,301 | 4,301 | 1,229 | 1,659 |
+
+The Solidity neuron row is the 32-lane version, the best found. `Network` has no Solidity twin.
+Without via-IR, solc 0.8.38 rejects `ArbiterTwin.sol` with "Stack too deep" (the script checks that
+it still does), so the arbiter's only Solidity baseline is the via-IR one.

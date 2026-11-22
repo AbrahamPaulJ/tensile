@@ -3,8 +3,8 @@
 #
 #   wsl -e bash tools/build_wasm.sh            (from PowerShell; bash tools/build_wasm.sh on Linux)
 #
-# The WebAssembly target is on Fe master only (argotorg/fe PR 1904, merged 2026-11-05), not in a
-# release yet, so this uses a pinned master commit, which the organisers allow. Everything else in
+# The WebAssembly target was on Fe master only when this was built (argotorg/fe PR 1904, merged
+# 2026-11-05; released in 26.7.0), so this uses a pinned master commit, which the organisers allow. Everything else in
 # the project uses the release in `fe.toml`/README. Set FE to a fe binary built at that commit with
 # `cargo build --release -p fe --features wasm` (spike/wasm/00_build_master.sh does that in ~8 min).
 #

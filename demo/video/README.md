@@ -10,12 +10,12 @@ caption tool of [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (MIT), 
 
 ```
 powershell -File demo/video/setup_tts.ps1                                  # once: a venv and the 350 MB voice model, in the user's cache
-git clone --depth 1 https://github.com/kajisho5/ffmpeg-skill <dir>         # once: the caption tool
+git clone https://github.com/kajisho5/ffmpeg-skill <dir>                   # once: the caption tool; this video used commit 6e42a79
 powershell -File demo/video/make.ps1 -Skill <dir>                          # everything below, about 6 min
 ```
 
-`make.ps1` runs, in order: `tts.py` (script.json to `work/audio`; unchanged lines are kept, a new line takes
-about 30 s on a CPU), `record.mjs` (the page to `work/frames`, 2:15, needs Chrome), `music.py` (needs NumPy) and
+`make.ps1` runs, in order: `tts.py` (script.json to `work/audio`; unchanged lines are kept; on a CPU, speech
+takes about as long to make as to play), `record.mjs` (the page to `work/frames`, 2:15, needs Chrome), `music.py` (needs NumPy) and
 `assemble.py` (frames, voice and ducked music to an mp4 at -16 LUFS, then the captions; needs ffmpeg with libass).
 
 To change a word, edit `script.json`: `text` is the caption and `say` what the voice is given, where it needs

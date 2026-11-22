@@ -1,5 +1,7 @@
 # Tensile
 
+[![CI](https://github.com/AbrahamPaulJ/tensile/actions/workflows/ci.yml/badge.svg)](https://github.com/AbrahamPaulJ/tensile/actions/workflows/ci.yml)
+
 **Pitch:** One integer neural-network kernel, written once in Fe with shapes and fixed-point scales in
 its types, runs natively and in WebAssembly to classify, and on the EVM to settle a dispute: a false
 answer posted on-chain is proven false by re-running a single neuron, at 9.4% of the gas of running the
@@ -52,6 +54,9 @@ of typed numeric code that compiles to both backends.
   (`UFixed<D>`, a power-of-ten scale). A network needs signed values with a binary point: 8-bit
   weights and activations packed 32 to a word, 32-bit accumulators, and requantisation as an
   arithmetic shift. `Q<F>` is that, an `i32` with `F` fractional bits, so it is its own type.
+- **Built on `std` wherever `std` has it.** Proofs are checked by `std::evm::merkle`, the bond is a
+  `Wei`, the window a `Duration` and deadlines `Timestamp`s from `std::evm::units`, credits live in a
+  `StorageMap`. The only arithmetic Tensile adds is the part the standard library does not have.
 
 Everything was built during the contest window. Integer accuracy is 97.44% on the MNIST test set; the
 floating-point model it came from reaches 97.50%.
@@ -145,6 +150,7 @@ Node 22. Linux or WSL2 for Fe and Foundry; run the commands from the repository 
 curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version v26.5.1
 
 fe --version          # fe 26.5.1 (149c758)
+sha256sum "$(command -v fe)"   # 2d48fd56e45f56a775bea73a3180ffcab73ad440887d0a985be2050fb5993916 (Linux x86-64)
 fe fmt --check ingots
 fe test               # 72 tests on the EVM backend, about 25 s
 fe build              # the contracts, into ./out
@@ -158,10 +164,10 @@ The full checks need Foundry (`curl -L https://foundry.paradigm.xyz | bash && fo
 | `bash tools/m1_check.sh` | Both backends' unit tests, 14 compile-fail cases, native against the reference on all 10,000 samples at `-O 0`, `-O 1`, `-O 2` | 68 s |
 | `bash tools/m2_check.sh` | The contracts against the reference on all 10,000 classes and 1,000 traces; fuzz against a plain Solidity spec; real gas on anvil | 199 s |
 | `bash tools/m3_check.sh` | The arbiter: 26 Fe contract tests, 45 Foundry fuzz and invariant tests for properties P1 to P6, auditor against Python on 5,200 mutated claims | 176 s |
-| `bash tools/m4_numbers.sh` | Regenerates `docs/numbers.md`: every gas and size figure, from real transactions | about 6 min, or 78 s with `--no-forms` |
+| `bash tools/m4_numbers.sh` | Regenerates `docs/numbers.md`: every gas and size figure, from real transactions | 12.5 min, or about 2 min with `--no-forms` |
 | `python3 tools/m3_mutants.py --fresh` | 59 deliberate faults in the contract; all are caught, 11 of them by the compiler. Results in `docs/mutation-results.md` | 977 s |
 | `python3 ref/get_mnist.py && python3 ref/test_ref.py` (needs NumPy; the first downloads MNIST and checks its SHA-256) | The reference's arithmetic and exported files | 5 s |
-| `bash tools/m5_clean_run.sh` | Copies only what git would publish to an empty directory, makes it `$HOME`, installs the tools, runs all the above except the mutation test and the numbers, and rebuilds the demo | 9 min |
+| `bash tools/m5_clean_run.sh` | Copies only what git would publish to an empty directory, makes it `$HOME`, installs the tools, runs all the above except the mutation test and the numbers, and rebuilds the demo | 13 min |
 
 The demo needs only Node to rebuild and test (the built page is committed):
 
@@ -176,10 +182,11 @@ npm run test:ui       # the page itself in Chrome, offline, from file://
 
 ### The WebAssembly build: a pinned master commit
 
-Fe's WebAssembly target was merged on 2026-11-05 ([argotorg/fe#1904](https://github.com/argotorg/fe/pull/1904)) and
-is not in a release yet, so this one part uses **fe 26.5.0 (89d07b9db)**, master commit
-`89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908`, which the organisers allow. Everything else uses 26.5.1. The
-built module is committed, so the demo needs no Rust.
+Fe's WebAssembly target was merged on 2026-11-05 ([argotorg/fe#1904](https://github.com/argotorg/fe/pull/1904)), two
+days before this part was built, and was in no release then, so this one part uses **fe 26.5.0 (89d07b9db)**,
+master commit `89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908`, which the organisers allow. Everything else uses
+26.5.1. The target has since shipped in the 26.7.0 release binaries (2026-11-18); this entry stays on the
+commit it was measured with (see Limitations). The built module is committed, so the demo needs no Rust.
 
 ```sh
 git clone https://github.com/argotorg/fe ~/fe-master && cd ~/fe-master && git checkout 89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908
@@ -233,15 +240,25 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   set, and hand-drawn digits are harder still.
 - **Small dense networks only.** No convolution. Layer sizes are compile-time. Layer 1's weights do not fit
   one contract, so `Network` reads them from two others.
-- **Not audited, and not deployed.** Nothing has been deployed to a public network. The mutation test's 53
+- **Not audited, and not deployed.** Nothing has been deployed to a public network. The mutation test's 59
   faults were chosen by hand, so "59 of 59" is not a random sample. Do not hold real value with this.
 - **Fe costs more gas than the best hand-written Solidity here:** 1.24x per neuron transaction and 1.26x
-  per claim (`docs/numbers.md`, section 3), and 2.39x the code. It is cheaper than the natural Solidity
-  assembly loop (0.78x).
+  per claim (`docs/numbers.md`, section 3), and 2.36x the code. It is cheaper than the natural Solidity
+  assembly loop (0.78x). Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
+  0.03%, and solc without via-IR cannot compile the arbiter's twin at all, "Stack too deep" (section 6).
+- **Pinned to Fe 26.5.1, and it needs that version.** Fe 26.6.0 and 26.7.0 came out during the contest
+  and change the language under this code. Tried on 26.7.0 on 2026-11-23: `tensile`, `model` and
+  `dispute`, the pure ingots, pass their tests unchanged; `onchain` stops on 4 errors (a `u256` to
+  `usize` cast that must now be a checked `downcast`, and an effect the stricter rules call ambiguous);
+  `cli` stops on 48, because the native I/O interface it uses (`std::io::host`, `std::native::Args`)
+  was replaced. Porting would also change every gas figure (26.6.0 packs storage), so this entry stays
+  on the release it was measured with. Install 26.5.1 with the command above.
 - **The demo's chain is EthereumJS, not a real network.** Its watcher runs the WebAssembly build of the
   kernel, not the native auditor (`ingots/cli`), which does not run in a browser.
-- **The WebAssembly build rests on an unreleased compiler commit,** and its source is generated by
-  flattening two ingots into one file, because the target does not take ingots yet. Only the kernel and
+- **The WebAssembly build rests on a master commit, not a release,** and its source is generated by
+  flattening two ingots into one file, because the target did not take ingots at that commit (26.7.0
+  does; on it the flattened file still passes its 26 tests, but the exports need 26.7.0's
+  `#[unsafe(export)]` form, so the module is not rebuilt there). Only the kernel and
   the model are built for it; the dispute logic and the auditor are not.
 
 Compiler defects found along the way, with minimal examples: `docs/upstream-reports.md`. Five were filed

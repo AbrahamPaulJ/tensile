@@ -18,7 +18,7 @@ build_variant() { # build_variant <name> <patch command...>: a scratch workspace
   cp "$root/fe.toml" "$dir/"
   cp -r "$root/ingots" "$dir/ingots"
   ( cd "$dir" && "$@" ) || { echo "patching $name failed"; exit 1; }
-  ( cd "$dir" && fe build --color never --out-dir "$work/out-$name" --ingot onchain . ) > "$work/$name.log" 2>&1 \
+  ( cd "$dir" && fe build --color never $FE_FLAGS --out-dir "$work/out-$name" --ingot onchain . ) > "$work/$name.log" 2>&1 \
     || { echo "building $name failed:"; cat "$work/$name.log"; exit 1; }
 }
 
@@ -26,6 +26,8 @@ bash tools/gen_model.sh > /dev/null || exit 1
 build_variant typed true
 build_variant raw_neuron cp "$root/tests/abstraction/neuron_check_raw.fe" ingots/onchain/src/neuron_check.fe
 build_variant inline_settle python3 "$root/tests/abstraction/inline_settle.py" ingots/onchain/src/arbiter.fe
+# The same source at the other optimisation level, for section 6 (`-O 1` is the default and what ships).
+FE_FLAGS="-O 2" build_variant o2 true
 
 # The Solidity twins, compiled with the settings of evm/foundry.toml.
 stage="$HOME/.cache/tensile-evm"
@@ -37,6 +39,16 @@ twin="$stage/out/NeuronTwin.sol/NeuronTwin.json"
 arbiter_twin="$stage/out/ArbiterTwin.sol/ArbiterTwin.json"
 mkdir -p "$work/out-twin"
 python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["bytecode"]["object"][2:])' "$arbiter_twin" > "$work/out-twin/Arbiter.bin"
+# The twins again through solc's legacy pipeline (no via-IR), same optimiser runs, for section 6.
+# NeuronTwin compiles. ArbiterTwin does not ("Stack too deep"): that is recorded, and checked here, so
+# the table cannot go on saying so if a later solc or a changed twin makes it compile.
+legacy() { ( cd "$stage" && FOUNDRY_VIA_IR=false FOUNDRY_OUT=out-legacy FOUNDRY_CACHE_PATH=cache-legacy forge build --color never "$@" ); }
+legacy src/NeuronTwin.sol > "$work/forge-legacy.log" 2>&1 || { cat "$work/forge-legacy.log"; exit 1; }
+twin_legacy="$stage/out-legacy/NeuronTwin.sol/NeuronTwin.json"
+if legacy src/ArbiterTwin.sol > "$work/forge-legacy-arbiter.log" 2>&1; then
+  echo "ArbiterTwin now compiles without via-IR: measure it and update section 6 of tools/m4_numbers.py"; exit 1
+fi
+grep -q "Stack too deep" "$work/forge-legacy-arbiter.log" || { cat "$work/forge-legacy-arbiter.log"; exit 1; }
 
 # Reports. Each script checks every result against the reference or the protocol and exits non-zero
 # if one is wrong, so a figure below is never the gas of a wrong answer.
@@ -51,6 +63,8 @@ run arbiter-typed.txt bash tools/arbiter_gas.sh "$work/out-typed"
 run report-raw.txt bash tools/gas_report.sh "$work/out-raw_neuron"
 run arbiter-inline.txt bash tools/arbiter_gas.sh "$work/out-inline_settle"
 run arbiter-twin.txt bash tools/arbiter_gas.sh "$work/out-twin"
+run report-o2.txt bash tools/gas_report.sh "$work/out-o2" "$twin_legacy"
+run arbiter-o2.txt bash tools/arbiter_gas.sh "$work/out-o2"
 if [ "$1" != "--no-forms" ]; then
   run forms.txt bash tools/kernel_forms.sh
 else

@@ -188,6 +188,38 @@ def main():
                     name = "**kept: `u32` limbs**" if m.group(1) == "kept" else "`%s`" % m.group(1)
                     w("| %s | %s | %s | %s | %s | %s |" % (name, n(int(m.group(2))), m.group(3), n(int(m.group(4))), n(int(m.group(5))), m.group(6)))
 
+    o2_path = os.path.join(work, "report-o2.txt")
+    if os.path.exists(o2_path):
+        o2 = report(o2_path)
+        arb_o2 = arbiter(os.path.join(work, "arbiter-o2.txt"))
+        w("")
+        w("## 6. Other compiler settings")
+        w("")
+        w("Everything above is Fe at `-O 1` (the default, and what ships) against solc via-IR. The same sources")
+        w("at Fe `-O 2`, and the same Solidity through solc's legacy pipeline (optimiser on, 200 runs), with the")
+        w("same result checks:")
+        w("")
+        w("| Call | Fe `-O 1`, shipped | Fe `-O 2` | Solidity, via-IR | Solidity, legacy |")
+        w("|---|---|---|---|---|")
+        w("| `Network.classify` | %s | %s | | |" % (n(classify["used"]), n(o2["Network.classify"]["used"])))
+        w("| one layer 1 neuron, transaction | %s | %s | %s | %s |" % (
+            n(fe_n1["used"]), n(o2["NeuronCheck.neuron1 (Fe)"]["used"]),
+            n(sol_best["used"]), n(o2["NeuronTwin.neuron1Unrolled"]["used"])))
+        for label, key in calls:
+            w("| `%s` | %s | %s | %s | does not compile |" % (
+                label, n(arb[key]["used"]), n(arb_o2[key]["used"]), n(twin[key]["used"])))
+        with open(os.path.join(work, "out-o2", "Arbiter.runtime.bin"), "r", encoding="utf-8") as f:
+            o2_size = len(f.read().strip()) // 2
+        w("| `Arbiter` runtime bytes | %s | %s | %s | does not compile |" % (
+            n(size["Arbiter"]), n(o2_size), n(twin_size)))
+        w("| `NeuronCheck` / `NeuronTwin` runtime bytes | %s | %s | %s | %s |" % (
+            n(fe_n1["bytes"]), n(o2["NeuronCheck.neuron1 (Fe)"]["bytes"]),
+            n(sol_best["bytes"]), n(o2["NeuronTwin.neuron1Unrolled"]["bytes"])))
+        w("")
+        w("The Solidity neuron row is the 32-lane version, the best found. `Network` has no Solidity twin.")
+        w("Without via-IR, solc 0.8.38 rejects `ArbiterTwin.sol` with \"Stack too deep\" (the script checks that")
+        w("it still does), so the arbiter's only Solidity baseline is the via-IR one.")
+
     path = os.path.join(ROOT, "docs", "numbers.md")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out) + "\n")
