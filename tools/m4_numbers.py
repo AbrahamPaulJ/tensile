@@ -134,7 +134,7 @@ def main():
     w("| the same | `Arbiter` runtime bytes | %s | %s | %s |" % (
         n(size["Arbiter"]), n(inline_size), delta(size["Arbiter"], inline_size)))
     w("")
-    w("Compile-time checks have no run-time cost by construction: the 14 compile-fail cases, the")
+    w("Compile-time checks have no run-time cost by construction: the 13 compile-fail cases, the")
     w("`static_assert` overflow proof and the deadline rules in `ingots/dispute/src/step.fe` produce no code.")
     w("")
     w("## 3. Against hand-written Solidity")

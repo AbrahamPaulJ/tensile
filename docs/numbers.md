@@ -40,7 +40,7 @@ same behaviour: same checks in the same order, same results (the anvil scripts c
 | Pure state machine `dispute::step` (`tests/abstraction/inline_settle.py`) | `finalize`, gas | 49,034 | 48,570 | +464 (+1.0%) |
 | the same | `Arbiter` runtime bytes | 11,649 | 11,273 | +376 (+3.3%) |
 
-Compile-time checks have no run-time cost by construction: the 14 compile-fail cases, the
+Compile-time checks have no run-time cost by construction: the 13 compile-fail cases, the
 `static_assert` overflow proof and the deadline rules in `ingots/dispute/src/step.fe` produce no code.
 
 ## 3. Against hand-written Solidity

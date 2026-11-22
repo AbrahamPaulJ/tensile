@@ -5,7 +5,7 @@
 **Pitch:** One integer neural-network kernel, written once in Fe with shapes and fixed-point scales in
 its types, runs natively and in WebAssembly to classify, and on the EVM to settle a dispute: a false
 answer posted on-chain is proven false by re-running a single neuron, at 9.4% of the gas of running the
-whole network.
+whole network. An honest answer, claimed and finalised with no dispute, costs 15.6%.
 
 **[Try it live: abrahampaulj.github.io/tensile/demo](https://abrahampaulj.github.io/tensile/demo/)**, in the browser:
 no wallet, no install, no server. **[Watch it](https://abrahampaulj.github.io/tensile/#video)**, two and a quarter
@@ -20,7 +20,7 @@ minutes. **[The project page](https://abrahampaulj.github.io/tensile/)** has bot
 | open [the live demo](https://abrahampaulj.github.io/tensile/demo/) | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
 | `fe test` | Fe 26.5.1 | 72 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
 | `node wasm/diff.mjs` | Node 20+ | the committed WebAssembly module against the NumPy reference: 10,000 images, 0 mismatches | 4 s |
-| `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 14 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message | 17 s |
+| `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 13 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message, and one correct control that must | 17 s |
 
 ## The problem
 
@@ -80,7 +80,7 @@ pub fn neuron<const IN: usize, const FW: usize, const F: usize>(
 where dot_fits_i32(IN)
 ```
 
-Get it wrong and the compiler says so (`tests/compile_fail/bias_wrong_scale.fe`, one of 14 such cases):
+Get it wrong and the compiler says so (`tests/compile_fail/bias_wrong_scale.fe`, one of 13 such cases):
 
 ```
 error[8-0000]: type mismatch
@@ -163,7 +163,7 @@ The full checks need Foundry (`curl -L https://foundry.paradigm.xyz | bash && fo
 
 | Command | What it establishes | Time |
 |---|---|---|
-| `bash tools/m1_check.sh` | Both backends' unit tests, 14 compile-fail cases, native against the reference on all 10,000 samples at `-O 0`, `-O 1`, `-O 2` | 68 s |
+| `bash tools/m1_check.sh` | Both backends' unit tests, 13 compile-fail cases and their control, native against the reference on all 10,000 samples at `-O 0`, `-O 1`, `-O 2` | 68 s |
 | `bash tools/m2_check.sh` | The contracts against the reference on all 10,000 classes and 1,000 traces; fuzz against a plain Solidity spec; real gas on anvil | 199 s |
 | `bash tools/m3_check.sh` | The arbiter: 26 Fe contract tests, 45 Foundry fuzz and invariant tests for properties P1 to P6, auditor against Python on 5,200 mutated claims | 176 s |
 | `bash tools/m4_numbers.sh` | Regenerates `docs/numbers.md`: every gas and size figure, from real transactions | 12.5 min, or about 2 min with `--no-forms` |
