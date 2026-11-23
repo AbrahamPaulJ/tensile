@@ -10,9 +10,9 @@ whole network. An honest answer, claimed and finalised with no dispute, costs 15
 [![A false claim is slashed: the contract proves the neuron's weights against the model's Merkle root and re-runs that one neuron](docs/img/dispute.gif)](https://abrahampaulj.github.io/tensile/demo/)
 
 **[Try it live](https://abrahampaulj.github.io/tensile/demo/)** in the browser: no wallet, no install, no
-server. **[Watch it](https://abrahampaulj.github.io/tensile/#video)**, two and a quarter minutes (the clip above
+server. **[Watch it](https://abrahampaulj.github.io/tensile/#video)**, two and a half minutes (the clip above
 is 14 seconds of it). **[Catch a lie on Sepolia](https://abrahampaulj.github.io/tensile/sepolia/)**: a
-dozen claims are open on a public chain, some false, and the page re-runs the network in your browser,
+dozen claims were posted on a public chain, some false, and the page re-runs the network in your browser,
 names the wrong neuron and asks the chain whether the challenge would win; with a wallet you can send it
 and keep half the bond. Addresses and every transaction: [`docs/sepolia.md`](docs/sepolia.md).
 **[The project page](https://abrahampaulj.github.io/tensile/)** has all of these. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
@@ -337,12 +337,15 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
 - **The demo's chain is EthereumJS, not a real network.** Its watcher runs the WebAssembly build of the
   kernel, not the native auditor (`ingots/cli`), which does not run in a browser.
 - **The WebAssembly module is built with a different release, 26.7.0,** the first with the target. Only
-  the kernel and the model are built for it; the dispute logic and the auditor are not. The recorded
-  video was made with the earlier module, built from a master commit, and its caption says so.
+  the kernel and the model are built for it; the dispute logic and the auditor are not.
 
 Compiler defects found along the way, with minimal examples: `docs/upstream-reports.md`. Five were filed
 (argotorg/fe#1950 to #1954), and the Fe team fixed all five on master (PRs #1955 to #1959). This entry still builds with
-the pinned versions it names, so none of those fixes are in the figures here.
+the pinned versions it names, so none of those fixes are in the figures here. Every finding was then run
+again on the 26.7.0 release (`docs/upstream-recheck-26.7.0.md`: of 31, 15 are fixed and 10 still present),
+and five more issues were filed with minimal examples (argotorg/fe#2071 to #2075). One of them dates a
+regression: the masks that make up most of the gas gap were mostly removed by 26.6.0 and came back in
+26.7.0 for byte lanes, so the same neuron costs 54,588 gas on 26.5.1, 44,470 on 26.6.0 and 46,035 on 26.7.0.
 
 ## Declaration
 

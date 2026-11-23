@@ -1,5 +1,12 @@
 # Compiler defects found while building Tensile
 
+**Update, 2026-11-24.** Everything here and in `docs/fe-notes.md` was run again on the Fe 26.7.0 release:
+`docs/upstream-recheck-26.7.0.md` (31 findings: 15 fixed, 10 still present, 3 changed, 2 not reproduced,
+1 not re-tested). Five more issues came out of it,
+[#2071](https://github.com/argotorg/fe/issues/2071) to [#2075](https://github.com/argotorg/fe/issues/2075).
+One correction to the table below: defect 1 is fixed only at the size recorded here. 784 elements pass on
+26.7.0, 1,100 still overflow at `-O 1` and 512 at `-O 0`; that is #2071.
+
 **Status, 2026-11-07.** Every example below was re-run on Fe master `89d07b9` (`tools/upstream_check.sh` with
 `FE=` set to that build). Three are already fixed there, so they were not filed; the other four were filed, as
 five issues:

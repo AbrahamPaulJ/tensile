@@ -1,143 +1,143 @@
 1
-00:00:16,573 --> 00:00:19,466
+00:00:16,599 --> 00:00:19,492
 Everything you'll see runs in this browser tab:
 
 2
-00:00:19,466 --> 00:00:21,436
+00:00:19,492 --> 00:00:21,462
 a real Ethereum virtual machine,
 
 3
-00:00:21,436 --> 00:00:24,083
+00:00:21,462 --> 00:00:24,109
 running exactly what the Fe compiler built.
 
 4
-00:00:24,355 --> 00:00:25,527
+00:00:24,372 --> 00:00:25,544
 Let's draw a seven.
 
 5
-00:00:25,527 --> 00:00:27,869
+00:00:25,544 --> 00:00:27,887
 The network runs the moment we let go:
 
 6
-00:00:27,869 --> 00:00:31,630
+00:00:27,887 --> 00:00:31,647
 thirty-two hidden neurons, then ten outputs, all in integers.
 
 7
-00:00:31,887 --> 00:00:33,282
+00:00:31,906 --> 00:00:33,302
 The network says seven.
 
 8
-00:00:33,282 --> 00:00:35,405
+00:00:33,302 --> 00:00:35,425
 Right, and computed fully on-chain.
 
 9
-00:00:35,405 --> 00:00:36,922
+00:00:35,425 --> 00:00:36,941
 That's the expensive way.
 
 10
-00:00:37,182 --> 00:00:39,462
+00:00:37,207 --> 00:00:39,487
 Now let's lie, and claim it's a one.
 
 11
-00:00:39,462 --> 00:00:40,286
+00:00:39,487 --> 00:00:40,311
 Not clumsily:
 
 12
-00:00:40,286 --> 00:00:42,186
+00:00:40,311 --> 00:00:42,211
 we forge a few hidden neurons,
 
 13
-00:00:42,186 --> 00:00:44,972
+00:00:42,211 --> 00:00:44,997
 then compute everything after them honestly.
 
 14
-00:00:44,972 --> 00:00:47,316
+00:00:44,997 --> 00:00:47,341
 So the final answer looks consistent.
 
 15
-00:00:47,580 --> 00:00:50,780
+00:00:47,918 --> 00:00:51,118
 We post the lie, with one ether of play money as the bond.
 
 16
-00:00:51,415 --> 00:00:54,730
+00:00:51,845 --> 00:00:55,160
 A watcher re-runs the network off-chain, in WebAssembly,
 
 17
-00:00:54,730 --> 00:00:57,453
+00:00:55,160 --> 00:00:57,883
 and finds the first neuron that doesn't match.
 
 18
-00:00:57,709 --> 00:01:01,174
+00:00:58,148 --> 00:01:01,613
 Challenge only the final answer, and the contract refuses.
 
 19
-00:01:01,174 --> 00:01:02,787
+00:01:01,613 --> 00:01:03,226
 The lie is hidden upstream.
 
 20
-00:01:03,057 --> 00:01:04,850
+00:01:03,484 --> 00:01:05,278
 So challenge the neuron itself.
 
 21
-00:01:04,850 --> 00:01:07,106
+00:01:05,278 --> 00:01:07,534
 The contract checks the claim's hashes,
 
 22
-00:01:07,106 --> 00:01:10,056
+00:01:07,534 --> 00:01:10,484
 proves the weights against the model's Merkle root,
 
 23
-00:01:10,056 --> 00:01:11,676
+00:01:10,484 --> 00:01:12,103
 and re-runs that one neuron.
 
 24
-00:01:13,790 --> 00:01:14,242
+00:01:14,143 --> 00:01:14,595
 Slashed.
 
 25
-00:01:14,242 --> 00:01:17,289
+00:01:14,595 --> 00:01:17,642
 Half the bond goes to the watcher, and half is burned.
 
 26
-00:01:17,289 --> 00:01:20,788
+00:01:17,642 --> 00:01:21,141
 It cost under a tenth of the gas of running the whole network.
 
 27
-00:01:21,058 --> 00:01:23,093
+00:01:21,400 --> 00:01:23,435
 Now an honest claim, for contrast.
 
 28
-00:01:23,093 --> 00:01:25,846
+00:01:23,435 --> 00:01:26,188
 We post the truth, and try to break it anyway.
 
 29
-00:01:25,846 --> 00:01:29,137
+00:01:26,188 --> 00:01:29,480
 The contract refuses the challenge, with its own error.
 
 30
-00:01:29,137 --> 00:01:32,429
+00:01:29,480 --> 00:01:32,771
 An hour later on the chain's clock, the claim is final.
 
 31
-00:01:35,014 --> 00:01:35,424
+00:01:35,535 --> 00:01:35,946
 Why Fe?
 
 32
-00:01:35,424 --> 00:01:38,236
+00:01:35,946 --> 00:01:38,757
 Shapes and fixed-point scales live in the types.
 
 33
-00:01:38,236 --> 00:01:41,692
+00:01:38,757 --> 00:01:42,213
 Wire up a layer of the wrong shape, and it doesn't compile.
 
 34
-00:01:43,342 --> 00:01:47,197
+00:01:43,736 --> 00:01:47,591
 Effects are in the signatures, so only withdraw can send ether.
 
 35
-00:01:47,197 --> 00:01:49,033
+00:01:47,591 --> 00:01:49,427
 And the safety is almost free:
 
 36
-00:01:49,033 --> 00:01:51,236
+00:01:49,427 --> 00:01:51,630
 about two percent of a neuron's gas.

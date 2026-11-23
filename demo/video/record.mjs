@@ -27,6 +27,18 @@ const numbers = {
   fe_version: grab(numbersMd, /^fe (\d+\.\d+\.\d+)/m, 'fe version')[1],
   wasm_compiler: grab(JSON.parse(readFileSync(path('../../wasm/out/tensile_wasm.manifest.json'), 'utf8')).compiler, /^fe (\d+\.\d+\.\d+)/, 'wasm compiler')[1],
 };
+// The scaling card: the second model's generated results. The Sepolia card: the recorded claims.
+const results = readFileSync(path('../../examples/mnist-784-128-64-10/RESULTS.md'), 'utf8');
+const ratio = (label, what) => grab(results, new RegExp(`\\| ${label} \\|[^|]*\\|[^|]*\\| ([\\d.]+)x \\|`), what)[1];
+const scale = {
+  shape: grab(results, /^# Results: ([\d ->]+) beside/m, 'model 2 shape')[1].replace(/ -> /g, '-'),
+  parameters: ratio('Parameters \\(weights and biases\\)', 'parameter ratio'),
+  run: ratio('Whole forward pass on-chain, `Network\\.classify`, gas', 'full run ratio'),
+  dispute: ratio('Layer 1 challenge as the first slash ever \\(as `docs/numbers\\.md` reports it\\), gas', 'dispute ratio'),
+};
+if (Math.round(Number(scale.parameters)) !== 4 || Math.round(Number(scale.run)) !== 4 || scale.dispute !== '1.04') throw new Error('the narration says four times larger, four times the gas, four percent more');
+const sepolia = { claims: readFileSync(path('../../deploy/sepolia-open.jsonl'), 'utf8').split('\n').filter((l) => l.includes('"label": "claim ')).length };
+if (sepolia.claims !== 12) throw new Error('the narration says a dozen claims');
 rmSync(path('work/frames'), { recursive: true, force: true });
 mkdirSync(path('work/frames'), { recursive: true });
 const VIEW = { width: 1440, height: 810 }; // 1920 x 1080 on screen
@@ -327,11 +339,25 @@ const ACT = {
       <div class="n in" style="--d:${when('evidence', 'And F E').toFixed(2)}s">${numbers.claim_vs_solidity}x</div>
       <div class="t in" style="--d:${when('evidence', 'And F E').toFixed(2)}s">Fe's gas per claim, against a hand-written Solidity twin that passes the same tests</div>
     </div>`),
+  scale: () => card(`
+    <p class="kicker in">A second model, ${scale.shape}, through the same generator</p>
+    <div class="stats">
+      <div class="n in" style="--d:${when('scale', 'A second').toFixed(2)}s">${scale.parameters}x</div>
+      <div class="t in" style="--d:${when('scale', 'A second').toFixed(2)}s">the parameters, and ${scale.run}x the gas to run the whole network on-chain</div>
+      <div class="n in" style="--d:${when('scale', 'And four').toFixed(2)}s">${scale.dispute}x</div>
+      <div class="t in" style="--d:${when('scale', 'And four').toFixed(2)}s">the gas of its dearest dispute: one neuron is re-run, whatever the size of the network</div>
+    </div>`),
+  sepolia: () => card(`
+    <p class="kicker in">On a public chain</p>
+    <p class="line in">${sepolia.claims} claims were posted on Sepolia.</p>
+    <p class="line in dim" style="--d:${when('sepolia', 'and some').toFixed(2)}s">Some are lies.</p>
+    <p class="line in" style="--d:${when('sepolia', 'Open the').toFixed(2)}s">Check them in your browser. Slash one yourself.</p>
+    <p class="url in" style="--d:${when('sepolia', 'Open the').toFixed(2)}s">abrahampaulj.github.io/tensile/sepolia</p>`),
   end: () => card(`
     <p class="mark in">Tensile</p>
     <p class="sub in" style="--d:.4s">A false answer, caught by one neuron.</p>
     <p class="url in" style="--d:.9s">github.com/AbrahamPaulJ/tensile</p>
-    <p class="fine in" style="--d:1.2s">Limits: needs at least one honest watcher; a small dense model; not audited, not deployed.<br>
+    <p class="fine in" style="--d:1.2s">Limits: needs at least one honest watcher; dense models only; not audited; on a testnet only.<br>
     Fe ${numbers.fe_version}; WebAssembly with Fe ${numbers.wasm_compiler}. The page was recorded in real time; the zoom and the cards are added by the recorder.
     Narration: Kokoro, a synthetic voice. Captions: ffmpeg-skill.</p>`),
 };

@@ -19,6 +19,8 @@
     { "id": "types", "text": "Why Fe? Shapes and fixed-point scales live in the types. Wire up a layer of the wrong shape, and it doesn't compile.", "say": "Why F E? Shapes and fixed-point scales live in the types. Wire up a layer of the wrong shape, and it doesn't compile." },
     { "id": "effects", "text": "Effects are in the signatures, so only withdraw can send ether. And the safety is almost free: about two percent of a neuron's gas." },
     { "id": "evidence", "captions": false, "text": "The NumPy reference and the native, WebAssembly and EVM builds agree on all ten thousand test images, bit for bit. We planted fifty-nine bugs in the contract. All fifty-nine were caught. And Fe costs 1.26 times the gas of a hand-written Solidity twin, per claim.", "say": "The num pie reference and the native, web assembly and E V M builds agree on all ten thousand test images, bit for bit. We planted fifty-nine bugs in the contract. All fifty-nine were caught. And F E costs one point two six times the gas of a hand-written Solidity twin, per claim." },
+    { "id": "scale", "captions": false, "text": "And it's a tool, not one model. A generator writes the arbiter for any dense network. A second model, four times larger, costs four times the gas to run. And four percent more to dispute." },
+    { "id": "sepolia", "captions": false, "text": "It's live on Sepolia. A dozen claims were posted there, and some are lies. Open the page, check them in your own browser, and slash one yourself.", "say": "It's live on Seh-poh-lia. A dozen claims were posted there, and some are lies. Open the page, check them in your own browser, and slash one yourself." },
     { "id": "end", "captions": false, "text": "Tensile. A false answer, caught by one neuron." }
   ]
 }

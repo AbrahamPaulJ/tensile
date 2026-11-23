@@ -19,6 +19,11 @@ the opcodes of each trace sum to its execution gas. Anything else is marked as a
   the portable `u32` form, and this page shows that almost all of that price is masks.
 - No setting closes the gap: Fe `-O 2` moves no gas figure by more than 0.03% (section 6).
 
+- This page is about Fe 26.5.1, the release the entry is measured on. Later releases move the mask
+  figures: the same neuron runs 1,904 `u32` masks and costs 54,588 gas on 26.5.1, 325 masks and 44,470
+  gas on 26.6.0, whose range analysis removes most of them, and 1,500 masks and 46,035 gas on 26.7.0,
+  where they return behind `BYTE` (`docs/upstream-recheck-26.7.0.md`, filed as argotorg/fe#2072).
+
 ## Causes
 
 Layer 1 neuron, `NeuronCheck.neuron1` against `NeuronTwin.neuron1Unrolled`, gap 17,935 gas:
