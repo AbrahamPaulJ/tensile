@@ -18,6 +18,14 @@ and keep half the bond. Addresses and every transaction: [`docs/sepolia.md`](doc
 **[The project page](https://abrahampaulj.github.io/tensile/)** has all of these. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
 file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
 
+**Not only digits.** The same generator built two models someone could use, each with a consumer contract
+in Fe: [a fee tier for an AMM pool](examples/amm-fee/README.md), predicted from a year of the mainnet
+USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last
+four hours"), where the contract rebuilds the model's input from ticks it read itself; and
+[a scam-risk score for Ethereum accounts](examples/address-risk/README.md) (89.35% against a baseline of
+83.37%). Four models from 1,042 to 109,386 parameters show
+[where a dispute pays and where it does not](#use-it-with-your-own-network).
+
 **For a judge with five minutes**, from the repository root:
 
 | Command | Needs | What it shows | Time |
@@ -183,24 +191,46 @@ file to a tested, deployable arbiter in five commands, and shows a consumer cont
 result. A wrong model is refused by the Fe compiler, not by the generator: layers that do not chain, scales
 that disagree, or an accumulator that could overflow are type errors and failed `static_assert`s.
 
-A second model went through all of it: MNIST 784-128-64-10, 98.81% on the test set as integers
-([`examples/mnist-784-128-64-10`](examples/mnist-784-128-64-10/RESULTS.md); native against the reference: 0
-mismatches on 10,000 classes and 203,000 traced values). Measured the same way as the shipped model:
+Three more models went through all of it, each with its own generated arbiter, tests, a check script that
+CI runs, and a results page that includes the unflattering rows:
 
-| | 784-32-10 (shipped) | 784-128-64-10 | Ratio |
-|---|---|---|---|
-| Parameters | 25,450 | 109,386 | 4.30x |
-| Whole network on-chain, gas | 1,896,043 | 8,219,318 | 4.33x |
-| `claim`, gas | 246,113 | 274,284 | 1.11x |
-| Dearest dispute (a 784-input neuron, first slash), gas | 178,662 | 185,003 | 1.04x |
-| Honest path against one whole run | 15.6% | 4.0% | |
-| Dearest dispute against one whole run | 9.4% | 2.3% | |
+- **A fee tier for an AMM pool** ([`examples/amm-fee`](examples/amm-fee/README.md)), 144-32-16-3, trained on
+  one year of the mainnet Uniswap v3 USDC/WETH pool's own ticks to pick the tier for the next four hours.
+  On the last 55 days, held out, it is right on 4,399 of 7,711 windows, against 3,779 for "same as the
+  last four hours" and 2,802 for the best constant. Its consumer, `FeeOracle`, written in Fe, builds the
+  model's input byte for byte from ticks it read from the pool and applies a fee only from a finalised
+  claim whose committed input hash matches, so the input is as checkable as the arithmetic.
+- **A scam-risk score for Ethereum accounts** ([`examples/address-risk`](examples/address-risk/README.md)),
+  14-32-16-2, from 14 public transaction-history features: 89.35% on 7,054 held-out accounts against 83.37%
+  for always answering "not flagged" (precision 72.79%, recall 57.46%). Its consumer, `RiskGate`, admits
+  only accounts a finalised claim has cleared. A screening signal, not a verdict.
+- **A larger digit model** ([`examples/mnist-784-128-64-10`](examples/mnist-784-128-64-10/RESULTS.md)),
+  98.81% on the test set as integers.
 
-**A dispute is priced by the one neuron it re-runs, not by the network:** 4.3 times the parameters cost 4.33
-times as much to run and 1.04 times as much to dispute. There is no bisection game because none is needed:
+For all of them the native build matches the NumPy reference with 0 mismatches. Measured the same way as
+the shipped model, they show where a dispute pays and where it does not:
+
+| | Address risk 14-32-16-2 | Fee tier 144-32-16-3 | Digits 784-32-10 (shipped) | Digits 784-128-64-10 |
+|---|---|---|---|---|
+| Parameters | 1,042 | 5,219 | 25,450 | 109,386 |
+| Whole network on-chain, gas | 154,748 | 466,408 | 1,896,043 | 8,219,318 |
+| `claim`, gas | 230,399 | 239,460 | 246,113 | 274,284 |
+| Honest path (`claim` + `finalize`), gas | 281,361 | 290,511 | 295,147 | 325,255 |
+| Honest path against one whole run | 181.8% | 62.3% | 15.6% | 4.0% |
+| Dearest dispute (first slash), gas | 101,727 | 116,791 | 178,662 | 185,003 |
+| Dearest dispute against one whole run | 65.7% | 25.0% | 9.4% | 2.3% |
+
+**Small models should simply be called; the dispute pays from a few thousand parameters up.** At 1,042
+parameters the whole network runs on-chain for 154,748 gas, less than a claim, so the generated `Network`
+contract is the right tool and the arbiter is not. At 5,219 a claim is cheaper than a run, but only just
+once the consumer's own bookkeeping is counted (`examples/amm-fee/RESULTS.md`). From there the gap opens:
+across these four models the cost of running grows 53 times and the cost of an honest claim 1.16 times.
+
+**A dispute is priced by the one neuron it re-runs, not by the network:** between the two digit models, 4.3
+times the parameters cost 4.33 times as much to run and 1.04 times as much to dispute. There is no bisection game because none is needed:
 a claim publishes every layer's output, so one transaction names the wrong neuron directly. What does grow
 is the claim, with the sum of the layer widths (1.11x here), and a dispute is never much cheaper than
-about 66,000 gas however small the neuron. The larger model's whole run is already 49% of the
+about 66,000 gas however small the neuron. The largest model's whole run is already 49% of the
 per-transaction gas cap; its dispute is not.
 
 ## Build and test
@@ -310,8 +340,14 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
 - **Dense networks only.** No convolution. Layer sizes are compile-time, so each model gets its own
   generated arbiter. Layer 1's weights do not fit one contract, so `Network` reads them from others. One
   overflow proof can visit about 150,000 weights, which bounds a single layer. The native auditor and the
-  WebAssembly module are built for the shipped model; the second model's off-chain side is its native
+  WebAssembly module are built for the shipped model; the other models' off-chain side is their native
   classifier and the reference.
+- **The two practical models are demonstrations, not products.** The fee model is one pool, one year and
+  one seed, beats a weak baseline, and nothing here measures whether such a fee earns liquidity providers
+  anything; no Uniswap v4 hook is built. The risk model's features come from a published data set, and
+  `RiskGate` does not check that the 14 bytes belong to the account. Each example's README lists its
+  limits. Only the shipped digit model is on Sepolia, in the browser demo and under the fuzz and mutation
+  runs.
 - **Not audited, and on a testnet only.** The contracts are on Sepolia (`docs/sepolia.md`), with test ETH,
   and nowhere else. Sepolia already runs the next fork, which charges more for new storage, so its
   receipts are higher than the figures here, which are measured under mainnet's current rules. The

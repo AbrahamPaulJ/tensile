@@ -157,20 +157,21 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
 
 <section id="scale">
   <h2>A dispute is priced by one neuron, not by the network</h2>
-  <p>A generator writes the arbiter for any dense network, and for the shipped model its output equals the hand-written contract byte for byte. A second model, MNIST 784-128-64-10 at 98.81% as integers, went through the whole pipeline. Measured the same way:</p>
+  <p>A generator writes the arbiter for any dense network, and for the shipped model its output equals the hand-written contract byte for byte. Three more models went through the whole pipeline, two of them not about digits: <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/amm-fee/README.md">a fee tier for an AMM pool</a>, predicted from a year of the mainnet USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last four hours"), with a contract that rebuilds the model's input from ticks it read itself; and <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/address-risk/README.md">a scam-risk score for Ethereum accounts</a> (89.35% against a baseline of 83.37%). Measured the same way:</p>
   <div class="scroll">
   <table>
-    <thead><tr><th></th><th>784-32-10</th><th>784-128-64-10</th><th>Ratio</th></tr></thead>
+    <thead><tr><th></th><th>Address risk<br>14-32-16-2</th><th>Fee tier<br>144-32-16-3</th><th>Digits<br>784-32-10</th><th>Digits<br>784-128-64-10</th></tr></thead>
     <tbody>
-      <tr><td>Parameters</td><td>25,450</td><td>109,386</td><td>4.30x</td></tr>
-      <tr><td>Whole network on-chain, gas</td><td>1,896,043</td><td>8,219,318</td><td>4.33x</td></tr>
-      <tr><td>Claim, gas</td><td>246,113</td><td>274,284</td><td>1.11x</td></tr>
-      <tr><td>Dearest dispute, gas</td><td>178,662</td><td>185,003</td><td>1.04x</td></tr>
-      <tr><td>Dearest dispute against one whole run</td><td>9.4%</td><td>2.3%</td><td></td></tr>
+      <tr><td>Parameters</td><td>1,042</td><td>5,219</td><td>25,450</td><td>109,386</td></tr>
+      <tr><td>Whole network on-chain, gas</td><td>154,748</td><td>466,408</td><td>1,896,043</td><td>8,219,318</td></tr>
+      <tr><td>Honest claim and finalise, gas</td><td>281,361</td><td>290,511</td><td>295,147</td><td>325,255</td></tr>
+      <tr><td>Honest path against one whole run</td><td>181.8%</td><td>62.3%</td><td>15.6%</td><td>4.0%</td></tr>
+      <tr><td>Dearest dispute, gas</td><td>101,727</td><td>116,791</td><td>178,662</td><td>185,003</td></tr>
+      <tr><td>Dearest dispute against one whole run</td><td>65.7%</td><td>25.0%</td><td>9.4%</td><td>2.3%</td></tr>
     </tbody>
   </table>
   </div>
-  <p class="honest">What does grow is the claim, with the sum of the layer widths, and a dispute is never much cheaper than about 66,000 gas. <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/USAGE.md">Bring your own model</a> in five commands; the <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/mnist-784-128-64-10/RESULTS.md">full results</a> include the unflattering rows.</p>
+  <p class="honest">Small models should simply be called: at 1,042 parameters the whole network runs on-chain for less than a claim costs. The dispute pays from a few thousand parameters up, and across these four models running grows 53 times while an honest claim grows 1.16 times. A dispute is never much cheaper than about 66,000 gas. <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/USAGE.md">Bring your own model</a> in five commands; the <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/mnist-784-128-64-10/RESULTS.md">full results</a> include the unflattering rows.</p>
 </section>
 
 <section>
