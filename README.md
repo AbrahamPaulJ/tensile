@@ -172,6 +172,37 @@ learned about Fe in `docs/fe-notes.md`.
 4. A claim nobody disproves becomes final after the window (49,034 gas), and only then does
    `result(id)` answer. Bonds are pulled with `withdraw()`, the only handler that sends ETH.
 
+## Use it with your own network
+
+Tensile is a tool, not one demo model. `tools/gen_fe.py` writes the typed kernel constants for any chain of
+dense layers and `tools/gen_arbiter.py` writes its arbiter: the claim record, one challenge per layer, and
+the contract tests. For the shipped model the generator's output equals the hand-written contract byte for
+byte, source and bytecode (`tools/check_arbiter_gen.sh --bytecode`), so the fuzz suite, the Solidity twin
+and the mutation run are evidence about the generator too. [`docs/USAGE.md`](docs/USAGE.md) takes a model
+file to a tested, deployable arbiter in five commands, and shows a consumer contract that acts on a final
+result. A wrong model is refused by the Fe compiler, not by the generator: layers that do not chain, scales
+that disagree, or an accumulator that could overflow are type errors and failed `static_assert`s.
+
+A second model went through all of it: MNIST 784-128-64-10, 98.81% on the test set as integers
+([`examples/mnist-784-128-64-10`](examples/mnist-784-128-64-10/RESULTS.md); native against the reference: 0
+mismatches on 10,000 classes and 203,000 traced values). Measured the same way as the shipped model:
+
+| | 784-32-10 (shipped) | 784-128-64-10 | Ratio |
+|---|---|---|---|
+| Parameters | 25,450 | 109,386 | 4.30x |
+| Whole network on-chain, gas | 1,896,043 | 8,219,318 | 4.33x |
+| `claim`, gas | 246,113 | 274,284 | 1.11x |
+| Dearest dispute (a 784-input neuron, first slash), gas | 178,662 | 185,003 | 1.04x |
+| Honest path against one whole run | 15.6% | 4.0% | |
+| Dearest dispute against one whole run | 9.4% | 2.3% | |
+
+**A dispute is priced by the one neuron it re-runs, not by the network:** 4.3 times the parameters cost 4.33
+times as much to run and 1.04 times as much to dispute. There is no bisection game because none is needed:
+a claim publishes every layer's output, so one transaction names the wrong neuron directly. What does grow
+is the claim, with the sum of the layer widths (1.11x here), and a dispute is never much cheaper than
+about 66,000 gas however small the neuron. The larger model's whole run is already 49% of the
+per-transaction gas cap; its dispute is not.
+
 ## Build and test
 
 The exact versions used: **fe 26.5.1 (149c758)**, Foundry 1.9.0, solc 0.8.38, Python 3.11, NumPy 2.3,
@@ -271,8 +302,11 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
 - **It proves a computation, not a good model.** The arbiter says a claim matches the committed integer
   network, nothing about whether the network is right about the digit: it is wrong on 2.56% of the test
   set, and hand-drawn digits are harder still.
-- **Small dense networks only.** No convolution. Layer sizes are compile-time. Layer 1's weights do not fit
-  one contract, so `Network` reads them from two others.
+- **Dense networks only.** No convolution. Layer sizes are compile-time, so each model gets its own
+  generated arbiter. Layer 1's weights do not fit one contract, so `Network` reads them from others. One
+  overflow proof can visit about 150,000 weights, which bounds a single layer. The native auditor and the
+  WebAssembly module are built for the shipped model; the second model's off-chain side is its native
+  classifier and the reference.
 - **Not audited, and on a testnet only.** The contracts are on Sepolia (`docs/sepolia.md`), with test ETH,
   and nowhere else. Sepolia already runs the next fork, which charges more for new storage, so its
   receipts are higher than the figures here, which are measured under mainnet's current rules. The
