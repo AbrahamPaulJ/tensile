@@ -1,0 +1,4 @@
+# The downloaded data set and the table prepare.py makes from it.
+data/
+# Build outputs (the neuron tree, fe build artifacts, native binaries).
+build/

@@ -1,0 +1,17 @@
+{
+ "model": "address-risk-14-32-16-2",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 0,
+ "classify": {
+  "estimate": 154748,
+  "gas_used": 154748,
+  "execution": 133388,
+  "calldata_bytes": 36
+ },
+ "classify_samples_checked": 20,
+ "network_deployed_bytes": 7407,
+ "weight_contract_bytes": [
+  2153
+ ]
+}

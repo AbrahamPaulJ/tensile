@@ -66,3 +66,30 @@ jobs:
           examples/mnist-784-128-64-10/runs/model1-arbiter-gas.json
           examples/mnist-784-128-64-10/runs/model1-network-gas.json
           examples/mnist-784-128-64-10/runs/sizes.json
+
+  address-risk:
+    name: Address risk 14-32-16-2 (scam-address score and RiskGate), the whole check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: fe --version
+      # All of check.sh, from the committed model and vectors: no data set, no NumPy (its one
+      # NumPy step, the reference run again, reports itself as skipped). 140 s on the development laptop.
+      - run: bash examples/address-risk/check.sh
+      - name: The generated sources and the recorded gas and sizes are what this run produced
+        run: >
+          git diff --exit-code --
+          examples/address-risk/ingots
+          examples/address-risk/fe.toml
+          examples/address-risk/runs/arbiter-gas.json
+          examples/address-risk/runs/network-gas.json
+          examples/address-risk/runs/gate-gas.json
+          examples/address-risk/runs/sizes.json

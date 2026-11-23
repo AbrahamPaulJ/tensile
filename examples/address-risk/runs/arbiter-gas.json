@@ -1,0 +1,97 @@
+{
+ "model": "address-risk-14-32-16-2",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 0,
+ "arbiter_runtime_bytes": 8961,
+ "calls": [
+  {
+   "call": "claim",
+   "signature": "claim(uint256[1],uint256[1],uint256[1],int32[2],uint8)",
+   "estimate": 230399,
+   "gas_used": 230399,
+   "execution": 207643,
+   "calldata_bytes": 196
+  },
+  {
+   "call": "challengeNeuron1 (14 inputs)",
+   "signature": "challengeNeuron1(uint256,uint256,uint256[1],uint256[1],uint256[1],int32,bytes32[])",
+   "estimate": 101727,
+   "gas_used": 101727,
+   "execution": 75955,
+   "calldata_bytes": 452
+  },
+  {
+   "call": "challengeNeuron2 (32 inputs)",
+   "signature": "challengeNeuron2(uint256,uint256,uint256[1],uint256[1],uint256[1],int32,bytes32[])",
+   "estimate": 68111,
+   "gas_used": 68111,
+   "execution": 41787,
+   "calldata_bytes": 452
+  },
+  {
+   "call": "challengeNeuron3 (16 inputs)",
+   "signature": "challengeNeuron3(uint256,uint256,uint256[1],int32[2],uint256[1],int32,bytes32[])",
+   "estimate": 65834,
+   "gas_used": 65834,
+   "execution": 41302,
+   "calldata_bytes": 388
+  },
+  {
+   "call": "challengeClass",
+   "signature": "challengeClass(uint256,int32[2])",
+   "estimate": 57589,
+   "gas_used": 57589,
+   "execution": 35721,
+   "calldata_bytes": 100
+  },
+  {
+   "call": "later challengeNeuron1 (14 inputs)",
+   "signature": "challengeNeuron1(uint256,uint256,uint256[1],uint256[1],uint256[1],int32,bytes32[])",
+   "estimate": 67527,
+   "gas_used": 67527,
+   "execution": 41755,
+   "calldata_bytes": 452
+  },
+  {
+   "call": "later challengeNeuron2 (32 inputs)",
+   "signature": "challengeNeuron2(uint256,uint256,uint256[1],uint256[1],uint256[1],int32,bytes32[])",
+   "estimate": 68111,
+   "gas_used": 68111,
+   "execution": 41787,
+   "calldata_bytes": 452
+  },
+  {
+   "call": "later challengeNeuron3 (16 inputs)",
+   "signature": "challengeNeuron3(uint256,uint256,uint256[1],int32[2],uint256[1],int32,bytes32[])",
+   "estimate": 65834,
+   "gas_used": 65834,
+   "execution": 41302,
+   "calldata_bytes": 388
+  },
+  {
+   "call": "later challengeClass",
+   "signature": "challengeClass(uint256,int32[2])",
+   "estimate": 57589,
+   "gas_used": 57589,
+   "execution": 35721,
+   "calldata_bytes": 100
+  },
+  {
+   "call": "finalize",
+   "signature": "finalize(uint256)",
+   "estimate": 50962,
+   "gas_used": 50962,
+   "execution": 29770,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "withdraw (9 credits)",
+   "signature": "withdraw()",
+   "estimate": 35592,
+   "gas_used": 29923,
+   "execution": 8859,
+   "calldata_bytes": 4
+  }
+ ]
+}

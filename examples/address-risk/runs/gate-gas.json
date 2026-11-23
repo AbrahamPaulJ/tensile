@@ -1,0 +1,52 @@
+{
+ "model": "address-risk-14-32-16-2",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "cleared_sample": 0,
+ "flagged_sample": 6,
+ "gate_deployed_bytes": 1051,
+ "calls": [
+  {
+   "call": "claim (cleared sample)",
+   "signature": "claim(uint256[1],uint256[1],uint256[1],int32[2],uint8)",
+   "gas_used": 230399,
+   "calldata_bytes": 196
+  },
+  {
+   "call": "claim (flagged sample)",
+   "signature": "claim(uint256[1],uint256[1],uint256[1],int32[2],uint8)",
+   "gas_used": 212910,
+   "calldata_bytes": 196
+  },
+  {
+   "call": "finalize (cleared sample)",
+   "signature": "finalize(uint256)",
+   "gas_used": 68062,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "finalize (flagged sample)",
+   "signature": "finalize(uint256)",
+   "gas_used": 50974,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "score A (cleared)",
+   "signature": "score(address,uint256,uint256[1])",
+   "gas_used": 93552,
+   "calldata_bytes": 100
+  },
+  {
+   "call": "score B (flagged)",
+   "signature": "score(address,uint256,uint256[1])",
+   "gas_used": 93542,
+   "calldata_bytes": 100
+  },
+  {
+   "call": "enter (A, cleared)",
+   "signature": "enter()",
+   "gas_used": 46989,
+   "calldata_bytes": 4
+  }
+ ]
+}

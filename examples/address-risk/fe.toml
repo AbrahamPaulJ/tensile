@@ -1,0 +1,4 @@
+[workspace]
+name = "address-risk-14-32-16-2"
+version = "0.1.0"
+members = [{ path = "ingots/model", name = "model" }, { path = "ingots/arbiter", name = "arbiter" }, { path = "ingots/cli", name = "cli" }, { path = "ingots/network", name = "network" }, { path = "ingots/consumer", name = "consumer" }]
