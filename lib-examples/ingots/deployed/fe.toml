@@ -1,0 +1,11 @@
+[ingot]
+name = "deployed"
+version = "0.1.0"
+
+[dependencies]
+tensile = { path = "../../../ingots/tensile" }
+qmath = true
+ema = true
+score = true
+curve = true
+plain = true

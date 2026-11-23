@@ -1,0 +1,11 @@
+// expect: type mismatch
+// expect: expected `Q<11>`, but `Q<4>` is given
+// The acceptance threshold, 1.5, written at the scale of the points (24 / 16) and compared with a
+// score at 11 bits. In Solidity `score >= 24` compiles and accepts almost everyone.
+use qmath::ge
+use score::{Features, score_of}
+use tensile::Q
+
+pub fn accepts(features: Features) -> bool {
+    ge(score_of(features), Q<4>::from_raw(24))
+}

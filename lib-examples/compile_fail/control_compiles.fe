@@ -1,0 +1,27 @@
+// expect-success
+// The harness check: the same code as the failing cases, with nothing wrong. If this stops
+// compiling, the other cases fail for a reason of their own and prove nothing.
+use curve::{BASE, KINK, SLOPE, JUMP, Rate, Utilisation, curve_fits}
+use ema::{ALPHA, ALPHA_BITS, Average, Tick, ema_fits}
+use qmath::{add, ge, mul, sub}
+use score::{Features, POINTS, score_of}
+use tensile::{Q, neuron}
+
+static_assert(ema_fits(max_sample: 887272, alpha_bits: ALPHA_BITS))
+static_assert(curve_fits(base: BASE, slope: SLOPE, jump: JUMP, kink: KINK))
+
+pub fn step(average: Average, tick: Tick) -> Average {
+    add(average, mul(sub(tick, average.shifted<8>()), ALPHA))
+}
+
+pub fn own_score(features: Features) -> Q<11> {
+    neuron(row: POINTS, x: features, bias: Q<11>::from_raw(-2560))
+}
+
+pub fn accepts(features: Features) -> bool {
+    ge(score_of(features), Q<11>::from_raw(3072))
+}
+
+pub fn rate_below_kink(u: Utilisation) -> Rate {
+    add(BASE, mul(SLOPE, u).shifted<12>())
+}

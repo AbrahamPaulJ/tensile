@@ -1,0 +1,7 @@
+[ingot]
+name = "curve"
+version = "0.1.0"
+
+[dependencies]
+tensile = { path = "../../../ingots/tensile" }
+qmath = true

@@ -1,0 +1,53 @@
+//! Tests of the curve, on both backends. The contract is tested on the EVM
+//! in the `deployed` ingot.
+use ingot::{FULL, KINK, Utilisation, rate, rate_by_formula, utilisation}
+
+/// The curve written over plain integers: the raw values of `lib.fe`.
+fn plain_rate(_ u: i32) -> i32 {
+    if u <= 3072 {
+        1024 + (8192 * u >> 12)
+    } else {
+        1024 + (8192 * 3072 >> 12) + (131072 * (u - 3072) >> 12)
+    }
+}
+
+#[test]
+fn the_rate_is_the_plain_formula_at_every_utilisation() {
+    var u: i32 = 0
+    while u <= 4096 {
+        let x = Utilisation::from_raw(u)
+        assert!(rate(x).raw() == plain_rate(u))
+        assert!(rate_by_formula(x).raw() == plain_rate(u))
+        u += 1
+    }
+}
+
+#[test]
+fn the_rate_rises_and_jumps_at_the_kink() {
+    var previous: i32 = 0
+    var u: i32 = 0
+    while u <= 4096 {
+        let now = rate(Utilisation::from_raw(u)).raw()
+        assert!(now >= previous)
+        previous = now
+        u += 1
+    }
+    // The slope above the kink is 16 times the slope below it.
+    let below = rate(KINK).raw() - rate(Utilisation::from_raw(3072 - 256)).raw()
+    let above = rate(Utilisation::from_raw(3072 + 256)).raw() - rate(KINK).raw()
+    assert!(above == 16 * below)
+    assert!(rate(FULL).raw() == 39936)
+}
+
+#[test]
+fn utilisation_is_borrows_over_the_total() {
+    assert!(utilisation(cash: 0, borrows: 0).raw() == 0)
+    assert!(utilisation(cash: 0, borrows: 5).raw() == 4096)
+    assert!(utilisation(cash: 5, borrows: 0).raw() == 0)
+    assert!(utilisation(cash: 2, borrows: 1).raw() == 1365)
+    // Token amounts with 18 decimals.
+    let wad: u256 = 1000000000000000000
+    assert!(
+        utilisation(cash: 250 * wad, borrows: 750 * wad).raw() == 3072,
+    )
+}
