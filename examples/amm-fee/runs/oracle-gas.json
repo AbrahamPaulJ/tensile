@@ -1,0 +1,20 @@
+{
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 11,
+ "interval_blocks": 50,
+ "observations": 146,
+ "tier": 0,
+ "fee": 500,
+ "observe_first": 95554,
+ "observe_median": 51685,
+ "observe_min": 46064,
+ "observe_max": 85864,
+ "claim": 239424,
+ "finalize": 68151,
+ "apply": 167967,
+ "apply_later": 113934,
+ "next_tier": 1,
+ "next_fee": 3000,
+ "fee_estimate": 29804
+}

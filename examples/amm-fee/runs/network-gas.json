@@ -1,0 +1,17 @@
+{
+ "model": "amm-fee-144-32-16-3",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 0,
+ "classify": {
+  "estimate": 466408,
+  "gas_used": 466408,
+  "execution": 443060,
+  "calldata_bytes": 164
+ },
+ "classify_samples_checked": 20,
+ "network_deployed_bytes": 7832,
+ "weight_contract_bytes": [
+  6341
+ ]
+}

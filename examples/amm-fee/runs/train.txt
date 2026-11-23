@@ -1,0 +1,48 @@
+seed 20261124, numpy 2.3.3, sizes [144, 32, 16, 3], 52561 ticks, train 36619, validation 7711 (test 7711, not read here)
+thresholds (training split quantiles of the next-window sum): [261, 418]
+training labels per tier: [12153, 12242, 12224]; validation labels per tier: [3631, 2545, 1535]
+validation baselines: majority tier of training 2545 of 7711, persistence 4378 of 7711
+[1/3] float training (30 epochs, the best validation epoch is kept)
+  float epoch  1  train loss 1.0156  val acc 0.5801  val loss 0.9527  (kept)
+  float epoch  2  train loss 0.8961  val acc 0.5989  val loss 0.8701  (kept)
+  float epoch  3  train loss 0.8750  val acc 0.5949  val loss 0.8550
+  float epoch  4  train loss 0.8694  val acc 0.5963  val loss 0.8513
+  float epoch  5  train loss 0.8655  val acc 0.6021  val loss 0.8477  (kept)
+  float epoch  6  train loss 0.8613  val acc 0.6010  val loss 0.8456
+  float epoch  7  train loss 0.8574  val acc 0.6061  val loss 0.8405  (kept)
+  float epoch  8  train loss 0.8541  val acc 0.6076  val loss 0.8397  (kept)
+  float epoch  9  train loss 0.8508  val acc 0.6109  val loss 0.8377  (kept)
+  float epoch 10  train loss 0.8478  val acc 0.6119  val loss 0.8392  (kept)
+  float epoch 11  train loss 0.8457  val acc 0.6144  val loss 0.8400  (kept)
+  float epoch 12  train loss 0.8433  val acc 0.6133  val loss 0.8384
+  float epoch 13  train loss 0.8413  val acc 0.6125  val loss 0.8410
+  float epoch 14  train loss 0.8395  val acc 0.6030  val loss 0.8380
+  float epoch 15  train loss 0.8381  val acc 0.6144  val loss 0.8394  (kept)
+  float epoch 16  train loss 0.8365  val acc 0.6085  val loss 0.8384
+  float epoch 17  train loss 0.8351  val acc 0.6116  val loss 0.8377
+  float epoch 18  train loss 0.8340  val acc 0.6100  val loss 0.8385
+  float epoch 19  train loss 0.8329  val acc 0.6107  val loss 0.8379
+  float epoch 20  train loss 0.8320  val acc 0.6086  val loss 0.8389
+  float epoch 21  train loss 0.8315  val acc 0.6116  val loss 0.8388
+  float epoch 22  train loss 0.8307  val acc 0.6134  val loss 0.8398
+  float epoch 23  train loss 0.8300  val acc 0.6107  val loss 0.8385
+  float epoch 24  train loss 0.8294  val acc 0.6112  val loss 0.8388
+  float epoch 25  train loss 0.8291  val acc 0.6108  val loss 0.8381
+  float epoch 26  train loss 0.8288  val acc 0.6113  val loss 0.8383
+  float epoch 27  train loss 0.8285  val acc 0.6112  val loss 0.8380
+  float epoch 28  train loss 0.8284  val acc 0.6111  val loss 0.8382
+  float epoch 29  train loss 0.8283  val acc 0.6108  val loss 0.8381
+  float epoch 30  train loss 0.8283  val acc 0.6108  val loss 0.8381
+  float: epoch 15 kept, val acc 0.6144 (6.9 s)
+[2/3] post-training quantisation, scale search on validation
+    [7, 5, 7, 4, 7]  val acc 0.6152  val loss 0.8393  (best so far)
+    [7, 5, 8, 4, 7]  val acc 0.6157  val loss 0.8421  (best so far)
+    [8, 6, 7, 5, 7]  val acc 0.6157  val loss 0.8388  (best so far)
+  128 configurations scored
+  chosen [8, 6, 7, 5, 7]: integer val acc 0.6157 (4748 of 7711) (10.6 s)
+[3/3] writing model/amm-fee-144-32-16-3.json
+  layer 1: weight_frac_bits 8, shift 9, acc frac bits 15, out frac bits 6, worst-case |acc| 455000 (int32 max 2147483647)
+  layer 2: weight_frac_bits 7, shift 8, acc frac bits 13, out frac bits 5, worst-case |acc| 127283 (int32 max 2147483647)
+  layer 3: weight_frac_bits 7, shift None, acc frac bits 12, out frac bits None, worst-case |acc| 43493 (int32 max 2147483647)
+RESULT validation: integer model 4748, float model 4738, persistence 4378, majority 2545, of 7711
+RESULT time: float 6.9 s, ptq 10.6 s, total 17.9 s
