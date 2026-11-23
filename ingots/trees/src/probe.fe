@@ -1,0 +1,19 @@
+//! Observation of a forest's walk, as an effect: the tree counterpart of
+//! `tensile::Probe`.
+use tensile::Q
+
+/// A capability that is shown, for every tree in order, the leaf the walk
+/// ended at and its value. `Forest::walk` declares `uses (probe: mut
+/// TreeProbe)` and the caller decides what observes it: nothing
+/// (`Unobserved`), or the native CLI's printer.
+pub trait TreeProbe {
+    /// Called once per tree, in tree order.
+    fn reached<const LF: usize>(mut self, tree: usize, leaf: usize, _ value: Q<LF>)
+}
+
+/// The probe that looks at nothing.
+pub struct Unobserved {}
+
+impl TreeProbe for Unobserved {
+    fn reached<const LF: usize>(mut self, tree: usize, leaf: usize, _ value: Q<LF>) {}
+}

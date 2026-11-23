@@ -1,0 +1,215 @@
+//! One decision tree: complete, of a fixed depth, stored as packed lanes.
+use core::marker::Copy
+use core::num::IntWord
+use core::ops::Eq
+use ingot::lanes::{I16_MAX, I16_MIN, lane_of, lane_shift, lane_words, signed, tail_is_zero}
+use tensile::{Activations, Q}
+
+/// Number of internal nodes of a complete binary tree of depth `depth`.
+pub const fn node_count(_ depth: usize) -> usize {
+    leaf_count(depth) - 1
+}
+
+/// Number of leaves of a complete binary tree of depth `depth`.
+pub const fn leaf_count(_ depth: usize) -> usize {
+    var n: usize = 1
+    var d: usize = 0
+    while d < depth {
+        n = n * 2
+        d += 1
+    }
+    n
+}
+
+/// Words that hold the nodes: one 16-bit lane per node.
+pub const fn node_words(_ depth: usize) -> usize {
+    lane_words(node_count(depth))
+}
+
+/// Words of a whole tree: the node words, then one 16-bit lane per leaf.
+pub const fn tree_words(_ depth: usize) -> usize {
+    node_words(depth) + lane_words(leaf_count(depth))
+}
+
+/// Whether a tree of depth `depth` over `inputs` features can be stored:
+/// a depth of 1 to 8, and a feature index that fits the 8 bits of a node.
+pub const fn tree_fits(_ depth: usize, _ inputs: usize) -> bool {
+    depth >= 1 && depth <= 8 && inputs >= 1 && inputs <= 256
+}
+
+/// A complete decision tree of depth `DEPTH` over `IN` input features, whose
+/// leaves hold signed 16-bit values with `LF` fractional bits
+/// (`docs/spec-trees.md` sections 2 and 6).
+///
+/// Node `i` (heap order: the root is 0, the children of `i` are `2i + 1` and
+/// `2i + 2`) is the lane `feature << 8 | threshold`. A walk goes left when
+/// `x[feature] <= threshold` and right otherwise, `DEPTH` times, and ends at
+/// leaf `i - (2^DEPTH - 1)`. The lanes of the nodes come first, then, from
+/// the next word on, the lanes of the leaves; unused lanes are zero.
+///
+/// The depth and the number of features are in the type, so a tree of
+/// another depth, or one built for another number of features, does not fit
+/// where this one is expected; the leaf scale is in the type, so its values
+/// cannot be added to scores at another scale.
+pub struct Tree<const DEPTH: usize, const IN: usize, const LF: usize> {
+    pub(ingot) words: [u256; tree_words(DEPTH)],
+}
+
+impl<const DEPTH: usize, const IN: usize, const LF: usize> Copy for Tree<DEPTH, IN, LF> {}
+
+impl<const DEPTH: usize, const IN: usize, const LF: usize> Tree<DEPTH, IN, LF> {
+    /// Whether `words` are a well-formed tree: every node names a feature
+    /// below `IN`, and every unused lane is zero. Any 16-bit value is a leaf
+    /// and any 8-bit value a threshold.
+    pub const fn well_formed(_ words: [u256; tree_words(DEPTH)]) -> bool {
+        var i: usize = 0
+        while i < node_count(DEPTH) {
+            if lane_of(words[i / 16], i) >> 8 >= IN as u256 {
+                return false
+            }
+            i += 1
+        }
+        tail_is_zero(words[node_words(DEPTH) - 1], node_count(DEPTH))
+            && tail_is_zero(words[tree_words(DEPTH) - 1], leaf_count(DEPTH))
+    }
+
+    /// Wraps the words of a tree. Fails if they are not well formed, or the
+    /// shape cannot be stored (`tree_fits`): at compile time for a constant,
+    /// at run time otherwise.
+    pub const fn from_words(_ words: own [u256; tree_words(DEPTH)]) -> Self {
+        assert!(tree_fits(DEPTH, IN) && Self::well_formed(words))
+        Self { words }
+    }
+
+    /// Builds a tree from its nodes and leaves, in heap order. Fails if a
+    /// feature is not below `IN` or a leaf is outside the 16-bit range.
+    pub const fn build(
+        features: [u8; node_count(DEPTH)],
+        thresholds: [u8; node_count(DEPTH)],
+        values: [i32; leaf_count(DEPTH)],
+    ) -> Self {
+        assert!(tree_fits(DEPTH, IN))
+        var words: [u256; tree_words(DEPTH)] = [0; tree_words(DEPTH)]
+        var i: usize = 0
+        while i < node_count(DEPTH) {
+            assert!((features[i] as usize) < IN)
+            let node = ((features[i] as u256) << 8) | thresholds[i] as u256
+            words[i / 16] = words[i / 16] | (node << lane_shift(i))
+            i += 1
+        }
+        var k: usize = 0
+        while k < leaf_count(DEPTH) {
+            assert!(values[k] >= I16_MIN && values[k] <= I16_MAX)
+            let lane = values[k].to_word() & 0xffff
+            let w = node_words(DEPTH) + k / 16
+            words[w] = words[w] | (lane << lane_shift(k))
+            k += 1
+        }
+        Self { words }
+    }
+
+    /// The packed words: the form a contract message and the commitment use.
+    pub const fn words(self) -> [u256; tree_words(DEPTH)] {
+        self.words
+    }
+
+    /// Feature index of node `i`.
+    pub const fn feature(self, _ i: usize) -> usize {
+        assert!(i < node_count(DEPTH))
+        // Eight bits: the narrowing loses nothing.
+        (lane_of(self.words[i / 16], i) >> 8).downcast_truncate()
+    }
+
+    /// Threshold of node `i`, 0..255.
+    pub const fn threshold(self, _ i: usize) -> i32 {
+        assert!(i < node_count(DEPTH))
+        (lane_of(self.words[i / 16], i) & 0xff).downcast_truncate()
+    }
+
+    /// Value of leaf `k`, at the leaf scale.
+    pub const fn leaf(self, _ k: usize) -> Q<LF> {
+        assert!(k < leaf_count(DEPTH))
+        Q::from_raw(signed(lane_of(self.words[node_words(DEPTH) + k / 16], k)))
+    }
+
+    /// The leaf the walk on `x` ends at, 0..2^DEPTH - 1 (`docs/spec-trees.md`
+    /// section 3): left when `x[feature] <= threshold`.
+    pub const fn leaf_index<const F: usize>(self, _ x: Activations<IN, F>) -> usize {
+        var i: usize = 0
+        var d: usize = 0
+        while d < DEPTH {
+            let lane = lane_of(self.words[i / 16], i)
+            // `well_formed` holds every feature below `IN`; eight bits.
+            let feature: usize = (lane >> 8).downcast_truncate()
+            let threshold: i32 = (lane & 0xff).downcast_truncate()
+            i = if (x.get(feature) as i32) <= threshold {
+                2 * i + 1
+            } else {
+                2 * i + 2
+            }
+            d += 1
+        }
+        i - node_count(DEPTH)
+    }
+
+    /// The tree's output on `x`: the value of the leaf the walk ends at.
+    pub const fn eval<const F: usize>(self, _ x: Activations<IN, F>) -> Q<LF> {
+        self.leaf(self.leaf_index(x))
+    }
+}
+
+impl<const DEPTH: usize, const IN: usize, const LF: usize> Eq for Tree<DEPTH, IN, LF> {
+    const fn eq(self, _ other: Self) -> bool {
+        var k: usize = 0
+        while k < tree_words(DEPTH) {
+            if self.words[k] != other.words[k] {
+                return false
+            }
+            k += 1
+        }
+        true
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        !self.eq(other)
+    }
+}
+
+/// A depth-2 tree over three features: the root tests feature 2 against 63,
+/// its left child feature 0 against 10, its right child feature 1 against 0.
+const SMALL: Tree<2, 3, 4> = Tree::build(
+    features: [2, 0, 1],
+    thresholds: [63, 10, 0],
+    values: [-5, 7, 32767, -32768],
+)
+
+/// The same tree as packed words: nodes `0x023f 0x000a 0x0100`, then the
+/// leaves `0xfffb 0x0007 0x7fff 0x8000`.
+const SMALL_WORDS: [u256; 2] = [
+    0x023f000a01000000000000000000000000000000000000000000000000000000,
+    0xfffb00077fff8000000000000000000000000000000000000000000000000000,
+]
+
+static_assert(node_count(1) == 1 && leaf_count(1) == 2)
+static_assert(node_count(5) == 31 && leaf_count(5) == 32)
+static_assert(tree_words(2) == 2)
+static_assert(tree_words(4) == 2)
+static_assert(tree_words(5) == 4)
+static_assert(tree_words(6) == 8)
+static_assert(tree_words(8) == 32)
+static_assert(SMALL == Tree::from_words(SMALL_WORDS))
+static_assert(SMALL.feature(0) == 2 && SMALL.threshold(0) == 63)
+static_assert(SMALL.leaf(0).raw() == -5 && SMALL.leaf(3).raw() == -32768)
+// x = (10, 0, 63): left at the root (63 <= 63), left again (10 <= 10): leaf 0.
+static_assert(SMALL.leaf_index(Activations<3, 7>::pack([10, 0, 63])) == 0)
+// x = (11, 0, 63): left, then right (11 > 10): leaf 1.
+static_assert(SMALL.eval(Activations<3, 7>::pack([11, 0, 63])).raw() == 7)
+// x = (0, 0, 64): right at the root, then left (0 <= 0): leaf 2.
+static_assert(SMALL.eval(Activations<3, 7>::pack([0, 0, 64])).raw() == 32767)
+// x = (0, 1, 127): right, right: leaf 3.
+static_assert(SMALL.eval(Activations<3, 7>::pack([0, 1, 127])).raw() == -32768)
+// A node naming feature 3 of three, and a non-zero padding lane, are malformed.
+static_assert(!Tree<2, 3, 4>::well_formed([SMALL_WORDS[0] | (0x03 << 248), SMALL_WORDS[1]]))
+static_assert(!Tree<2, 3, 4>::well_formed([SMALL_WORDS[0] | 1, SMALL_WORDS[1]]))
+static_assert(!Tree<2, 3, 4>::well_formed([SMALL_WORDS[0], SMALL_WORDS[1] | 1]))
+static_assert(Tree<2, 4, 4>::well_formed([SMALL_WORDS[0] | (0x03 << 248), SMALL_WORDS[1]]))

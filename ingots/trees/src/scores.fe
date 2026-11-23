@@ -1,0 +1,165 @@
+//! What a forest's trees output, and how the outputs add up to class scores.
+use core::marker::Copy
+use core::num::IntWord
+use core::ops::Eq
+use ingot::lanes::{I16_MAX, I16_MIN, lane_of, lane_shift, lane_words, signed, tail_is_zero}
+use tensile::{Accumulators, Q}
+
+/// The largest absolute base score: `2^30 - 1`.
+pub const BASE_LIMIT: i32 = 1073741823
+
+/// Whether the base score plus `trees` values of 16 bits each always fits an
+/// int32: every value is at least `-2^15`, every base at most `2^30 - 1` in
+/// absolute value, and `trees * 2^15 <= 2^30` leaves room for both. Holds
+/// for up to 32,768 trees.
+pub const fn sum_fits_i32(_ trees: usize) -> bool {
+    trees * 32768 <= 1073741824
+}
+
+/// The class score tree `t` adds to, with `classes` classes
+/// (`docs/spec-trees.md` section 4): with two classes every tree adds to the
+/// score of class 1 (one margin; the score of class 0 is its base alone);
+/// with more, tree `t` adds to class `t % classes`.
+pub const fn target(_ t: usize, classes: usize) -> usize {
+    if classes == 2 {
+        1
+    } else {
+        t % classes
+    }
+}
+
+/// The base scores of a forest: one int32 per class with `LF` fractional
+/// bits, each at most `BASE_LIMIT` in absolute value. The bound is checked
+/// when a base is made, so for a constant it is checked by the compiler.
+pub struct Base<const CLASSES: usize, const LF: usize> { raw: [i32; CLASSES] }
+
+impl<const CLASSES: usize, const LF: usize> Copy for Base<CLASSES, LF> {}
+
+impl<const CLASSES: usize, const LF: usize> Base<CLASSES, LF> {
+    /// The base scores whose integer representations are `raw`. Fails if one
+    /// is larger than `BASE_LIMIT` in absolute value.
+    pub const fn from_raw(_ raw: own [i32; CLASSES]) -> Self {
+        var c: usize = 0
+        while c < CLASSES {
+            assert!(raw[c] >= -BASE_LIMIT && raw[c] <= BASE_LIMIT)
+            c += 1
+        }
+        Self { raw }
+    }
+
+    /// The base score of class `c`.
+    pub const fn at(self, _ c: usize) -> Q<LF> {
+        Q::from_raw(self.raw[c])
+    }
+}
+
+/// The outputs of `TREES` trees on one input: one signed 16-bit value per
+/// tree with `LF` fractional bits, packed 16 to a word in tree order (lane
+/// `t` of the words is tree `t`, as in `ingot::lanes`). This is what a claim
+/// commits to besides the input and the class (`docs/spec-trees.md`
+/// section 7).
+pub struct Outputs<const TREES: usize, const LF: usize> {
+    pub(ingot) words: [u256; lane_words(TREES)],
+}
+
+impl<const TREES: usize, const LF: usize> Copy for Outputs<TREES, LF> {}
+
+impl<const TREES: usize, const LF: usize> Outputs<TREES, LF> {
+    /// Packs `values` in tree order. Fails if one is outside the 16-bit range.
+    pub const fn pack(_ values: [i32; TREES]) -> Self {
+        var words: [u256; lane_words(TREES)] = [0; lane_words(TREES)]
+        var t: usize = 0
+        while t < TREES {
+            assert!(values[t] >= I16_MIN && values[t] <= I16_MAX)
+            let lane = values[t].to_word() & 0xffff
+            words[t / 16] = words[t / 16] | (lane << lane_shift(t))
+            t += 1
+        }
+        Self { words }
+    }
+
+    /// Whether `words` are well formed: the unused lanes of the last word
+    /// are zero. Every 16-bit value is a possible output.
+    pub const fn well_formed(_ words: [u256; lane_words(TREES)]) -> bool {
+        if TREES % 16 == 0 {
+            return true
+        }
+        tail_is_zero(words[lane_words(TREES) - 1], TREES)
+    }
+
+    /// Wraps outputs that are already packed. Fails if they are not well formed.
+    pub const fn from_words(_ words: own [u256; lane_words(TREES)]) -> Self {
+        assert!(Self::well_formed(words))
+        Self { words }
+    }
+
+    /// The packed words, the form a claim carries.
+    pub const fn words(self) -> [u256; lane_words(TREES)] {
+        self.words
+    }
+
+    /// The output of tree `t`.
+    pub const fn get(self, _ t: usize) -> Q<LF> {
+        assert!(t < TREES)
+        Q::from_raw(signed(lane_of(self.words[t / 16], t)))
+    }
+
+    /// The class scores: for every class its base, plus the outputs of the
+    /// trees that add to it (`target`). The `where` clause is the proof that
+    /// no sum can overflow, for every possible output of every tree, so the
+    /// arithmetic is unchecked; a claim's outputs are added with this same
+    /// function, whatever values it states.
+    #[arithmetic(unchecked)]
+    pub const fn scores<const CLASSES: usize>(self, _ base: Base<CLASSES, LF>) -> Accumulators<CLASSES, LF>
+    where sum_fits_i32(TREES)
+    {
+        var raw: [i32; CLASSES] = [0; CLASSES]
+        var c: usize = 0
+        while c < CLASSES {
+            raw[c] = base.at(c).raw()
+            c += 1
+        }
+        var t: usize = 0
+        while t < TREES {
+            let class = target(t, classes: CLASSES)
+            raw[class] = raw[class] + signed(lane_of(self.words[t / 16], t))
+            t += 1
+        }
+        Accumulators::from_raw(raw)
+    }
+}
+
+impl<const TREES: usize, const LF: usize> Eq for Outputs<TREES, LF> {
+    const fn eq(self, _ other: Self) -> bool {
+        var k: usize = 0
+        while k < lane_words(TREES) {
+            if self.words[k] != other.words[k] {
+                return false
+            }
+            k += 1
+        }
+        true
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        !self.eq(other)
+    }
+}
+
+const THREE: Outputs<3, 8> = Outputs::pack([-1, 300, 32767])
+const BINARY: Base<2, 8> = Base::from_raw([0, -100])
+const TERNARY: Base<3, 8> = Base::from_raw([10, 20, 30])
+
+static_assert(sum_fits_i32(32768))
+static_assert(!sum_fits_i32(32769))
+static_assert(target(5, classes: 2) == 1)
+static_assert(target(5, classes: 3) == 2)
+static_assert(THREE.words()[0] == 0xffff012c7fff0000000000000000000000000000000000000000000000000000)
+static_assert(THREE.get(0).raw() == -1 && THREE.get(2).raw() == 32767)
+static_assert(Outputs<3, 8>::well_formed(THREE.words()))
+static_assert(!Outputs<3, 8>::well_formed([THREE.words()[0] | 1]))
+// Two classes: every tree adds to class 1; class 0 is its base alone.
+static_assert(THREE.scores(BINARY) == Accumulators::from_raw([0, -100 - 1 + 300 + 32767]))
+// Three classes: tree t adds to class t % 3.
+static_assert(THREE.scores(TERNARY) == Accumulators::from_raw([9, 320, 32797]))
+static_assert(THREE.scores(BINARY).argmax() == 1)

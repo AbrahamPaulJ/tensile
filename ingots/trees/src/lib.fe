@@ -1,0 +1,28 @@
+//! Trees: decision-tree ensembles (gradient-boosted trees, random forests)
+//! on the types of the Tensile kernel: one source for the native classifier,
+//! the contract that runs a whole forest, and the on-chain dispute.
+//!
+//! An ensemble's answer is a sum of leaf values: each of `TREES` complete
+//! trees of depth `DEPTH` walks `DEPTH` comparisons of an input byte against
+//! a threshold and ends at a leaf; the leaves of the trees that add to a
+//! class sum, with a base, to its score; the class is the highest score.
+//! Inputs are `tensile::Activations` (bytes 0..127), scores are
+//! `tensile::Accumulators` (int32 with `LF` fractional bits). The arithmetic
+//! and the dispute are specified in `docs/spec-trees.md`.
+//!
+//! ```fe
+//! use trees::{Forest, Base, Tree}
+//!
+//! // FOREST: Forest<200, 5, 14, 2, 10>, 200 trees of depth 5 over 14 features
+//! fn class(x: Activations<14, 7>) -> usize {
+//!     FOREST.scores(x).argmax()
+//! }
+//! ```
+//!
+//! Like `tensile`, the ingot is pure: no `std`, no EVM, no host. A dispute
+//! re-runs one `Tree::eval`, the function a whole forest runs once per tree.
+pub use forest::Forest
+pub use lanes::{lane_words, signed}
+pub use probe::{TreeProbe, Unobserved}
+pub use scores::{BASE_LIMIT, Base, Outputs, sum_fits_i32, target}
+pub use tree::{Tree, leaf_count, node_count, node_words, tree_fits, tree_words}
