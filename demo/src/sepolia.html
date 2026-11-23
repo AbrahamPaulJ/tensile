@@ -115,6 +115,21 @@ footer { margin-top: 28px; font-size: 14px; color: var(--soft); }
   </div>
 </div>
 
+<div class="panel" style="margin-top:16px">
+  <h2>Or draw a digit: two machines, one kernel</h2>
+  <div class="row">
+    <div>
+      <p class="label">Draw here, large and centred</p>
+      <canvas id="pad" width="280" height="280" style="width:196px;height:196px;touch-action:none;cursor:crosshair;image-rendering:auto" aria-label="Drawing area for a digit"></canvas>
+      <div style="margin-top:8px"><button id="pad-clear" class="ghost">Clear</button></div>
+    </div>
+    <div><p class="label">As the network sees it</p><canvas id="pad-input" width="28" height="28"></canvas></div>
+    <div><p class="label">This browser (wasm)</p><div class="digit" id="pad-wasm">?</div></div>
+    <div><p class="label">Sepolia (Fe bytecode)</p><div class="digit" id="pad-chain">?</div></div>
+  </div>
+  <p class="note" id="pad-note">Your drawing is classified twice from the same Fe source: by the WebAssembly build in this tab, and by the EVM bytecode of <code>Network</code> on Sepolia, called read-only through a public node. Nothing is sent as a transaction.</p>
+</div>
+
 <footer>
   The contracts are the output of <code>fe build</code>, deployed unchanged: <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/sepolia.md">addresses, transactions and how to check the deployed code</a>. The same check runs from the command line with <code>node demo/test/sepolia.mjs</code>. <a href="../demo/">The offline demo</a> shows the whole protocol on a chain inside the tab. <a href="https://github.com/AbrahamPaulJ/tensile">Source</a>.
 </footer>
