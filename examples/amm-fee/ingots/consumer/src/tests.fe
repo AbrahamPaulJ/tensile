@@ -1,0 +1,299 @@
+//! Tests of `FeeOracle` against the generated arbiter of this workspace and a
+//! test pool whose tick the test sets. The pool is walked so that the oracle's
+//! stored moves are the input of reference sample 0 (a real window of the
+//! USDC/WETH pool), which ties the on-chain input rule to the bytes the model
+//! was exported on.
+//!
+//! The Fe test EVM does not advance the block number, so every test but one
+//! uses an interval of zero blocks; `check.sh` runs the interval of 50 with
+//! mined blocks on anvil (`oracle_check.sh`).
+use arbiter::{Arbiter, ArbiterMsg}
+use ingot::{
+    DEFAULT_FEE,
+    FeeMsg,
+    FeeOracle,
+    GAP,
+    HORIZON,
+    NoSuchWindow,
+    NotNewer,
+    NotThisWindow,
+    PoolMsg,
+    TooSoon,
+    fee_of,
+}
+use model::{commitment, reference}
+use std::evm::{Address, CallOutcome, Duration, Evm, Wei, is_error, seconds, wei}
+
+const GAS: u256 = 16777216
+const BOND: Wei = wei(1_000_000)
+/// Where the test pool starts: a tick of the real pool.
+const START_TICK: i32 = 201860
+
+msg TestPoolMsg {
+    #[selector = sol("setTick(int32)")]
+    SetTick { tick: i32 },
+}
+
+/// A pool that answers `slot0()` with the tick it was last given.
+contract TestPool {
+    mut tick: i32,
+
+    recv {
+        TestPoolMsg::SetTick { tick: value } uses (mut tick) {
+            tick = value
+        }
+
+        PoolMsg::Slot0 -> (u256, i32, u16, u16, u16, u8, bool)
+        uses (tick)
+        {
+            (0, tick, 0, 0, 0, 0, true)
+        }
+    }
+}
+
+/// An arbiter with the given window, a test pool, and an oracle reading both
+/// with the given interval.
+fn setup(window: Duration, interval: u256) -> (Address, Address, Address)
+uses (evm: mut Evm)
+{
+    let arbiter = evm
+        .create2<Arbiter>(
+            value: Wei::zero(),
+            args: (commitment::MODEL_ROOT, BOND, window),
+            salt: 0,
+        )
+    let pool = evm.create2<TestPool>(value: Wei::zero(), args: (), salt: 0)
+    let oracle = evm
+        .create2<FeeOracle>(
+            value: Wei::zero(),
+            args: (pool, arbiter, interval),
+            salt: 0,
+        )
+    (arbiter, pool, oracle)
+}
+
+fn observe_at(pool: Address, oracle: Address, tick: i32) -> u256
+uses (evm: mut Evm)
+{
+    evm.call(
+        addr: pool,
+        gas: GAS,
+        value: Wei::zero(),
+        message: TestPoolMsg::SetTick { tick },
+    )
+    evm.call(
+        addr: oracle,
+        gas: GAS,
+        value: Wei::zero(),
+        message: FeeMsg::Observe {},
+    )
+}
+
+/// Walks the pool through 145 ticks whose 144 distances are the input of
+/// reference sample 0, alternating direction, with one observation after
+/// each. Returns the last tick.
+fn walk_sample_0(pool: Address, oracle: Address) -> i32 uses (evm: mut Evm) {
+    var tick = START_TICK
+    observe_at(pool, oracle, tick)
+    for i in 0 .. 144 {
+        let step: i32 = reference::X0.get(i) as i32
+        if i % 2 == 0 {
+            tick += step
+        } else {
+            tick -= step
+        }
+        observe_at(pool, oracle, tick)
+    }
+    tick
+}
+
+/// Posts the honest claim about reference sample 0. Returns its number.
+fn claim_sample_0(_ target: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: target,
+        gas: GAS,
+        value: BOND,
+        message: ArbiterMsg::Claim {
+            x0: reference::X0.words(),
+            hidden1: reference::HIDDEN1_0.words(),
+            hidden2: reference::HIDDEN2_0.words(),
+            logits: reference::LOGITS0.values(),
+            class: reference::CLASS0.downcast_truncate(),
+        },
+    )
+}
+
+fn finalize(_ target: Address, id: u256) uses (evm: mut Evm) {
+    evm.call(
+        addr: target,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::Finalize { id },
+    )
+}
+
+fn fee(oracle: Address) -> u32 uses (evm: mut Evm) {
+    evm.call(
+        addr: oracle,
+        gas: GAS,
+        value: Wei::zero(),
+        message: FeeMsg::Fee {},
+    )
+}
+
+fn apply(oracle: Address, id: u256, end: u256) -> CallOutcome
+uses (evm: mut Evm)
+{
+    evm.try_call(
+        addr: oracle,
+        gas: GAS,
+        value: Wei::zero(),
+        message: FeeMsg::Apply { id, end },
+    )
+}
+
+#[test(balance = 10_000_000)]
+fn the_stored_window_is_the_reference_input() uses (evm: mut Evm) {
+    let (_, pool, oracle) = setup(window: seconds(0), interval: 0)
+    walk_sample_0(pool, oracle)
+    let moves: u256 = evm
+        .call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::Moves {},
+        )
+    assert!(moves == 144)
+    let words: [u256; 5] = evm
+        .call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::InputWords { end: 144 },
+        )
+    let expected = reference::X0.words()
+    assert!(words[0] == expected[0])
+    assert!(words[1] == expected[1])
+    assert!(words[2] == expected[2])
+    assert!(words[3] == expected[3])
+    assert!(words[4] == expected[4])
+    // No window before 144 moves or past the last one.
+    let short = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::InputWords { end: 143 },
+        )
+    assert!(
+        !short.success() && is_error<NoSuchWindow>(short.returndata()),
+    )
+    let long = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::InputWords { end: 145 },
+        )
+    assert!(
+        !long.success() && is_error<NoSuchWindow>(long.returndata()),
+    )
+}
+
+#[test(balance = 10_000_000)]
+fn a_large_move_is_stored_as_127() uses (evm: mut Evm) {
+    let (_, pool, oracle) = setup(window: seconds(0), interval: 0)
+    observe_at(pool, oracle, tick: START_TICK)
+    observe_at(pool, oracle, tick: START_TICK - 500)
+    observe_at(pool, oracle, tick: START_TICK - 500 + 126)
+    let first: u8 = evm
+        .call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::MoveAt { number: 0 },
+        )
+    let second: u8 = evm
+        .call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::MoveAt { number: 1 },
+        )
+    assert!(first == 127)
+    assert!(second == 126)
+}
+
+#[test(balance = 10_000_000)]
+fn a_finalised_claim_about_the_window_sets_the_fee() uses (evm: mut Evm) {
+    let (arbiter, pool, oracle) = setup(window: seconds(0), interval: 0)
+    var tick = walk_sample_0(pool, oracle)
+    assert!(fee(oracle) == DEFAULT_FEE)
+    let id = claim_sample_0(arbiter)
+    finalize(arbiter, id)
+    let expected = fee_of(tier: reference::CLASS0.downcast_truncate())
+    let outcome = apply(oracle, id, end: 144)
+    assert!(outcome.success())
+    assert!(fee(oracle) == expected)
+    // The same window cannot be applied a second time.
+    let again = apply(oracle, id, end: 144)
+    assert!(!again.success() && is_error<NotNewer>(again.returndata()))
+    // The fee stays in force for GAP + HORIZON more moves, then falls back.
+    var more: u256 = 0
+    while more < GAP + HORIZON - 1 {
+        tick += 1
+        observe_at(pool, oracle, tick)
+        more += 1
+    }
+    assert!(fee(oracle) == expected)
+    observe_at(pool, oracle, tick: tick + 1)
+    assert!(fee(oracle) == DEFAULT_FEE)
+}
+
+#[test(balance = 10_000_000)]
+fn a_claim_about_another_window_is_refused() uses (evm: mut Evm) {
+    let (arbiter, pool, oracle) = setup(window: seconds(0), interval: 0)
+    let tick = walk_sample_0(pool, oracle)
+    // One more move: the window ending at move 145 is another input.
+    observe_at(pool, oracle, tick: tick + 3)
+    let id = claim_sample_0(arbiter)
+    finalize(arbiter, id)
+    let outcome = apply(oracle, id, end: 145)
+    assert!(
+        !outcome.success() && is_error<NotThisWindow>(outcome.returndata()),
+    )
+    assert!(fee(oracle) == DEFAULT_FEE)
+    assert!(apply(oracle, id, end: 144).success())
+}
+
+#[test(balance = 10_000_000)]
+fn an_open_claim_sets_no_fee() uses (evm: mut Evm) {
+    let (arbiter, pool, oracle) = setup(window: seconds(1_000_000), interval: 0)
+    walk_sample_0(pool, oracle)
+    let id = claim_sample_0(arbiter)
+    let outcome = apply(oracle, id, end: 144)
+    assert!(!outcome.success())
+    assert!(fee(oracle) == DEFAULT_FEE)
+}
+
+#[test(balance = 10_000_000)]
+fn a_second_observation_inside_the_interval_is_refused() uses (evm: mut Evm) {
+    let (_, pool, oracle) = setup(window: seconds(0), interval: 50)
+    observe_at(pool, oracle, tick: START_TICK)
+    evm.call(
+        addr: pool,
+        gas: GAS,
+        value: Wei::zero(),
+        message: TestPoolMsg::SetTick { tick: START_TICK + 9 },
+    )
+    let outcome = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::Observe {},
+        )
+    assert!(
+        !outcome.success() && is_error<TooSoon>(outcome.returndata()),
+    )
+}

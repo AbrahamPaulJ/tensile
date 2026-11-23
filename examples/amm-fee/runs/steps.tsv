@@ -1,0 +1,15 @@
+ok	0.6	data set, thresholds and scores	test split, 7711 samples: model 4399 correct (57.05%), persistence 3779 (49.01%), majority tier 2802 (36.34%); recall per tier, model ['1976/2758', '1359/2802', '1064/2151'], persistence ['1697/2758', '1155/2802', '927/2151']
+ok	5.9	regenerate the workspace	the regenerated workspace equals the committed one (18 Fe files)
+ok	0.4	fe fmt --check	fe fmt --check: clean
+ok	9.0	fe test model (sonatina)	model on sonatina: test result: ok. 32 passed; 0 failed
+ok	8.8	fe test model (native)	model on native: test result: ok. 32 passed; 0 failed
+ok	17.9	fe test arbiter (sonatina)	arbiter on sonatina: test result: ok. 15 passed; 0 failed
+ok	17.4	fe test consumer (sonatina)	consumer on sonatina: test result: ok. 8 passed; 0 failed
+ok	8.0	fe test cli (native)	cli on native: test result: ok. 5 passed; 0 failed
+ok	19.8	fe build (all contracts)	built 6 contracts
+ok	0.6	runtime sizes	largest: Arbiter, 10718 of 24576 bytes
+ok	9.3	native classifier vs reference	diff_native: PASS, zero mismatches
+ok	27.6	anvil: arbiter transactions	arbiter_gas_any: 0 wrong result(s)
+ok	19.0	anvil: whole network on-chain	network_gas: 0 wrong result(s)
+ok	116.6	anvil: FeeOracle on real ticks	oracle_check: 0 wrong result(s)
+total	261.7	fe 26.5.1 (149c758)	16

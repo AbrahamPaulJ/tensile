@@ -1,0 +1,308 @@
+//! `FeeOracle`: an example of a contract that makes the model's input itself
+//! and consumes the arbiter's result for it.
+//!
+//! Hand-written, not generated. It does two things.
+//!
+//! 1. It builds the model's input on-chain. `observe()` reads the pool's
+//!    current tick (`slot0()`, the Uniswap v3 view) at most once per
+//!    `interval` blocks and stores one byte: `min(|tick - previous tick|,
+//!    127)`. The last 144 of those bytes, oldest first, packed 32 to a word,
+//!    are the network's input (`examples/amm-fee/dataset.py` states the same
+//!    rule for the training data).
+//! 2. `apply(id, end)` sets the fee from a claim: it hashes the 144 moves that
+//!    end at move number `end`, requires the arbiter's committed input hash
+//!    of claim `id` to equal it, and asks the arbiter for `result(id)`, which
+//!    reverts unless the claim is `Final`. So a fee can only come from a claim
+//!    that was about this contract's own observations and that survived its
+//!    dispute window.
+//!
+//! The fee is valid for the 24 intervals that start 6 intervals after the
+//! window (the target the model was trained on); after that `fee()` falls
+//! back to `DEFAULT_FEE` until a newer claim is applied.
+//!
+//! Out of scope: this is not a Uniswap v4 hook. A hook would call `fee()`
+//! from `beforeSwap` and `observe()` from `afterSwap`; neither is written
+//! or tested here.
+use arbiter::ArbiterMsg
+use std::evm::{Address, Call, Ctx, Log, StorageMap, keccak_words}
+
+/// Moves in one input: the model's input length.
+pub const N_OBS: u256 = 144
+/// Packed words of one input: 144 bytes are four full words and half a word.
+pub const WORDS: usize = 5
+/// The largest move stored: the largest activation of the kernel.
+pub const CLIP: u32 = 127
+/// Intervals between the end of a window and the first interval its fee
+/// covers: room for the claim's dispute window.
+pub const GAP: u256 = 6
+/// Intervals a fee covers.
+pub const HORIZON: u256 = 24
+/// Fees in hundredths of a basis point, the unit of a Uniswap v4 dynamic fee:
+/// 0.05%, 0.30% and 1.00% for the quiet, middle and active tier.
+pub const FEE_QUIET: u32 = 500
+pub const FEE_MIDDLE: u32 = 3000
+pub const FEE_ACTIVE: u32 = 10000
+/// The fee when no applied claim covers the current interval.
+pub const DEFAULT_FEE: u32 = FEE_MIDDLE
+
+/// The fee of a tier (the model's class).
+pub fn fee_of(tier: u8) -> u32 {
+    if tier == 0 {
+        FEE_QUIET
+    } else if tier == 1 { FEE_MIDDLE } else { FEE_ACTIVE }
+}
+
+/// One stored move: `min(|tick - previous|, 127)`.
+pub fn clipped_move(_ tick: i32, previous: i32) -> u256 {
+    let distance: u32 = (tick - previous).unsigned_abs()
+    if distance > CLIP {
+        CLIP as u256
+    } else {
+        distance as u256
+    }
+}
+
+/// Move number `number` was stored: the pool's tick and the clipped distance
+/// from the tick before.
+#[event]
+pub struct Observed {
+    #[indexed]
+    pub number: u256,
+    pub tick: i32,
+    pub distance: u8,
+}
+
+/// Claim `id` about the window ending at move `end` set the fee.
+#[event]
+pub struct FeeSet {
+    #[indexed]
+    pub id: u256,
+    #[indexed]
+    pub end: u256,
+    pub tier: u8,
+    pub fee: u32,
+}
+
+/// `observe` was called before `interval` blocks had passed.
+#[error]
+pub struct TooSoon { pub next_block: u256 }
+
+/// There is no window of 144 moves ending at `end`.
+#[error]
+pub struct NoSuchWindow { pub end: u256 }
+
+/// The window ending at `end` is not newer than the one already applied.
+#[error]
+pub struct NotNewer { pub end: u256 }
+
+/// Claim `id` is about another input than the window ending at `end`.
+#[error]
+pub struct NotThisWindow { pub id: u256, pub end: u256 }
+
+/// The part of the Uniswap v3 pool interface this contract reads. `tick` is
+/// an `int24` on the wire, which decodes as an `i32`.
+pub msg PoolMsg {
+    #[selector = sol("slot0()")]
+    Slot0 -> (u256, i32, u16, u16, u16, u8, bool),
+}
+
+pub msg FeeMsg {
+    /// Reads the pool's tick and stores one move (the first call stores only
+    /// the starting tick). Returns the number of moves stored. Anyone may
+    /// call it; it reverts with `TooSoon` inside an interval.
+    #[selector = sol("observe()")]
+    Observe -> u256,
+    /// Sets the fee from finalised claim `id`, which must be about the 144
+    /// moves ending at move `end`. Returns the fee. Reverts if the claim is
+    /// not final (the arbiter's revert), is about another input, or `end` is
+    /// not newer than the window applied before.
+    #[selector = sol("apply(uint256,uint256)")]
+    Apply { id: u256, end: u256 } -> u32,
+    /// The fee now: the applied one while it is in force, else `DEFAULT_FEE`.
+    #[selector = sol("fee()")]
+    Fee -> u32,
+    /// The packed input for the window ending at move `end`: what a keeper
+    /// runs the model on and posts to the arbiter as `x0`.
+    #[selector = sol("inputWords(uint256)")]
+    InputWords { end: u256 } -> [u256; WORDS],
+    /// Number of moves stored so far.
+    #[selector = sol("moves()")]
+    Moves -> u256,
+    /// Stored move `number` (numbered from 0).
+    #[selector = sol("moveAt(uint256)")]
+    MoveAt { number: u256 } -> u8,
+}
+
+/// Deployed with the pool it observes, the arbiter whose results it accepts
+/// and the number of blocks between observations. Its effects say what it can
+/// do: read other contracts (`call`, not `mut call`, so it cannot send ETH or
+/// change the pool or the arbiter) and write its own storage.
+pub contract FeeOracle uses (ctx: Ctx, call: Call, log: mut Log) {
+    pool: Address,
+    source: Address,
+    interval: u256,
+    mut started: bool,
+    mut last_tick: i32,
+    mut last_block: u256,
+    mut count: u256,
+    mut packed: StorageMap<u256, u256>,
+    mut applied: bool,
+    mut applied_end: u256,
+    mut applied_fee: u32,
+
+    init(pool_address: Address, arbiter_address: Address, blocks: u256)
+    uses (mut pool, mut source, mut interval)
+    {
+        pool = pool_address
+        source = arbiter_address
+        interval = blocks
+    }
+
+    recv FeeMsg {
+        Observe -> u256 uses (
+            ctx,
+            call,
+            pool,
+            interval,
+            mut started,
+            mut last_tick,
+            mut last_block,
+            mut count,
+            mut packed,
+            mut log,
+        ) {
+            let block = ctx.block_number()
+            if started && block < last_block + interval {
+                revert_error(TooSoon { next_block: last_block + interval })
+            }
+            let slot: (u256, i32, u16, u16, u16, u8, bool) = pool.static(PoolMsg::Slot0 {})
+            let tick = slot.1
+            if started {
+                let distance = clipped_move(tick, previous: last_tick)
+                let number = count
+                // Byte `number % 32` of word `number / 32`, counting from the most
+                // significant byte: the packed form of docs/spec.md section 7.
+                packed[number / 32] = packed[number / 32] | (distance << (8 * (31 - number % 32)))
+                count = number + 1
+                log.emit(
+                    Observed { number, tick, distance: distance.downcast_truncate() },
+                )
+            }
+            started = true
+            last_tick = tick
+            last_block = block
+            count
+        }
+
+        Apply { id, end } -> u32 uses (
+            call,
+            source,
+            count,
+            packed,
+            mut applied,
+            mut applied_end,
+            mut applied_fee,
+            mut log,
+        ) {
+            if applied && end <= applied_end {
+                revert_error(NotNewer { end })
+            }
+            let words = with (u256 = count) {
+                window(end)
+            }
+            let hashes: (u256, u256, u256, u256) = source.static(ArbiterMsg::ClaimHashes { id })
+            if hashes.0 != keccak_words(words) {
+                revert_error(NotThisWindow { id, end })
+            }
+            let tier: u8 = source.static(ArbiterMsg::ResultOf { id })
+            let fee = fee_of(tier)
+            applied = true
+            applied_end = end
+            applied_fee = fee
+            log.emit(FeeSet { id, end, tier, fee })
+            fee
+        }
+
+        Fee -> u32 uses (count, applied, applied_end, applied_fee) {
+            if applied && count < applied_end + GAP + HORIZON {
+                applied_fee
+            } else {
+                DEFAULT_FEE
+            }
+        }
+
+        InputWords { end } -> [u256; WORDS] uses (count, packed) {
+            window(end)
+        }
+
+        Moves -> u256 uses (count) {
+            count
+        }
+
+        MoveAt { number } -> u8 uses (count, packed) {
+            if number >= count {
+                revert_error(NoSuchWindow { end: number })
+            }
+            move_at(number).downcast_truncate()
+        }
+    }
+}
+
+/// Stored move `number`.
+fn move_at(_ number: u256) -> u256 uses (packed: StorageMap<u256, u256>) {
+    (packed[number / 32] >> (8 * (31 - number % 32))) & 0xff
+}
+
+/// The 144 moves ending at move `end` (moves `end - 144` to `end - 1`), oldest
+/// first, packed 32 to a word with zero bytes after the last (the packed form
+/// of `docs/spec.md` section 7). Reverts with `NoSuchWindow` if they are not
+/// all stored yet.
+fn window(_ end: u256) -> [u256; WORDS]
+uses (count: u256, packed: StorageMap<u256, u256>)
+{
+    if end < N_OBS || end > count {
+        revert_error(NoSuchWindow { end })
+    }
+    var words: [u256; WORDS] = [0; WORDS]
+    let first = end - N_OBS
+    // The window starts anywhere in a stored word, so its bytes are moved one
+    // by one; each stored word is read from storage once.
+    var slot: u256 = first / 32
+    var stored: u256 = packed[slot]
+    for k in 0 .. WORDS {
+        var word: u256 = 0
+        for i in 0 .. 32 {
+            let index: u256 = (k * 32 + i) as u256
+            word = word << 8
+            if index < N_OBS {
+                let number = first + index
+                if number / 32 != slot {
+                    slot = number / 32
+                    stored = packed[slot]
+                }
+                word = word | ((stored >> (8 * (31 - number % 32))) & 0xff)
+            }
+        }
+        words[k] = word
+    }
+    words
+}
+
+#[test]
+fn a_move_is_the_clipped_distance_in_either_direction() {
+    assert!(clipped_move(201860, previous: 201850) == 10)
+    assert!(clipped_move(201850, previous: 201860) == 10)
+    assert!(clipped_move(-5, previous: 5) == 10)
+    assert!(clipped_move(7, previous: 7) == 0)
+    assert!(clipped_move(127, previous: 0) == 127)
+    assert!(clipped_move(128, previous: 0) == 127)
+    assert!(clipped_move(-887272, previous: 887272) == 127)
+}
+
+#[test]
+fn the_tiers_have_rising_fees() {
+    assert!(fee_of(tier: 0) == 500)
+    assert!(fee_of(tier: 1) == 3000)
+    assert!(fee_of(tier: 2) == 10000)
+    assert!(DEFAULT_FEE == fee_of(tier: 1))
+}

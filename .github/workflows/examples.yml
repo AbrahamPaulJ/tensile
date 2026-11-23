@@ -93,3 +93,30 @@ jobs:
           examples/address-risk/runs/network-gas.json
           examples/address-risk/runs/gate-gas.json
           examples/address-risk/runs/sizes.json
+
+  amm-fee:
+    name: AMM fee tier 144-32-16-3 from real pool ticks, the whole check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: fe --version
+      # All of check.sh, on the committed tick series, model and reference output: nothing is
+      # downloaded and nothing is trained here.
+      - run: bash examples/amm-fee/check.sh
+      - name: The generated sources and the recorded gas and sizes are what this run produced
+        run: >
+          git diff --exit-code --
+          examples/amm-fee/ingots
+          examples/amm-fee/fe.toml
+          examples/amm-fee/runs/arbiter-gas.json
+          examples/amm-fee/runs/network-gas.json
+          examples/amm-fee/runs/oracle-gas.json
+          examples/amm-fee/runs/sizes.json
