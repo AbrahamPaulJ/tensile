@@ -830,3 +830,27 @@ ingots: 20, 6, 10 and 26 tests; CI job `fe-267`). What it took:
   (`tools/evm_test.sh` on a 26.7.0 `fe build` output: 53 tests in 5 suites, 148 s), which was run by
   hand once and is not part of a check script.
 - `fe fmt --check ingots` is clean on both releases.
+
+## The WebAssembly module on the 26.7.0 release (2026-11-23)
+
+The section "The WebAssembly target" above describes the first build, on master `89d07b9`. The module is
+now built by the Fe 26.7.0 release binary (`tools/build_wasm.sh`, 70 s; CI downloads the release and
+checks its sha256 instead of compiling the compiler):
+
+- **An ingot, not a flattened file.** 26.7.0 builds an ingot for wasm, so `wasm/` is one: `wasm/fe.toml`
+  names `ingots/tensile` and `ingots/model` as path dependencies and `wasm/src/lib.fe` holds the three
+  exports. `tools/gen_wasm.py` and the generated `wasm/tensile_wasm.fe` are gone. The ingot is not a
+  member of the root workspace, so `fe test` and `fe build` on 26.5.1 do not see it.
+- **Exports are marked.** A `pub fn` is no longer an export by itself: each of `classify`, `hidden` and
+  `logit` carries `#[unsafe(export)]`. Without it the build stops on "requires an `#[unsafe(export)]`
+  function".
+- **The unit tests run from the ingots themselves**: `fe test --backend wasm ingots/tensile` (20) and
+  `ingots/model` (6), the same 26 tests.
+- **One more import.** A failed `assert!`, an overflow or an index outside an array no longer traps: the
+  module calls the import `__fe_revert(address, length)` with Solidity `Panic(uint256)` data. Both hosts
+  (`wasm/diff.mjs`, `demo/src/wasm.js`) supply it and throw. `wasm/diff.mjs` now also checks the three
+  refusals (`hidden(32)`, `logit(10)`, a pixel of 128): each reverts with `Panic(1)`.
+- **Size.** 33,172 bytes at `-O 1` (39,168 at `-O 0`, 33,131 at `-O 2`), against 37,471 on master
+  `89d07b9`. 10,000 images, 0 mismatches at all three levels; 133 microseconds per image in Node 22 at
+  `-O 1` in that run, with other builds running on the machine. Two builds give identical bytes, and so
+  does a build of a copy in another directory.

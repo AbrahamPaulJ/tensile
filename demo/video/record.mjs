@@ -25,7 +25,7 @@ const numbers = {
   faults_by_compiler: faults[1],
   faults_by_tests: faults[2],
   fe_version: grab(numbersMd, /^fe (\d+\.\d+\.\d+)/m, 'fe version')[1],
-  wasm_commit: grab(readFileSync(path('../../tools/build_wasm.sh'), 'utf8'), /\b([0-9a-f]{7})[0-9a-f]{33}\b/, 'wasm commit')[1],
+  wasm_compiler: grab(JSON.parse(readFileSync(path('../../wasm/out/tensile_wasm.manifest.json'), 'utf8')).compiler, /^fe (\d+\.\d+\.\d+)/, 'wasm compiler')[1],
 };
 rmSync(path('work/frames'), { recursive: true, force: true });
 mkdirSync(path('work/frames'), { recursive: true });
@@ -332,7 +332,7 @@ const ACT = {
     <p class="sub in" style="--d:.4s">A false answer, caught by one neuron.</p>
     <p class="url in" style="--d:.9s">github.com/AbrahamPaulJ/tensile</p>
     <p class="fine in" style="--d:1.2s">Limits: needs at least one honest watcher; a small dense model; not audited, not deployed.<br>
-    Fe ${numbers.fe_version}; WebAssembly with Fe master ${numbers.wasm_commit}. The page was recorded in real time; the zoom and the cards are added by the recorder.
+    Fe ${numbers.fe_version}; WebAssembly with Fe ${numbers.wasm_compiler}. The page was recorded in real time; the zoom and the cards are added by the recorder.
     Narration: Kokoro, a synthetic voice. Captions: ffmpeg-skill.</p>`),
 };
 

@@ -720,7 +720,7 @@ function renderFe() {
     <tr><td>Typed vectors and scales, against plain words: one neuron's execution</td><td class="n">${fmt(N.typed_exec)}</td><td class="n">${fmt(N.raw_exec)}</td><td class="n">${up(N.typed_exec, N.raw_exec)}</td></tr>
     <tr><td>Pure state machine, against inlined checks: <code>finalize</code></td><td class="n">${fmt(N.step_finalize)}</td><td class="n">${fmt(N.inline_finalize)}</td><td class="n">${up(N.step_finalize, N.inline_finalize)}</td></tr>
     <tr><td>Fe, against a hand-written Solidity twin: <code>claim</code></td><td class="n">${fmt(N.calls.claim.fe)}</td><td class="n">${fmt(N.calls.claim.sol)}</td><td class="n">${up(N.calls.claim.fe, N.calls.claim.sol)}</td></tr>`;
-  $('fe-build').textContent = `Built with ${assets.fe_version}; the WebAssembly module with ${assets.wasm.compiler}, a pinned master commit. Arbiter ${fmt(assets.contracts.Arbiter.runtime_bytes)} bytes, `
+  $('fe-build').textContent = `Built with ${assets.fe_version}; the WebAssembly module with ${assets.wasm.compiler}. Arbiter ${fmt(assets.contracts.Arbiter.runtime_bytes)} bytes, `
     + `bytecode sha256 ${assets.contracts.Arbiter.sha256.slice(0, 16)}... Model accuracy ${(assets.model.accuracy.integer * 100).toFixed(2)}% on the 10,000 MNIST test images.`;
 }
 
