@@ -1,0 +1,7 @@
+[ingot]
+name = "tensile_wasm"
+version = "0.1.0"
+
+[dependencies]
+tensile = { path = "../ingots/tensile" }
+model = { path = "../ingots/model" }

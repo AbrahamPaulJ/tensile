@@ -33,40 +33,46 @@ jobs:
       - run: bash tools/m2_check.sh
       - run: bash tools/m3_check.sh
 
-  wasm:
-    name: WebAssembly build (Fe master, pinned)
+  fe-267:
+    name: Same sources on Fe 26.7.0 (kernel, model, rule, contracts)
     runs-on: ubuntu-latest
     env:
-      # The wasm target is on master only (argotorg/fe PR 1904); keep in step with tools/build_wasm.sh.
-      FE_MASTER: 89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908
+      # The entry is pinned to 26.5.1 (the job above). This job shows that the four ingots that do
+      # not use the native I/O API also pass `fe check` and `fe test` on the 26.7.0 release, from
+      # the same source. `ingots/cli` needs 26.5.1, so tools/check_fe267.sh names each ingot.
+      FE_267_URL: https://github.com/argotorg/fe/releases/download/v26.7.0/fe_linux_amd64
+      FE_267_SHA256: 4ef2b818e260f0ba0b0af4bd78468dda589dc4949503fffaef25d8188e5107d5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download the Fe 26.7.0 release binary and check its hash
+        run: |
+          mkdir -p "$HOME/fe-267"
+          curl -fsSL -o "$HOME/fe-267/fe" "$FE_267_URL"
+          echo "$FE_267_SHA256  $HOME/fe-267/fe" | sha256sum -c -
+          chmod +x "$HOME/fe-267/fe"
+      - run: FE267="$HOME/fe-267/fe" bash tools/check_fe267.sh
+
+  wasm:
+    name: WebAssembly build (Fe 26.7.0 release)
+    runs-on: ubuntu-latest
+    env:
+      # The wasm target ships in the release binaries from 26.7.0, the first release that builds an
+      # ingot for it; keep in step with tools/build_wasm.sh and the fe-267 job above.
+      FE_267_URL: https://github.com/argotorg/fe/releases/download/v26.7.0/fe_linux_amd64
+      FE_267_SHA256: 4ef2b818e260f0ba0b0af4bd78468dda589dc4949503fffaef25d8188e5107d5
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-      - uses: actions/checkout@v5
-        with:
-          repository: argotorg/fe
-          ref: ${{ env.FE_MASTER }}
-          path: fe-master
-          submodules: recursive
-          # Full history, so `fe --version` abbreviates the commit as a local clone does (89d07b9db):
-          # the manifest records that string, and the committed module must match byte for byte.
-          fetch-depth: 0
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            fe-master/target
-          key: fe-master-${{ env.FE_MASTER }}
-      - name: Build fe at the pinned commit, with the wasm feature
-        working-directory: fe-master
+      - name: Download the Fe 26.7.0 release binary and check its hash
         run: |
-          (cd crates/tree-sitter-fe && npm ci --no-audit --no-fund)
-          PATH="$PWD/crates/tree-sitter-fe/node_modules/.bin:$PATH" cargo build --release -p fe --features wasm
-      - name: Flatten, unit tests on wasm, two identical builds, 10,000-image differential
-        run: FE="$PWD/fe-master/target/release/fe" bash tools/build_wasm.sh
+          mkdir -p "$HOME/fe-267"
+          curl -fsSL -o "$HOME/fe-267/fe" "$FE_267_URL"
+          echo "$FE_267_SHA256  $HOME/fe-267/fe" | sha256sum -c -
+          chmod +x "$HOME/fe-267/fe"
+      - name: Unit tests on wasm, two identical builds, 10,000-image differential
+        run: FE="$HOME/fe-267/fe" bash tools/build_wasm.sh
       - name: The committed module is the module these sources build
         run: git diff --exit-code wasm/
 

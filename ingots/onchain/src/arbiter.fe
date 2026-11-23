@@ -213,7 +213,11 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
         ChallengeNeuron1 { id, j, x0, hidden, row, bias, proof }
         uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
         {
-            let record = load(id)
+            // Two `u256` effects are in scope here (`root` and `count`), so the one
+            // `load` reads is named: Fe 26.7.0 will not pick between them.
+            let record = with (u256 = count) {
+                load(id)
+            }
             if j >= HIDDEN {
                 revert_error(NeuronOutOfRange { neuron: j })
             }
@@ -227,7 +231,8 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 revert_error(NotCommitted {})
             }
             let recomputed = layer1::neuron_from_words(row, x: x0, bias)
-            let claimed = Hidden::from_words(hidden).get(j as usize)
+            // `j < HIDDEN` was checked above, so narrowing it loses nothing.
+            let claimed = Hidden::from_words(hidden).get(j.downcast_truncate())
             let challenger = ctx.caller()
             settle(
                 id,
@@ -242,7 +247,11 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
         ChallengeNeuron2 { id, j, hidden, logits, row, bias, proof }
         uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
         {
-            let record = load(id)
+            // Two `u256` effects are in scope here (`root` and `count`), so the one
+            // `load` reads is named: Fe 26.7.0 will not pick between them.
+            let record = with (u256 = count) {
+                load(id)
+            }
             if j >= CLASSES as u256 {
                 revert_error(NeuronOutOfRange { neuron: j })
             }
@@ -256,7 +265,8 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 revert_error(NotCommitted {})
             }
             let recomputed = layer2::neuron_from_words(row, x: hidden, bias)
-            let claimed = logits[j as usize]
+            // `j < CLASSES` was checked above, so narrowing it loses nothing.
+            let claimed = logits[j.downcast_truncate()]
             let challenger = ctx.caller()
             settle(
                 id,

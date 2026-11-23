@@ -1,21 +1,26 @@
-// The exports of the WebAssembly module. Hand-written; tools/gen_wasm.py appends this file after the
-// flattened `tensile` and `model` ingots. Everything below calls the same kernel and the same weights
-// as the contract (`ingots/onchain`) and the native classifier (`ingots/cli`).
-use ingot::model::{Input, logits}
-use ingot::tensile::Activations
+//! The exports of the WebAssembly module: an ingot that depends on `ingots/tensile` and
+//! `ingots/model` as they stand, so the module runs the same kernel and the same weights as the
+//! contract (`ingots/onchain`) and the native classifier (`ingots/cli`).
+//!
+//! Built by `tools/build_wasm.sh` with the Fe 26.7.0 release, the first whose WebAssembly target
+//! takes ingots. It is not a member of the workspace in the root `fe.toml`, which stays on 26.5.1.
+use model::{Input, logits}
+use tensile::Activations
 
 extern {
     /// Pixel `i` of the image (row-major 28 x 28), an activation in 0..127, supplied by the host.
     fn pixel(_ i: u32) -> u32
 }
 
-/// The image the host holds, as the network's input. Traps on a pixel above 127, which no
+/// The image the host holds, as the network's input. Refuses a pixel above 127, which no
 /// activation at this scale can hold, rather than masking it.
 fn read_input() -> Input {
     var values: [i8; 784] = [0; 784]
     var i: u32 = 0
     while i < 784 {
-        let p = unsafe { pixel(i) }
+        let p = unsafe {
+            pixel(i)
+        }
         assert!(p < 128)
         values[i as usize] = p.downcast_truncate()
         i += 1
@@ -24,18 +29,21 @@ fn read_input() -> Input {
 }
 
 /// The predicted digit, 0 to 9.
+#[unsafe(export)]
 pub fn classify() -> u32 {
     logits(x: read_input()).argmax().downcast_truncate()
 }
 
 /// Hidden activation `j` (0 to 31) of the image: layer 1's output, in 0..127.
+#[unsafe(export)]
 pub fn hidden(j: u32) -> i32 {
     assert!(j < 32)
-    let h = ingot::model::layer1::apply(x: read_input())
+    let h = model::layer1::apply(x: read_input())
     h.get(j as usize) as i32
 }
 
 /// Logit `j` of the image, as the raw 32-bit integer at 9 fractional bits.
+#[unsafe(export)]
 pub fn logit(j: u32) -> i32 {
     assert!(j < 10)
     logits(x: read_input()).at(j as usize).raw()

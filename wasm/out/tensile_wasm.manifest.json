@@ -2,14 +2,23 @@
   "manifest_version": 1,
   "module": {
     "file": "tensile_wasm.wasm",
-    "sha256": "4bfe8a6839bb2fa5f3c625ae939d4479106a3865e54015a2009e37b0263a896d",
-    "size": 37471,
+    "sha256": "e15c57129d93582729cdce005495e36ebb062a318bdb2c743a936708189f4ed0",
+    "size": 33172,
     "initial_memory_pages": 17
   },
-  "contract_version": 1,
+  "contract_version": 3,
   "optimization": "1",
-  "compiler": "fe 26.5.0 (89d07b9db)",
+  "compiler": "fe 26.7.0 (e6e6342)",
   "imports": [
+    {
+      "module": "env",
+      "name": "__fe_revert",
+      "kind": "function",
+      "type": {
+        "params": ["i32", "i32"],
+        "results": []
+      }
+    },
     {
       "module": "env",
       "name": "pixel",

@@ -18,7 +18,7 @@ build_variant() { # build_variant <name> <patch command...>: a scratch workspace
   cp "$root/fe.toml" "$dir/"
   cp -r "$root/ingots" "$dir/ingots"
   ( cd "$dir" && "$@" ) || { echo "patching $name failed"; exit 1; }
-  ( cd "$dir" && fe build --color never $FE_FLAGS --out-dir "$work/out-$name" --ingot onchain . ) > "$work/$name.log" 2>&1 \
+  ( cd "$dir" && "${FE_BIN:-fe}" build --color never $FE_FLAGS --out-dir "$work/out-$name" --ingot onchain . ) > "$work/$name.log" 2>&1 \
     || { echo "building $name failed:"; cat "$work/$name.log"; exit 1; }
 }
 
@@ -28,6 +28,19 @@ build_variant raw_neuron cp "$root/tests/abstraction/neuron_check_raw.fe" ingots
 build_variant inline_settle python3 "$root/tests/abstraction/inline_settle.py" ingots/onchain/src/arbiter.fe
 # The same source at the other optimisation level, for section 6 (`-O 1` is the default and what ships).
 FE_FLAGS="-O 2" build_variant o2 true
+# The same source on the Fe 26.7.0 release, for section 7. Everything else here is the pinned
+# release on PATH; this one binary is optional, and without it the section is left out.
+FE267="${FE267:-$HOME/fe-267/fe}"
+fe267_version=""
+if [ -x "$FE267" ]; then
+  fe267_version="$("$FE267" --version)"
+  case "$fe267_version" in
+    *26.7.0*) FE_BIN="$FE267" build_variant fe267 true ;;
+    *) echo "skipping section 7 (Fe 26.7.0): $FE267 is '$fe267_version'"; fe267_version="" ;;
+  esac
+else
+  echo "skipping section 7 (Fe 26.7.0): no binary at $FE267 (set FE267 to a 26.7.0 release binary)"
+fi
 
 # The Solidity twins, compiled with the settings of evm/foundry.toml.
 stage="$HOME/.cache/tensile-evm"
@@ -65,6 +78,12 @@ run arbiter-inline.txt bash tools/arbiter_gas.sh "$work/out-inline_settle"
 run arbiter-twin.txt bash tools/arbiter_gas.sh "$work/out-twin"
 run report-o2.txt bash tools/gas_report.sh "$work/out-o2" "$twin_legacy"
 run arbiter-o2.txt bash tools/arbiter_gas.sh "$work/out-o2"
+if [ -n "$fe267_version" ]; then
+  run sizes-fe267.txt bash tools/check_size.sh "$work/out-fe267"
+  run report-fe267.txt bash tools/gas_report.sh "$work/out-fe267"
+  run arbiter-fe267.txt bash tools/arbiter_gas.sh "$work/out-fe267"
+  echo "$fe267_version" > "$work/fe267-version.txt"
+fi
 if [ "$1" != "--no-forms" ]; then
   run forms.txt bash tools/kernel_forms.sh
 else

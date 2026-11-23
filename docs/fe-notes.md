@@ -802,3 +802,55 @@ also needs the tree-sitter CLI, from `npm ci` in `crates/tree-sitter-fe`). What 
   identical bytes.
 - Three of our 26.5.1 defects are fixed on this commit (stack overflow, compile time, native byte order);
   `docs/upstream-reports.md` has the table and the issues filed for the rest.
+
+## Two Fe releases from one source (2026-11-23, Fe 26.7.0 `e6e6342`)
+
+The entry stays pinned to 26.5.1. `tensile`, `model`, `dispute` and `onchain` also pass `fe check` and
+`fe test` on the 26.7.0 release binary, from the same files (`tools/check_fe267.sh`, 48.6 s for the four
+ingots: 20, 6, 10 and 26 tests; CI job `fe-267`). What it took:
+
+- **Two changes, both in `arbiter.fe`, and the 26.5.1 bytecode did not move.** `fe build` on 26.5.1
+  gives the same bytes as before for all six contracts (sha256 of every `.bin`, `.runtime.bin` and
+  `.abi.json` compared), so no published figure changed.
+- **`j as usize` on a `u256` is refused** (`error[8-0055]: cast is not provably lossless`): a lossless
+  `as` must now be lossless on every target. `j.downcast_truncate()` compiles on both releases and
+  gives identical 26.5.1 code; it follows the `j >= HIDDEN` and `j >= CLASSES` checks that were
+  already there, so nothing is truncated. Declaring the message field as `j: usize` also compiles on
+  both and keeps the `uint256` ABI, but on 26.5.1 it swaps two revert stubs in the runtime (six bytes
+  differ, same length), so it was not used.
+- **`load(id)` with two `u256` effects in scope is refused** (`error[8-0040]: multiple effect candidates
+  found`). The two neuron handlers hold both `root` and `count`; 26.5.1 picked `count` (the parameter
+  name in `load`'s `uses`), 26.7.0 will not choose. `with (u256 = count) { load(id) }` names it, and
+  26.5.1 compiles that to the same bytes.
+- **`fe build --ingot onchain .` works on 26.7.0 with `cli` still in the workspace**, so the workspace
+  manifest is unchanged; `fe test` on the whole workspace would fail on `cli`, which is why the script
+  names each ingot. `ingots/cli` uses the native I/O API that was replaced after 26.5.1 and is not ported.
+- **The 26.7.0 contracts are smaller and cheaper**: `docs/numbers.md` section 7, from the same run of
+  `tools/m4_numbers.sh` as every other figure. The 26.7.0 build also passes the whole Foundry suite
+  (`tools/evm_test.sh` on a 26.7.0 `fe build` output: 53 tests in 5 suites, 148 s), which was run by
+  hand once and is not part of a check script.
+- `fe fmt --check ingots` is clean on both releases.
+
+## The WebAssembly module on the 26.7.0 release (2026-11-23)
+
+The section "The WebAssembly target" above describes the first build, on master `89d07b9`. The module is
+now built by the Fe 26.7.0 release binary (`tools/build_wasm.sh`, 70 s; CI downloads the release and
+checks its sha256 instead of compiling the compiler):
+
+- **An ingot, not a flattened file.** 26.7.0 builds an ingot for wasm, so `wasm/` is one: `wasm/fe.toml`
+  names `ingots/tensile` and `ingots/model` as path dependencies and `wasm/src/lib.fe` holds the three
+  exports. `tools/gen_wasm.py` and the generated `wasm/tensile_wasm.fe` are gone. The ingot is not a
+  member of the root workspace, so `fe test` and `fe build` on 26.5.1 do not see it.
+- **Exports are marked.** A `pub fn` is no longer an export by itself: each of `classify`, `hidden` and
+  `logit` carries `#[unsafe(export)]`. Without it the build stops on "requires an `#[unsafe(export)]`
+  function".
+- **The unit tests run from the ingots themselves**: `fe test --backend wasm ingots/tensile` (20) and
+  `ingots/model` (6), the same 26 tests.
+- **One more import.** A failed `assert!`, an overflow or an index outside an array no longer traps: the
+  module calls the import `__fe_revert(address, length)` with Solidity `Panic(uint256)` data. Both hosts
+  (`wasm/diff.mjs`, `demo/src/wasm.js`) supply it and throw. `wasm/diff.mjs` now also checks the three
+  refusals (`hidden(32)`, `logit(10)`, a pixel of 128): each reverts with `Panic(1)`.
+- **Size.** 33,172 bytes at `-O 1` (39,168 at `-O 0`, 33,131 at `-O 2`), against 37,471 on master
+  `89d07b9`. 10,000 images, 0 mismatches at all three levels; 133 microseconds per image in Node 22 at
+  `-O 1` in that run, with other builds running on the machine. Two builds give identical bytes, and so
+  does a build of a copy in another directory.

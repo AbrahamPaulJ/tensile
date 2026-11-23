@@ -4,7 +4,8 @@
 //
 // Every test image in ref/out/inputs.bin is classified by the module and compared with
 // ref/out/pred.bin; for the first 1,000 (ref/out/trace.jsonl) all 32 hidden activations and all ten
-// logits are compared too.
+// logits are compared too. Then the three refusals: an index outside the layer and a pixel above 127
+// must end the call through the import `__fe_revert`, which this host turns into an exception.
 // The module is checked against its manifest (size and SHA-256) first. No dependencies.
 import fs from "node:fs";
 import path from "node:path";
@@ -26,11 +27,26 @@ const trace = fs.readFileSync(path.join(root, "ref/out/trace.jsonl"), "utf8").tr
 const n = pred.length;
 if (inputs.length !== n * 784) throw new Error("inputs.bin and pred.bin disagree on the sample count");
 
+// The module's imports: `pixel`, and `__fe_revert(address, length)`, through which a failed `assert!`
+// or any other panic hands over its Solidity `Panic(uint256)` data instead of returning.
+class Revert extends Error {}
+const instantiate = async (pixel) => {
+  let memory = null;
+  const { instance } = await WebAssembly.instantiate(bytes, {
+    env: {
+      pixel,
+      __fe_revert: (address, length) => {
+        const data = new Uint8Array(memory.buffer, address >>> 0, length >>> 0);
+        throw new Revert(Buffer.from(data).toString("hex"));
+      },
+    },
+  });
+  memory = instance.exports.memory;
+  return instance.exports;
+};
+
 let image = 0;
-const { instance } = await WebAssembly.instantiate(bytes, {
-  env: { pixel: (i) => inputs[image * 784 + i] },
-});
-const { classify, hidden, logit } = instance.exports;
+const { classify, hidden, logit } = await instantiate((i) => inputs[image * 784 + i]);
 
 let classMismatches = 0;
 let logitMismatches = 0;
@@ -49,8 +65,30 @@ for (const t of trace) {
     if (hidden(j) !== t.hidden[0][j]) hiddenMismatches++;
   }
 }
+// Refusals. A call that reverts leaves the instance in an unknown state, so each one gets its own.
+const PANIC_ASSERT = "4e487b71" + "01".padStart(64, "0");
+const refusals = [
+  ["hidden(32)", (m) => m.hidden(32), () => 0],
+  ["logit(10)", (m) => m.logit(10), () => 0],
+  ["a pixel of 128", (m) => m.classify(), (i) => (i === 783 ? 128 : 0)],
+];
+let notRefused = 0;
+for (const [what, call, pixel] of refusals) {
+  let data = null;
+  try {
+    call(await instantiate(pixel));
+  } catch (error) {
+    if (!(error instanceof Revert)) throw error;
+    data = error.message;
+  }
+  if (data !== PANIC_ASSERT) {
+    notRefused++;
+    console.log(`NOT REFUSED as expected: ${what} gave ${data === null ? "a result" : "revert data " + data}`);
+  }
+}
 console.log(`module ${path.basename(modulePath)}: ${bytes.length} bytes, ${manifest.compiler}, -O ${manifest.optimization}`);
 console.log(`classes: ${n - classMismatches} of ${n} equal the reference (${classMismatches} mismatches), ${classifySeconds.toFixed(2)} s, ${(1e6 * classifySeconds / n).toFixed(0)} us per image`);
 console.log(`logits:  ${trace.length * 10 - logitMismatches} of ${trace.length * 10} equal the reference (${logitMismatches} mismatches)`);
 console.log(`hidden:  ${trace.length * 32 - hiddenMismatches} of ${trace.length * 32} equal the reference (${hiddenMismatches} mismatches)`);
-process.exit(classMismatches || logitMismatches || hiddenMismatches ? 1 : 0);
+console.log(`refusals: ${refusals.length - notRefused} of ${refusals.length} calls outside the model's range revert with Panic(1)`);
+process.exit(classMismatches || logitMismatches || hiddenMismatches || notRefused ? 1 : 0);

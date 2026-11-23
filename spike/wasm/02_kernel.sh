@@ -1,5 +1,7 @@
 #!/bin/bash
 # Probe 2: the flattened tensile + model source (tools/gen_wasm.py) on the WebAssembly target.
+# Historical (master 89d07b9, 2026-11-07): tools/gen_wasm.py and wasm/tensile_wasm.fe were removed on
+# 2026-11-23, when the module became the ingot wasm/ built by the Fe 26.7.0 release (tools/build_wasm.sh).
 export PATH="$HOME/.local/node/bin:$PATH"
 FE="$HOME/fe-master/target/release/fe"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
