@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tensile Fee Tier Demo</title>
+<meta name="description" content="A real Uniswap pool's ticks, a fee-tier model whose input a contract written in Fe builds itself, a false claim about it caught by re-running one neuron, and a fee set only from a claim about the pool's own ticks. Runs entirely in this tab.">
+<style>/*STYLE*/</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Tensile</h1>
+    <p>A pool's fee tier, set only by a claim about its own ticks that nobody disproved.</p>
+  </div>
+  <nav id="steps" aria-label="Steps">
+    <button data-act="window" class="on"><b>1</b> Window</button>
+    <button data-act="observe"><b>2</b> Observe</button>
+    <button data-act="claim"><b>3</b> Claim</button>
+    <button data-act="dispute"><b>4</b> Dispute</button>
+    <button data-act="apply"><b>5</b> Apply</button>
+  </nav>
+</header>
+<p class="what"><b>What you are looking at:</b> an Ethereum chain inside this tab, running the contracts <code>fe build</code> produced from <code>examples/amm-fee</code>, unchanged, on one year of a real Uniswap pool's ticks. No wallet, no network, play money.
+  The same dispute on handwritten digits: <a id="to-digits" href="../demo/">the digit demo</a>. Source: <a href="https://github.com/AbrahamPaulJ/tensile/tree/main/examples/amm-fee">github.com/AbrahamPaulJ/tensile</a>.</p>
+
+<section id="ledger" class="fee-ledger" aria-label="Accounts on the private chain">
+  <div class="cell"><span>Keeper</span><b id="l-keeper">100 ETH</b><i id="l-keeper-credit"></i></div>
+  <div class="cell"><span>Watcher</span><b id="l-watcher">100 ETH</b><i id="l-watcher-credit"></i></div>
+  <div class="cell"><span>Arbiter contract holds</span><b id="l-arbiter">0 ETH</b><i id="l-arbiter-burned"></i></div>
+  <div class="cell"><span>Current claim</span><b id="l-claim">none</b><i id="l-deadline"></i></div>
+  <div class="cell"><span>FeeOracle <code>fee()</code></span><b id="l-fee">not deployed</b><i id="l-moves"></i></div>
+  <div class="cell wide" id="engine"><span>This tab is the blockchain</span><b id="l-engine">starting the EVM</b></div>
+</section>
+
+<main>
+  <!-- 1 ------------------------------------------------------------------------------------- -->
+  <section class="act on" id="act-window">
+    <div class="lede">
+      <h2>A real pool's ticks, as the model never saw them. Pick a 24-hour window.</h2>
+      <p id="window-lede"></p>
+    </div>
+    <div class="grid window-grid">
+      <div class="panel">
+        <p class="label" id="overview-label">The pool's tick, test split. Click to pick a window.</p>
+        <div class="chart-wrap">
+          <svg id="overview" viewBox="0 0 1000 150" preserveAspectRatio="none" role="img" aria-label="The pool's tick over the test split, with the picked window marked"></svg>
+          <div class="axis"><span id="ov-left"></span><span id="ov-right"></span></div>
+        </div>
+        <div class="row wrap">
+          <button id="w-day-back" class="ghost" title="One day earlier">-1 day</button>
+          <button id="w-back" class="ghost" title="Ten minutes earlier">-10 min</button>
+          <input id="w-range" type="range" min="0" max="0" value="0" aria-label="Window">
+          <button id="w-fwd" class="ghost" title="Ten minutes later">+10 min</button>
+          <button id="w-day-fwd" class="ghost" title="One day later">+1 day</button>
+        </div>
+        <div class="row wrap">
+          <span class="hint">Next window where the real tier is</span>
+          <button class="ghost" data-next-tier="0">0</button>
+          <button class="ghost" data-next-tier="1">1</button>
+          <button class="ghost" data-next-tier="2">2</button>
+          <button id="w-wrong" class="ghost">Next one the model gets wrong</button>
+        </div>
+        <p class="label spaced" id="tiers-label">Tiers of this window</p>
+        <table class="compare" id="tiers"></table>
+      </div>
+      <div class="panel">
+        <p class="label" id="zoom-label">The window</p>
+        <svg id="zoom" viewBox="0 0 700 250" role="img" aria-label="The ticks of the window, its input moves, the gap and the target moves"></svg>
+        <p class="label spaced" id="bytes-label">The 144 input bytes</p>
+        <div id="bytes" class="bytes"></div>
+      </div>
+    </div>
+    <div class="foot">
+      <p id="window-note" class="note">Starting the EVM...</p>
+      <button id="to-observe" class="primary" disabled>Observe these ticks on-chain</button>
+    </div>
+  </section>
+
+  <!-- 2 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-observe">
+    <div class="lede">
+      <h2>Nobody hands the contract its input. It builds it from ticks it saw.</h2>
+      <p>A test pool answers <code>slot0()</code> with each real tick of the window in turn. Every 50 blocks, <code>FeeOracle.observe()</code> reads it and stores one byte: the move since the tick before, clipped to 127. The last 144 bytes are the model's input.</p>
+    </div>
+    <div class="grid observe-grid">
+      <div class="panel">
+        <p class="label">Feed the window's ticks through the contract</p>
+        <div class="row wrap"><button id="feed" class="primary">Feed the 145 ticks</button><span id="feed-count" class="hint"></span></div>
+        <div class="progress"><span id="feed-bar"></span></div>
+        <div id="observe-out" class="finding small">A fresh FeeOracle is deployed for each window, so it has seen nothing yet.</div>
+        <p class="label spaced">The rule, as the contract runs it</p>
+        <pre id="move-code" class="code"></pre>
+      </div>
+      <div class="panel">
+        <p class="label">The input the contract built, against the page's bytes</p>
+        <table class="compare words" id="words"></table>
+        <div id="words-out" class="finding small"></div>
+      </div>
+    </div>
+    <div class="foot">
+      <p id="observe-note" class="note"></p>
+      <button id="to-claim" class="primary" disabled>Post a claim about this window</button>
+    </div>
+  </section>
+
+  <!-- 3 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-claim">
+    <div class="lede">
+      <h2 id="claim-title">A keeper claims the tier instead, with a bond.</h2>
+      <p>The claim carries the input, every hidden value and the three outputs. The arbiter checks none of it now. Choose what the keeper says.</p>
+    </div>
+    <div class="grid claim-grid">
+      <div class="panel" id="lies">
+        <label class="lie"><input type="radio" name="lie" value="honest" checked><span><b>Tell the truth</b><i>Post what the network computes on the oracle's bytes.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="class"><span><b>Lie about the tier</b><i>Honest numbers, wrong final tier.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="layer1"><span><b>Forge layer 1</b><i>Change a few of the 32 first hidden values; layers 2 and 3 are computed correctly from the forgery.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="layer2"><span><b>Forge layer 2</b><i>Change some of the 16 second hidden values; the outputs follow from them.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="layer3"><span><b>Forge an output</b><i>Raise one of the three outputs so the tier looks right.</i></span></label>
+        <label class="lie"><input type="radio" name="lie" value="input"><span><b>Right arithmetic, another window</b><i>The true output for a window from another day. Nothing in it is miscomputed.</i></span></label>
+      </div>
+      <div class="panel">
+        <p class="label">Tier to claim</p>
+        <div id="targets" class="targets tiers3"></div>
+        <table class="compare">
+          <thead><tr><th></th><th>What the network computes</th><th>What will be posted</th></tr></thead>
+          <tbody>
+            <tr><th>Tier</th><td id="c-true-class"></td><td id="c-claim-class"></td></tr>
+            <tr><th>Layer 1</th><td>32 values</td><td id="c-claim-h1"></td></tr>
+            <tr><th>Layer 2</th><td>16 values</td><td id="c-claim-h2"></td></tr>
+            <tr><th>Outputs</th><td>3 values</td><td id="c-claim-logits"></td></tr>
+            <tr><th>Input</th><td>the oracle's 144 bytes</td><td id="c-claim-input"></td></tr>
+          </tbody>
+        </table>
+        <div class="layers">
+          <div><p class="label">Layer 1, 32 values</p><div id="h1" class="cells"></div></div>
+          <div><p class="label">Layer 2, 16 values</p><div id="h2" class="cells"></div></div>
+          <div><p class="label">Outputs, one per tier</p><div id="logits" class="logits"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <p class="note" id="claim-note"></p>
+      <button id="post" class="primary" disabled>Post claim with a 1 ETH bond</button>
+    </div>
+  </section>
+
+  <!-- 4 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-dispute">
+    <div class="lede">
+      <h2 id="dispute-title">Anyone can check the claim. One neuron proves it false.</h2>
+      <p>A watcher recomputes the claim layer by layer from its own committed vectors, then the tier. The first value that differs is the challenge to send. The watcher's arithmetic is the same integer rule in JavaScript, checked against the example's reference vectors and against the Fe bytecode by the page's tests.</p>
+    </div>
+    <div class="grid dispute-grid">
+      <div class="panel">
+        <p class="label">The watcher's finding</p>
+        <div id="finding" class="finding">No claim yet.</div>
+        <div class="row wrap">
+          <button id="send-named" class="primary" disabled>Send this challenge</button>
+        </div>
+        <details id="tries">
+          <summary>Try a different challenge yourself</summary>
+          <p class="hint">Nothing here is gated by the page. Every refusal comes from the contract.</p>
+          <div class="row wrap">
+            <button id="try-class" class="ghost">Challenge the tier</button>
+            <span class="pick"><button id="try-neuron" class="ghost">Challenge layer</button><select id="pick-layer" aria-label="Layer"><option>1</option><option>2</option><option>3</option></select><input id="pick-j" type="number" min="0" max="31" value="0" aria-label="Neuron number"></span>
+          </div>
+        </details>
+        <p class="label spaced">Gas in this tab: settling this, against running the whole network</p>
+        <div id="gas-bars" class="bars"></div>
+        <p id="gas-honest" class="note small-note"></p>
+      </div>
+      <div class="panel verdict-panel">
+        <p class="label">What the contract does with a challenge</p>
+        <ol id="checks" class="checks"></ol>
+        <p class="label spaced" id="tree-label">Merkle proof of the neuron's weights</p>
+        <svg id="tree" viewBox="0 0 560 104" role="img" aria-label="Merkle tree of the network's neurons"></svg>
+        <div id="verdict" class="verdict" aria-live="polite"></div>
+      </div>
+    </div>
+    <div class="foot">
+      <p id="dispute-note" class="note"></p>
+      <button id="to-apply" class="primary">Go to the fee</button>
+    </div>
+  </section>
+
+  <!-- 5 ------------------------------------------------------------------------------------- -->
+  <section class="act" id="act-apply">
+    <div class="lede">
+      <h2>After an hour unchallenged it is final. The oracle uses it only if it is about its own ticks.</h2>
+      <p><code>apply(id, end)</code> rebuilds the window that ends at move <code>end</code> from the oracle's storage, requires the claim's committed input hash to be its hash, then asks the arbiter for <code>result(id)</code>, which answers only for a final claim.</p>
+    </div>
+    <div class="grid apply-grid">
+      <div class="panel">
+        <p class="label">Clock, claim and fee</p>
+        <div class="row wrap">
+          <button id="forward" class="ghost">Move the clock one hour</button>
+          <button id="finalize" class="ghost">Finalize the claim</button>
+          <button id="apply" class="primary">apply(id, 144)</button>
+        </div>
+        <div id="apply-out" class="finding small">No claim yet.</div>
+        <div class="fee-now"><div><p class="label">fee() now</p><div id="fee-value" class="digit">?</div></div><p id="fee-detail" class="note"></p></div>
+        <p class="label spaced" id="apply-code-label">The check that refuses a claim about other bytes</p>
+        <pre id="apply-code" class="code"></pre>
+        <div class="row spaced"><button id="again" class="ghost">Post another claim</button><button id="restart" class="ghost">Pick another window</button></div>
+      </div>
+      <div class="panel">
+        <p class="label">Every transaction so far, as mined in this tab</p>
+        <div class="log-wrap"><table id="log" class="log">
+          <thead><tr><th>Who</th><th>Call</th><th class="n">Gas</th><th>Outcome</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p id="route-note" class="note small-note spaced"></p>
+      </div>
+    </div>
+  </section>
+</main>
+<script>window.TENSILE_FEE_ASSETS=/*ASSETS*/null;</script>
+<script>/*SCRIPT*/</script>
+</body>
+</html>
