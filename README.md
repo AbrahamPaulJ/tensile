@@ -23,7 +23,10 @@ in Fe: [a fee tier for an AMM pool](examples/amm-fee/README.md), predicted from 
 USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last
 four hours"), where the contract rebuilds the model's input from ticks it read itself; and
 [a scam-risk score for Ethereum accounts](examples/address-risk/README.md) (89.35% against a baseline of
-83.37%). Four models from 1,042 to 109,386 parameters show
+83.37%). **[Try the fee tier live](https://abrahampaulj.github.io/tensile/fee/)**: the `examples/amm-fee`
+contracts run in your browser on a year of real pool ticks, `FeeOracle` builds the model's input from the
+ticks it observes, a false claim is slashed by re-running one neuron, and a claim that is correct about
+another window is refused, which is why the consumer checks the input hash. Four models from 1,042 to 109,386 parameters show
 [where a dispute pays and where it does not](#use-it-with-your-own-network).
 
 **For a judge with five minutes**, from the repository root:
