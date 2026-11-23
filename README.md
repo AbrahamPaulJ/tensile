@@ -7,11 +7,14 @@ its types, runs natively and in WebAssembly to classify, and on the EVM to settl
 answer posted on-chain is proven false by re-running a single neuron, at 9.4% of the gas of running the
 whole network. An honest answer, claimed and finalised with no dispute, costs 15.6%.
 
-**[Try it live: abrahampaulj.github.io/tensile/demo](https://abrahampaulj.github.io/tensile/demo/)**, in the browser:
-no wallet, no install, no server. **[Watch it](https://abrahampaulj.github.io/tensile/#video)**, two and a quarter
-minutes. **[The project page](https://abrahampaulj.github.io/tensile/)** has both. The same page is
-[`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained file that also opens from disk, and the video is
-[`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
+[![A false claim is slashed: the contract proves the neuron's weights against the model's Merkle root and re-runs that one neuron](docs/img/dispute.gif)](https://abrahampaulj.github.io/tensile/demo/)
+
+**[Try it live](https://abrahampaulj.github.io/tensile/demo/)** in the browser: no wallet, no install, no
+server. **[Watch it](https://abrahampaulj.github.io/tensile/#video)**, two and a quarter minutes (the clip above
+is 14 seconds of it). **[See it on Sepolia](docs/sepolia.md)**: the same bytecode, three false claims slashed
+and one honest claim finalised, every transaction linked. **[The project page](https://abrahampaulj.github.io/tensile/)**
+has all three. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
+file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
 
 **For a judge with five minutes**, from the repository root:
 
@@ -33,8 +36,11 @@ The dispute is worth nothing unless the step re-run on-chain computes *exactly* 
 computed, down to the rounding of a negative number. Usually these are two code bases in two languages,
 kept in step by hope.
 
-Tensile is for people who want to build on verifiable inference, and for Fe builders who want a library
-of typed numeric code that compiles to both backends.
+Who would use it: a contract that needs a model's answer (a risk score before a loan, a classifier
+gating a payout) and cannot afford to compute it. An operator runs the model off-chain and posts the
+answer with a bond. Anyone who doubts it runs the same Fe kernel on their own machine, and one
+transaction settles who was right. The consuming contract reads `result(id)` once the claim is final.
+Tensile is also for Fe builders who want typed numeric code that compiles to every backend.
 
 ## Approach
 
@@ -56,6 +62,10 @@ of typed numeric code that compiles to both backends.
   (`UFixed<D>`, a power-of-ten scale). A network needs signed values with a binary point: 8-bit
   weights and activations packed 32 to a word, 32-bit accumulators, and requantisation as an
   arithmetic shift. `Q<F>` is that, an `i32` with `F` fractional bits, so it is its own type.
+- **Why not `core::bytes::PackedBytes`.** `Packed<N>` has the same layout, 32 signed bytes to a word.
+  `PackedBytes` keeps its field private and is built only by `from_array`, which the compile-time
+  evaluator cannot run over this model's 25,088 weights (`docs/fe-notes.md`, section 4), so the weights
+  could not be a constant. `Packed<N>` is built from words, so the generator can write them as literals.
 - **Built on `std` wherever `std` has it.** Proofs are checked by `std::evm::merkle`, the bond is a
   `Wei`, the window a `Duration` and deadlines `Timestamp`s from `std::evm::units`, credits live in a
   `StorageMap`. The only arithmetic Tensile adds is the part the standard library does not have.
@@ -99,6 +109,24 @@ that it can send ETH:
 // ingots/onchain/src/arbiter.fe
 Finalize { id } uses (ctx, count, mut claims, mut credits, mut burned, mut log) {
 Withdraw -> Wei uses (ctx, mut call, mut credits, mut log) {
+```
+
+And the kernel defines an effect of its own. A forward pass shows every hidden layer to a `Probe`, whose
+method is generic over the layer's width and scale, and the caller decides what is watching: the native
+CLI's trace mode supplies a printer, everything else supplies `Blind`, which looks at nothing. One
+forward pass serves both, with no flag and no second copy:
+
+```rust
+// ingots/tensile/src/probe.fe
+pub trait Probe {
+    fn hidden<const N: usize, const F: usize>(mut self, layer: usize, _ activations: Activations<N, F>)
+}
+
+// ingots/model/src/lib.fe
+pub fn forward(x: Input) -> Logits uses (probe: mut Probe) {
+
+// ingots/cli/src/lib.fe
+let logits = with (Probe = printer) {
 ```
 
 ## Architecture
@@ -243,11 +271,17 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   set, and hand-drawn digits are harder still.
 - **Small dense networks only.** No convolution. Layer sizes are compile-time. Layer 1's weights do not fit
   one contract, so `Network` reads them from two others.
-- **Not audited, and not deployed.** Nothing has been deployed to a public network. The mutation test's 59
-  faults were chosen by hand, so "59 of 59" is not a random sample. Do not hold real value with this.
+- **Not audited, and on a testnet only.** The contracts are on Sepolia (`docs/sepolia.md`), with test ETH,
+  and nowhere else. Sepolia already runs the next fork, which charges more for new storage, so its
+  receipts are higher than the figures here, which are measured under mainnet's current rules. The
+  mutation test's 59 faults were chosen by hand, so "59 of 59" is not a random sample. Do not hold real
+  value with this.
 - **Fe costs more gas than the best hand-written Solidity here:** 1.24x per neuron transaction and 1.26x
-  per claim (`docs/numbers.md`, section 3), and 2.36x the code. It is cheaper than the natural Solidity
-  assembly loop (0.78x). Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
+  per claim (`docs/numbers.md`, section 3), and 2.36x the code. This is like for like: the Solidity twin
+  is the best hand-written version found, and its arbiter passes the same Foundry suite. Fe is cheaper than the natural Solidity
+  assembly loop (0.78x). Most of the 1.24x is a choice, not the compiler: a kernel written for the EVM
+  alone, unrolled over 256-bit words, costs 1.06x (section 5), but it is eight times slower natively, and
+  this entry ships one kernel for every target. Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
   0.03%, and solc without via-IR cannot compile the arbiter's twin at all, "Stack too deep" (section 6).
 - **Pinned to Fe 26.5.1, and it needs that version.** Fe 26.6.0 and 26.7.0 came out during the contest
   and change the language under this code. Tried on 26.7.0 on 2026-11-23: `tensile`, `model` and

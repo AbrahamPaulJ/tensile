@@ -1,0 +1,14 @@
+{"label": "RowsLow", "hash": "0x7e1ed7f77dbc5c67401918f6bf9c1c29b124a07abec20729718798eb3c8606fd", "block": 12196124, "gasUsed": 20257793, "status": 1, "address": "0x648b3e658cf00618315b8c8a3aaf91185c0f933d"}
+{"label": "RowsHigh", "hash": "0x8141bcf4a9a86afea390e7080d992da54153ac9804304bb36b4d514ca5b41ba9", "block": 12196125, "gasUsed": 20292887, "status": 1, "address": "0x26028661c4b41c7e1fe03b96218a562aedc9369c"}
+{"label": "Network", "hash": "0x018755cc9ceada0c8650d36f0cbaaf0dea470984a160565ccd839992eebfb999", "block": 12196126, "gasUsed": 13048046, "status": 1, "address": "0xceb27b6fcf5e24b7ccceb641ad673256fff5b628"}
+{"label": "Arbiter", "hash": "0x239e876e04d371cd15b114878eec1866c544626c73b66a85d5d51e121b51a794", "block": 12196127, "gasUsed": 18365115, "status": 1, "address": "0x0645964d66b7fb8e53ae96064fb6669e2b3adaa5"}
+{"label": "claim honest", "hash": "0xd110b3a2232163d3508820c941b0bbf9efd121a1857672b3d7cf9c0f7c2dfdb3", "block": 12196128, "gasUsed": 949573, "status": 1}
+{"label": "claim false hidden", "hash": "0xfc788b42e47a2816c5eec3f9d8fec2372a048bbc0addfe28ac3c97c099246610", "block": 12196129, "gasUsed": 851653, "status": 1}
+{"label": "claim false output", "hash": "0x2ff5cf6ef053e25fd0755393227d340a524c7472141a61719d085bb7b4ef5c56", "block": 12196132, "gasUsed": 851653, "status": 1}
+{"label": "claim false class", "hash": "0x313212146b44b41ed2d59a56c9ed871124a75b59535a523cea95a233d9429183", "block": 12196133, "gasUsed": 851653, "status": 1}
+{"label": "challengeNeuron1", "hash": "0x7c435cca2059114ef790e499e42c809cafdf5dd818a74131b6e280db04586997", "block": 12196134, "gasUsed": 355902, "status": 1}
+{"label": "challengeNeuron2", "hash": "0xc87e0c0553560c62b8f188a8a3079d853140becf7dd7886e1344adbf5f6ef53e", "block": 12196135, "gasUsed": 88742, "status": 1}
+{"label": "challengeClass", "hash": "0x7583543c9aef221e6c03e70c0d5275ba989e1e6b1e375ddfa4a69b1a204f7674", "block": 12196136, "gasUsed": 79140, "status": 1}
+{"label": "estimate classify", "gasUsed": 1907017, "estimate": true}
+{"label": "finalize", "hash": "0x058f06356bac46231f28b38984375d78ba617aa1136c9f1bfb62f926ee73917e", "block": 12196181, "gasUsed": 57434, "status": 1}
+{"label": "withdraw", "hash": "0x4f0d499eb2e3f78314dac819dd2003fc0f6083f3bafd4072bfe88b96470b2d95", "block": 12196182, "gasUsed": 30717, "status": 1}

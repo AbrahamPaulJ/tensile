@@ -36,3 +36,6 @@ spike/proofs/
 # wasm spike scratch output
 spike/wasm/out/
 spike/wasm/*.log
+
+# Local tool state (agent worktrees).
+.claude/

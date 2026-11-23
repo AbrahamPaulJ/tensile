@@ -32,10 +32,12 @@ def public_files():
 def tokens(folder):
     found = set()
     for name in os.listdir(folder):
-        if name not in ("fe-challenge-registration.md", "fe-zuliprc"):
+        if name not in ("fe-challenge-registration.md", "fe-zuliprc", "fe-sepolia-key.txt"):
             continue
         with open(os.path.join(folder, name), "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
+        # The testnet account's address is public (deploy/sepolia.jsonl); its key is not.
+        text = "\n".join(line for line in text.split("\n") if not line.startswith(("address=", "#")))
         found |= set(re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", text))
         found |= set(re.findall(r"https?://[^\s)>\]]+", text))
         found |= set(re.findall(r"\b[A-Za-z0-9_-]{16,}\b", text))
