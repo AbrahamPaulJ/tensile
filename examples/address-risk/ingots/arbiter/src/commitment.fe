@@ -1,0 +1,159 @@
+//! The neuron leaf of the model commitment (`docs/spec-dispute.md` section 2).
+//!
+//! `leaf(l, j) = keccak256("tensile.neuron.v0" || u256(l) || u256(j) || i256(bias) || row words)`.
+//! The arbiter rebuilds the leaf from the row and bias a challenger sends and
+//! verifies it against the committed root with `std::evm::merkle::verify`, so
+//! only a committed row can be used in a challenge, and only at its own
+//! position. `tools/gen_tree.py` is the off-chain twin of this function.
+use core::num::IntWord
+use core::ptr::{self, MemSlice}
+use model::{commitment, layer1, layer2, layer3}
+use std::evm::{merkle, packed}
+
+/// The domain tag at the start of every leaf preimage.
+pub const TAG: String<17> = "tensile.neuron.v0"
+
+/// The leaf of neuron `neuron` of layer `layer` (1-based) with `bias` and the
+/// packed weight row `row` (`N` words). The bias is sign-extended to 256 bits.
+pub fn leaf<const N: usize>(layer: u256, neuron: u256, bias: i32, row: [u256; N]) -> u256 {
+    var preimage = packed::Packed::with_capacity(bytes: 17 + 3 * 32 + 32 * N)
+    preimage.string(TAG)
+    preimage.u256(layer)
+    preimage.u256(neuron)
+    preimage.u256(bias.to_word())
+    for word in row {
+        preimage.u256(word)
+    }
+    preimage.keccak256()
+}
+
+/// A proof given as an array, in the form `merkle::verify` reads.
+fn nodes<const N: usize>(_ proof: [u256; N]) -> ref MemSlice<u256> {
+    var array = unsafe {
+        ptr::alloc_array<u256>(N)
+    }
+    for i in 0 .. N {
+        array[i] = proof[i]
+    }
+    array.as_slice()
+}
+
+/// The leaf of layer 1, neuron `j`, from the model ingot's own row and bias.
+fn leaf1(_ j: usize) -> u256 {
+    leaf(
+        layer: 1,
+        neuron: j as u256,
+        bias: layer1::bias(j).raw(),
+        row: layer1::row(j).words(),
+    )
+}
+
+/// The leaf of layer 2, neuron `j`.
+fn leaf2(_ j: usize) -> u256 {
+    leaf(
+        layer: 2,
+        neuron: j as u256,
+        bias: layer2::bias(j).raw(),
+        row: layer2::row(j).words(),
+    )
+}
+
+/// The leaf of layer 3, neuron `j`.
+fn leaf3(_ j: usize) -> u256 {
+    leaf(
+        layer: 3,
+        neuron: j as u256,
+        bias: layer3::bias(j).raw(),
+        row: layer3::row(j).words(),
+    )
+}
+
+#[test]
+fn leaves_equal_the_generator() {
+    assert!(leaf1(0) == commitment::LEAF_1_0)
+    assert!(leaf1(31) == commitment::LEAF_1_31)
+    assert!(leaf2(0) == commitment::LEAF_2_0)
+    assert!(leaf2(15) == commitment::LEAF_2_15)
+    assert!(leaf3(0) == commitment::LEAF_3_0)
+    assert!(leaf3(1) == commitment::LEAF_3_1)
+}
+
+#[test]
+fn proofs_verify_against_the_root() {
+    let root = commitment::MODEL_ROOT
+    assert!(
+        merkle::verify(proof: nodes(commitment::PROOF_1_0), root, leaf: leaf1(0)),
+    )
+    assert!(
+        merkle::verify(
+            proof: nodes(commitment::PROOF_1_31),
+            root,
+            leaf: leaf1(31),
+        ),
+    )
+    assert!(
+        merkle::verify(proof: nodes(commitment::PROOF_2_0), root, leaf: leaf2(0)),
+    )
+    assert!(
+        merkle::verify(
+            proof: nodes(commitment::PROOF_2_15),
+            root,
+            leaf: leaf2(15),
+        ),
+    )
+    assert!(
+        merkle::verify(proof: nodes(commitment::PROOF_3_0), root, leaf: leaf3(0)),
+    )
+    assert!(
+        merkle::verify(proof: nodes(commitment::PROOF_3_1), root, leaf: leaf3(1)),
+    )
+}
+
+#[test]
+fn a_row_does_not_verify_at_another_position() {
+    let root = commitment::MODEL_ROOT
+    // Row 0 of layer 1 presented as neuron 1, as layer 2, and with another bias.
+    let moved = leaf(
+        layer: 1,
+        neuron: 1,
+        bias: layer1::bias(0).raw(),
+        row: layer1::row(0).words(),
+    )
+    let other_layer = leaf(
+        layer: 2,
+        neuron: 0,
+        bias: layer1::bias(0).raw(),
+        row: layer1::row(0).words(),
+    )
+    let other_bias = leaf(
+        layer: 1,
+        neuron: 0,
+        bias: layer1::bias(0).raw() + 1,
+        row: layer1::row(0).words(),
+    )
+    assert!(
+        !merkle::verify(proof: nodes(commitment::PROOF_1_0), root, leaf: moved),
+    )
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::PROOF_1_0),
+            root,
+            leaf: other_layer,
+        ),
+    )
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::PROOF_1_0),
+            root,
+            leaf: other_bias,
+        ),
+    )
+    // The right leaf with the proof of another neuron.
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::PROOF_1_31),
+            root,
+            leaf: leaf1(0),
+        ),
+    )
+}

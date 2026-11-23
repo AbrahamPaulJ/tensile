@@ -1,0 +1,71 @@
+//! What the arbiter stores about a claim, and the commitments it stores.
+use core::abi::{AbiSize, Encode}
+use core::marker::Copy
+use core::num::IntWord
+use core::ptr
+use std::abi::{DynArray, Sol}
+use std::evm::{Address, Timestamp, Wei, keccak_words}
+
+/// One claim in storage (`docs/spec-dispute.md` section 3). The vectors
+/// themselves are only in the `Claimed` event and the calldata; a challenge
+/// must present vectors that hash to these commitments.
+///
+/// Fields narrower than a word share a slot, in declaration order: the class
+/// and status bytes do. `Address` is a whole word in Fe, so a record takes
+/// eight slots: four for the claimant, the two bytes, the bond and the
+/// deadline, and one per committed vector (`docs/fe-notes.md` M3.6 measured the
+/// seven slots of a two-layer model on anvil).
+pub struct Record {
+    /// Who posted the claim and receives the bond back on `Final`.
+    pub claimant: Address,
+    /// The claimed class.
+    pub class: u8,
+    /// `dispute::Status::code()`: 1 open, 2 slashed, 3 final. 0 means no claim.
+    pub status: u8,
+    /// The ETH attached to the claim, credited exactly once when it ends.
+    pub bond: Wei,
+    /// From this time on the claim can be finalised and no longer challenged.
+    pub deadline: Timestamp,
+    /// `keccak256` of the packed input words.
+    pub x0_hash: u256,
+    /// `keccak256` of the packed activation words of hidden layer 1.
+    pub hidden1_hash: u256,
+    /// `keccak256` of the packed activation words of hidden layer 2.
+    pub hidden2_hash: u256,
+    /// `keccak256` of the logits, each sign-extended to a 32-byte word.
+    pub logits_hash: u256,
+}
+
+impl Copy for Record {}
+
+/// The commitment to an int32 vector: `keccak256` of its elements as 32-byte
+/// two's complement words, the ABI encoding of `int32[N]` (`docs/spec.md`
+/// section 7). Solidity: `keccak256(abi.encode(logits))`.
+pub fn logits_hash<const N: usize>(_ logits: [i32; N]) -> u256 {
+    var words: [u256; N] = [0; N]
+    for j in 0 .. N {
+        words[j] = logits[j].to_word()
+    }
+    keccak_words(words)
+}
+
+/// `values` as a dynamic ABI array, the form an event field takes.
+pub fn dynamic<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
+where T: Encode<Sol> + AbiSize + Copy
+{
+    var array = unsafe {
+        ptr::alloc_array<T>(N)
+    }
+    for i in 0 .. N {
+        array[i] = values[i]
+    }
+    DynArray::from_slice(array.as_slice())
+}
+
+#[test]
+fn logits_hash_sign_extends_every_element() {
+    // keccak256(abi.encode(int32(-1), int32(2))): the first word is all ones.
+    let expected = keccak_words([u256::max(), 2])
+    assert!(logits_hash([-1, 2]) == expected)
+    assert!(logits_hash([1, 2]) != expected)
+}
