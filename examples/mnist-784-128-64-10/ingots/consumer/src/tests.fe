@@ -1,0 +1,93 @@
+//! Tests of `Tally` against the generated arbiter of this workspace, on
+//! reference sample 0.
+use arbiter::{Arbiter, ArbiterMsg}
+use ingot::{AlreadyCounted, Tally, TallyMsg}
+use model::{commitment, reference}
+use std::evm::{Address, Duration, Evm, Wei, is_error, seconds, wei}
+
+const GAS: u256 = 16777216
+const BOND: Wei = wei(1_000_000)
+
+/// An arbiter with the given window, a tally reading it, and the number of an
+/// honest claim about reference sample 0 posted to the arbiter.
+fn setup(window: Duration) -> (Address, Address, u256) uses (evm: mut Evm) {
+    let arbiter = evm
+        .create2<Arbiter>(
+            value: Wei::zero(),
+            args: (commitment::MODEL_ROOT, BOND, window),
+            salt: 0,
+        )
+    let tally = evm.create2<Tally>(value: Wei::zero(), args: (arbiter,), salt: 0)
+    let id: u256 = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: BOND,
+            message: ArbiterMsg::Claim {
+                x0: reference::X0.words(),
+                hidden1: reference::HIDDEN1_0.words(),
+                hidden2: reference::HIDDEN2_0.words(),
+                logits: reference::LOGITS0.values(),
+                class: reference::CLASS0.downcast_truncate(),
+            },
+        )
+    (arbiter, tally, id)
+}
+
+fn votes(tally: Address, class: u8) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: tally,
+        gas: GAS,
+        value: Wei::zero(),
+        message: TallyMsg::Votes { class },
+    )
+}
+
+#[test(balance = 10_000_000)]
+fn a_finalised_claim_is_counted_once() uses (evm: mut Evm) {
+    // A window of zero: the claim can be finalised at once.
+    let (arbiter, tally, id) = setup(window: seconds(0))
+    let expected: u8 = reference::CLASS0.downcast_truncate()
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::Finalize { id },
+    )
+    let class: u8 = evm
+        .call(
+            addr: tally,
+            gas: GAS,
+            value: Wei::zero(),
+            message: TallyMsg::Count { id },
+        )
+    assert!(class == expected)
+    assert!(votes(tally, class: expected) == 1)
+    let again = evm
+        .try_call(
+            addr: tally,
+            gas: GAS,
+            value: Wei::zero(),
+            message: TallyMsg::Count { id },
+        )
+    assert!(
+        !again.success() && is_error<AlreadyCounted>(again.returndata()),
+    )
+    assert!(votes(tally, class: expected) == 1)
+}
+
+#[test(balance = 10_000_000)]
+fn an_open_claim_cannot_be_counted() uses (evm: mut Evm) {
+    let (_, tally, id) = setup(window: seconds(1_000_000))
+    let outcome = evm
+        .try_call(
+            addr: tally,
+            gas: GAS,
+            value: Wei::zero(),
+            message: TallyMsg::Count { id },
+        )
+    assert!(!outcome.success())
+    assert!(
+        votes(tally, class: reference::CLASS0.downcast_truncate()) == 0,
+    )
+}

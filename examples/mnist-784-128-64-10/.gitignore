@@ -1,0 +1,5 @@
+# The MNIST test inputs and labels are byte for byte ref/out's; check.sh copies them here.
+out/inputs.bin
+out/labels.bin
+# Build outputs (the neuron tree, fe build artifacts, native binaries).
+build/

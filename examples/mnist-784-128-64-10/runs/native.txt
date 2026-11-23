@@ -1,0 +1,4 @@
+reference: 10000 samples of 784 bytes, 1000 traced, accuracy 9881 of 10000
+native/cli: classes 10000 samples, 0 mismatches, 17.12 s
+native/cli: trace    1000 samples (203000 values), 0 mismatching samples, 1.73 s
+diff_native: PASS, zero mismatches

@@ -1,0 +1,60 @@
+//! `Tally`: an example of a contract that consumes the arbiter's results.
+//!
+//! Hand-written, not generated. It counts one vote per finalised claim for the
+//! class that claim settled on. It never looks at an input, a weight or a
+//! logit: it asks the arbiter for `result(id)` through `ArbiterMsg`, the same
+//! typed message the arbiter receives, and `result` reverts unless the claim
+//! is `Final`. So an open claim or a slashed one cannot be counted, and the
+//! only trust the consumer adds is the arbiter's address.
+use arbiter::ArbiterMsg
+use std::evm::{Address, Call, Log, StorageMap}
+
+/// Claim `id` was counted as a vote for `class`.
+#[event]
+pub struct Counted {
+    #[indexed]
+    pub id: u256,
+    pub class: u8,
+}
+
+/// Claim `id` has already been counted.
+#[error]
+pub struct AlreadyCounted { pub id: u256 }
+
+pub msg TallyMsg {
+    /// Counts finalised claim `id` once. Returns its class. Reverts if the
+    /// claim is not final (the arbiter's revert) or was counted before.
+    #[selector = sol("count(uint256)")]
+    Count { id: u256 } -> u8,
+    /// Number of finalised claims counted for `class`.
+    #[selector = sol("votes(uint8)")]
+    Votes { class: u8 } -> u256,
+}
+
+/// Deployed with the address of the arbiter whose results it accepts. Its
+/// effects say what it can do: read another contract (`call`, not `mut call`,
+/// so it cannot send ETH or change the arbiter) and write its own storage.
+pub contract Tally uses (call: Call, log: mut Log) {
+    source: Address,
+    mut counted: StorageMap<u256, bool>,
+    mut votes: StorageMap<u8, u256>,
+
+    init(arbiter_address: Address) uses (mut source) { source = arbiter_address }
+
+    recv TallyMsg {
+        Count { id } -> u8 uses (call, source, mut counted, mut votes, mut log) {
+            if counted[id] {
+                revert_error(AlreadyCounted { id })
+            }
+            let class: u8 = source.static(ArbiterMsg::ResultOf { id })
+            counted[id] = true
+            votes[class] = votes[class] + 1
+            log.emit(Counted { id, class })
+            class
+        }
+
+        Votes { class } -> u256 uses (votes) {
+            votes[class]
+        }
+    }
+}

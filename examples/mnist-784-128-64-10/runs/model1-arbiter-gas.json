@@ -1,0 +1,81 @@
+{
+ "model": "mnist-784-32-10",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 0,
+ "arbiter_runtime_bytes": 11745,
+ "calls": [
+  {
+   "call": "claim",
+   "signature": "claim(uint256[25],uint256[1],int32[10],uint8)",
+   "estimate": 246113,
+   "gas_used": 246113,
+   "execution": 215537,
+   "calldata_bytes": 1188
+  },
+  {
+   "call": "challengeNeuron1 (784 inputs)",
+   "signature": "challengeNeuron1(uint256,uint256,uint256[25],uint256[1],uint256[25],int32,bytes32[])",
+   "estimate": 178662,
+   "gas_used": 178662,
+   "execution": 136618,
+   "calldata_bytes": 1988
+  },
+  {
+   "call": "challengeNeuron2 (32 inputs)",
+   "signature": "challengeNeuron2(uint256,uint256,uint256[1],int32[10],uint256[1],int32,bytes32[])",
+   "estimate": 73142,
+   "gas_used": 73142,
+   "execution": 43154,
+   "calldata_bytes": 708
+  },
+  {
+   "call": "challengeClass",
+   "signature": "challengeClass(uint256,int32[10])",
+   "estimate": 63540,
+   "gas_used": 63540,
+   "execution": 37936,
+   "calldata_bytes": 356
+  },
+  {
+   "call": "later challengeNeuron1 (784 inputs)",
+   "signature": "challengeNeuron1(uint256,uint256,uint256[25],uint256[1],uint256[25],int32,bytes32[])",
+   "estimate": 144462,
+   "gas_used": 144462,
+   "execution": 102418,
+   "calldata_bytes": 1988
+  },
+  {
+   "call": "later challengeNeuron2 (32 inputs)",
+   "signature": "challengeNeuron2(uint256,uint256,uint256[1],int32[10],uint256[1],int32,bytes32[])",
+   "estimate": 73142,
+   "gas_used": 73142,
+   "execution": 43154,
+   "calldata_bytes": 708
+  },
+  {
+   "call": "later challengeClass",
+   "signature": "challengeClass(uint256,int32[10])",
+   "estimate": 63540,
+   "gas_used": 63540,
+   "execution": 37936,
+   "calldata_bytes": 356
+  },
+  {
+   "call": "finalize",
+   "signature": "finalize(uint256)",
+   "estimate": 49034,
+   "gas_used": 49034,
+   "execution": 27842,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "withdraw (7 credits)",
+   "signature": "withdraw()",
+   "estimate": 35765,
+   "gas_used": 30096,
+   "execution": 9032,
+   "calldata_bytes": 4
+  }
+ ]
+}

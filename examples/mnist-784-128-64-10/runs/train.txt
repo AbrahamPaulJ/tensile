@@ -1,0 +1,31 @@
+﻿seed 20261124, numpy 2.3.3, sizes [784, 128, 64, 10], train 55000, validation 5000, test 10000
+[1/3] float training (30 epochs)
+  float epoch  5  train loss 0.0952  val acc 0.9766  val loss 0.0817
+  float epoch 10  train loss 0.0644  val acc 0.9778  val loss 0.0748
+  float epoch 15  train loss 0.0437  val acc 0.9834  val loss 0.0534
+  float epoch 20  train loss 0.0308  val acc 0.9854  val loss 0.0491
+  float epoch 25  train loss 0.0228  val acc 0.9872  val loss 0.0476
+  float epoch 30  train loss 0.0201  val acc 0.9864  val loss 0.0455
+  float: val acc 0.9864, test acc 0.9885 (151.6 s)
+[2/3] post-training quantisation, scale search on validation
+  layer 1: max|w| 0.8636, max output 11.8676 (99.9th percentile 6.5957)
+  layer 2: max|w| 0.6707, max output 14.2367 (99.9th percentile 9.6449)
+  layer 3: max|w| 0.6410
+    [7, 3, 7, 3, 7]  val acc 0.9862  val loss 0.0455  (best so far)
+    [7, 3, 7, 3, 8]  val acc 0.9862  val loss 0.0451  (best so far)
+    [7, 3, 7, 5, 7]  val acc 0.9864  val loss 0.0478  (best so far)
+    [7, 3, 8, 5, 7]  val acc 0.9866  val loss 0.0479  (best so far)
+    [7, 5, 7, 3, 7]  val acc 0.9866  val loss 0.0465  (best so far)
+    [7, 5, 7, 4, 7]  val acc 0.9868  val loss 0.0466  (best so far)
+    [7, 5, 8, 4, 8]  val acc 0.9868  val loss 0.0465  (best so far)
+  128 configurations scored
+  chosen [7, 5, 8, 4, 8]: PTQ val acc 0.9868, test acc 0.9881 (126.0 s)
+[3/3] writing examples\mnist-784-128-64-10\model\mnist-784-128-64-10.json
+  layer 1: weight_frac_bits 7, shift 9, acc frac bits 14, out frac bits 5, worst-case |acc| 973514 (int32 max 2147483647)
+  layer 2: weight_frac_bits 8, shift 9, acc frac bits 13, out frac bits 4, worst-case |acc| 360816 (int32 max 2147483647)
+  layer 3: weight_frac_bits 8, shift None, acc frac bits 12, out frac bits None, worst-case |acc| 293331 (int32 max 2147483647)
+RESULT method ptq
+RESULT float test accuracy   0.9885
+RESULT integer test accuracy 0.9881
+RESULT gap (float - integer) +0.04 percentage points
+RESULT time: float 151.6 s, ptq 126.0 s, total 278.9 s
