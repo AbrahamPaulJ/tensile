@@ -110,3 +110,41 @@ jobs:
         working-directory: demo
         env:
           PLAYWRIGHT_BUNDLED: "1"
+
+  fee-demo:
+    name: Fee-tier demo page (examples/amm-fee in the browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      # The reference inputs and labels are not committed: rebuilt from the ticks, standard library only.
+      - run: python3 -I examples/amm-fee/dataset.py
+      - run: npm ci
+        working-directory: demo
+      - run: npm run build:fee
+        working-directory: demo
+      - name: The committed page is the page these sources build
+        run: git diff --exit-code demo/dist/tensile-fee.html
+      - run: npm run test:fee
+        working-directory: demo
+      - run: npx playwright install --with-deps chromium
+        working-directory: demo
+      - run: npm run test:fee-ui
+        working-directory: demo
+        env:
+          PLAYWRIGHT_BUNDLED: "1"
+
+  fee-demo-bytecode:
+    name: Fee-tier demo embeds exactly what fe build produces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - run: fe --version
+      - name: demo/generated/fee-assets.json equals what fe build of examples/amm-fee and the committed data give
+        run: bash demo/fee_assets.sh --check

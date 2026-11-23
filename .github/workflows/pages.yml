@@ -30,6 +30,10 @@ jobs:
           cp demo/dist/tensile-demo.html _site/demo/index.html
           cp demo/dist/tensile-sepolia.html _site/sepolia/index.html
           cp demo/video/tensile-demo.mp4 _site/
+      - name: The fee-tier demo (demo/dist/tensile-fee.html), at /fee/
+        run: |
+          mkdir -p _site/fee
+          cp demo/dist/tensile-fee.html _site/fee/index.html
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
