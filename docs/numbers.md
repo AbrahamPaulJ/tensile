@@ -6,7 +6,7 @@ reference sample 0, each result checked against the NumPy reference or the proto
 is recorded. The demo page's chain reproduces the Fe figures of sections 1 and 2 exactly
 (`demo/test/run.mjs` compares them).
 
-fe 26.5.1 (149c758); forge Version: 1.9.0; solc 0.8.38, via-IR, optimiser 200 runs. Whole script: 747.7 s.
+fe 26.5.1 (149c758); forge Version: 1.9.0; solc 0.8.38, via-IR, optimiser 200 runs. Whole script: 769.0 s.
 
 ## 1. What the dispute saves
 
@@ -90,15 +90,15 @@ Each form is the same dot product, run through both backends and checked against
 
 | Form | gas() | per multiply-add | Transaction | Runtime bytes | Native, 10,000 samples |
 |---|---|---|---|---|---|
-| **kept: `u32` limbs** | 48,427 | 61.7 | 92,608 | 4,301 | 4.68 s (0 mismatches) |
-| `i256_loop` | 74,029 | 94.4 | 118,242 | 2,059 | 29.06 s (0 mismatches) |
-| `i256_signext` | 98,029 | 125.0 | 196,772 | 2,155 | 33.88 s (0 mismatches) |
-| `i256_unrolled` | 35,286 | 45.0 | 79,467 | 2,946 | 38.03 s (0 mismatches) |
-| `i64_lanes` | 105,641 | 134.7 | 165,039 | 2,722 | 2.85 s (0 mismatches) |
-| `u32_acc256` | 47,041 | 60.0 | 91,222 | 4,223 | 5.45 s (0 mismatches) |
-| `u64_acc256` | 51,941 | 66.2 | 96,122 | 3,911 | 6.15 s (0 mismatches) |
-| `u64_limbs` | 63,043 | 80.4 | 107,308 | 4,277 | 2.77 s (0 mismatches) |
-| `usize_limbs` | 60,075 | 76.6 | 104,461 | 2,723 | 34.46 s (0 mismatches) |
+| **kept: `u32` limbs** | 48,427 | 61.7 | 92,608 | 4,301 | 4.37 s (0 mismatches) |
+| `i256_loop` | 74,029 | 94.4 | 118,242 | 2,059 | 28.31 s (0 mismatches) |
+| `i256_signext` | 98,029 | 125.0 | 196,772 | 2,155 | 37.29 s (0 mismatches) |
+| `i256_unrolled` | 35,286 | 45.0 | 79,467 | 2,946 | 36.87 s (0 mismatches) |
+| `i64_lanes` | 105,641 | 134.7 | 165,039 | 2,722 | 2.62 s (0 mismatches) |
+| `u32_acc256` | 47,041 | 60.0 | 91,222 | 4,223 | 5.47 s (0 mismatches) |
+| `u64_acc256` | 51,941 | 66.2 | 96,122 | 3,911 | 5.99 s (0 mismatches) |
+| `u64_limbs` | 63,043 | 80.4 | 107,308 | 4,277 | 2.56 s (0 mismatches) |
+| `usize_limbs` | 60,075 | 76.6 | 104,461 | 2,723 | 39.64 s (0 mismatches) |
 
 ## 6. Other compiler settings
 
@@ -122,3 +122,34 @@ same result checks:
 The Solidity neuron row is the 32-lane version, the best found. `Network` has no Solidity twin.
 Without via-IR, solc 0.8.38 rejects `ArbiterTwin.sol` with "Stack too deep" (the script checks that
 it still does), so the arbiter's only Solidity baseline is the via-IR one.
+
+## 7. Fe 26.7.0
+
+The entry is pinned to Fe 26.5.1 and every figure above comes from it. The same sources also build
+on the 26.7.0 release (`tools/check_fe267.sh`; the native classifier `ingots/cli` does not, and is
+not part of this). The same contracts built with fe 26.7.0 (e6e6342) at its default `-O 1`, the same
+transactions and the same result checks:
+
+| Call | Fe 26.5.1, shipped | Fe 26.7.0 | 26.7.0 against 26.5.1 | Solidity, via-IR |
+|---|---|---|---|---|
+| `Network.classify` | 1,896,043 | 1,567,610 | -328,433 (-17.3%) |  |
+| `Network.trace` | 1,897,354 | 1,568,060 | -329,294 (-17.4%) |  |
+| one layer 1 neuron, transaction | 92,608 | 84,055 | -8,553 (-9.2%) | 74,673 |
+| one layer 1 neuron, execution | 54,588 | 46,035 | -8,553 (-15.7%) | 36,653 |
+| one layer 2 neuron, execution | 2,152 | 1,750 | -402 (-18.7%) | 1,423 |
+| `claim` | 246,113 | 220,215 | -25,898 (-10.5%) | 195,155 |
+| `challengeNeuron1 (784 inputs)` | 178,662 | 167,163 | -11,499 (-6.4%) | 143,442 |
+| `challengeNeuron2 (32 inputs)` | 73,142 | 70,731 | -2,411 (-3.3%) | 64,601 |
+| `challengeClass` | 63,540 | 62,385 | -1,155 (-1.8%) | 59,217 |
+| `finalize` | 49,034 | 47,799 | -1,235 (-2.5%) | 44,311 |
+| `withdraw (4 credits)` | 30,096 | 30,006 | -90 (-0.3%) | 29,895 |
+| `claim` + `finalize`, the honest path | 295,147 | 268,014 | -27,133 (-9.2%) | 239,466 |
+| `Arbiter` runtime bytes | 11,649 | 10,463 | -1,186 (-10.2%) | 4,940 |
+| `Network` runtime bytes | 8,251 | 6,384 | -1,867 (-22.6%) |  |
+| `NeuronCheck` runtime bytes | 4,301 | 3,263 | -1,038 (-24.1%) | 1,229 |
+| `RowsLow` runtime bytes | 12,971 | 12,975 | +4 (+0.0%) |  |
+| `RowsHigh` runtime bytes | 12,994 | 12,998 | +4 (+0.0%) |  |
+
+On 26.7.0, `classify` is 9.3% of the Osaka per-transaction cap, and a layer 1 dispute costs 10.7% of one
+`classify` on the same compiler. The Solidity column repeats sections 3 and 6: the 32-lane neuron
+and `ArbiterTwin`; `Network` and the weight contracts have no Solidity twin.

@@ -220,6 +220,49 @@ def main():
         w("Without via-IR, solc 0.8.38 rejects `ArbiterTwin.sol` with \"Stack too deep\" (the script checks that")
         w("it still does), so the arbiter's only Solidity baseline is the via-IR one.")
 
+    v267_path = os.path.join(work, "fe267-version.txt")
+    if os.path.exists(v267_path):
+        with open(v267_path, "r", encoding="utf-8") as f:
+            v267 = f.read().strip()
+        r267 = report(os.path.join(work, "report-fe267.txt"))
+        arb267 = arbiter(os.path.join(work, "arbiter-fe267.txt"))
+        size267 = sizes(os.path.join(work, "sizes-fe267.txt"))
+        n1_267, n2_267 = r267["NeuronCheck.neuron1 (Fe)"], r267["NeuronCheck.neuron2 (Fe)"]
+        w("")
+        w("## 7. Fe 26.7.0")
+        w("")
+        w("The entry is pinned to Fe 26.5.1 and every figure above comes from it. The same sources also build")
+        w("on the 26.7.0 release (`tools/check_fe267.sh`; the native classifier `ingots/cli` does not, and is")
+        w("not part of this). The same contracts built with %s at its default `-O 1`, the same" % v267)
+        w("transactions and the same result checks:")
+        w("")
+        w("| Call | Fe 26.5.1, shipped | Fe 26.7.0 | 26.7.0 against 26.5.1 | Solidity, via-IR |")
+        w("|---|---|---|---|---|")
+        rows = [
+            ("`Network.classify`", classify["used"], r267["Network.classify"]["used"], None),
+            ("`Network.trace`", trace["used"], r267["Network.trace"]["used"], None),
+            ("one layer 1 neuron, transaction", fe_n1["used"], n1_267["used"], sol_best["used"]),
+            ("one layer 1 neuron, execution", fe_n1["frame"], n1_267["frame"], sol_best["frame"]),
+            ("one layer 2 neuron, execution", fe_n2["frame"], n2_267["frame"], sol2_best["frame"]),
+        ]
+        for label, key in calls:
+            rows.append(("`%s`" % label, arb[key]["used"], arb267[key]["used"], twin[key]["used"]))
+        rows.append(("`claim` + `finalize`, the honest path",
+                     claim_gas + arb[calls[4][1]]["used"],
+                     arb267[calls[0][1]]["used"] + arb267[calls[4][1]]["used"],
+                     twin[calls[0][1]]["used"] + twin[calls[4][1]]["used"]))
+        solidity_bytes = {"Arbiter": twin_size, "NeuronCheck": sol_best["bytes"]}
+        for name in ["Arbiter", "Network", "NeuronCheck", "RowsLow", "RowsHigh"]:
+            rows.append(("`%s` runtime bytes" % name, size[name], size267[name], solidity_bytes.get(name)))
+        for label, old, new, sol in rows:
+            w("| %s | %s | %s | %s | %s |" % (label, n(old), n(new), delta(new, old), "" if sol is None else n(sol)))
+        w("")
+        w("On 26.7.0, `classify` is %.1f%% of the Osaka per-transaction cap, and a layer 1 dispute costs %.1f%% of one" % (
+            100 * r267["Network.classify"]["used"] / 16777216,
+            100 * arb267[calls[1][1]]["used"] / r267["Network.classify"]["used"]))
+        w("`classify` on the same compiler. The Solidity column repeats sections 3 and 6: the 32-lane neuron")
+        w("and `ArbiterTwin`; `Network` and the weight contracts have no Solidity twin.")
+
     path = os.path.join(ROOT, "docs", "numbers.md")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out) + "\n")
