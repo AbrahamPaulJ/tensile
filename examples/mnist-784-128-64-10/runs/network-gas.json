@@ -1,0 +1,21 @@
+{
+ "model": "mnist-784-128-64-10",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 0,
+ "classify": {
+  "estimate": 8219318,
+  "gas_used": 8219318,
+  "execution": 8193674,
+  "calldata_bytes": 804
+ },
+ "classify_samples_checked": 20,
+ "network_deployed_bytes": 22407,
+ "weight_contract_bytes": [
+  23499,
+  23522,
+  23522,
+  23522,
+  13538
+ ]
+}

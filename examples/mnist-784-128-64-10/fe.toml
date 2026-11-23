@@ -1,0 +1,4 @@
+[workspace]
+name = "mnist-784-128-64-10"
+version = "0.1.0"
+members = [{ path = "ingots/model", name = "model" }, { path = "ingots/arbiter", name = "arbiter" }, { path = "ingots/cli", name = "cli" }, { path = "ingots/network", name = "network" }, { path = "ingots/consumer", name = "consumer" }]

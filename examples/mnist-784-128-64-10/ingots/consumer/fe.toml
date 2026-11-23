@@ -1,0 +1,7 @@
+[ingot]
+name = "consumer"
+version = "0.1.0"
+
+[dependencies]
+arbiter = true
+model = true

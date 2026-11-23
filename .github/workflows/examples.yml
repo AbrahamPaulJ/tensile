@@ -1,0 +1,68 @@
+name: Examples
+
+# The arbiter generator and the models built with it (docs/USAGE.md). Separate from ci.yml, which
+# covers the shipped ingots.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FE_VERSION: v26.5.1
+  FOUNDRY_VERSION: v1.9.0
+
+jobs:
+  generator:
+    name: Arbiter generator, identity check and a model it has never seen
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install numpy==2.3.3
+      - run: fe --version
+      - name: The generated arbiter of the shipped model equals the hand-written one (source and bytecode)
+        run: bash tools/check_arbiter_gen.sh --bytecode
+      - name: The made-up model is the file its script writes
+        run: python3 examples/tiny/make_model.py && git diff --exit-code examples/tiny/model.json
+      - name: Bring your own model, end to end (reference, generate, fe test, build, native, anvil)
+        run: bash examples/tiny/check.sh
+
+  mnist-784-128-64-10:
+    name: MNIST 784-128-64-10, the whole check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: fe --version
+      # All of check.sh: it took 237 s on the development laptop, so nothing is cut for CI.
+      - run: bash examples/mnist-784-128-64-10/check.sh
+      - name: The generated sources and the recorded gas and sizes are what this run produced
+        run: >
+          git diff --exit-code --
+          examples/mnist-784-128-64-10/ingots
+          examples/mnist-784-128-64-10/fe.toml
+          examples/mnist-784-128-64-10/runs/arbiter-gas.json
+          examples/mnist-784-128-64-10/runs/network-gas.json
+          examples/mnist-784-128-64-10/runs/model1-arbiter-gas.json
+          examples/mnist-784-128-64-10/runs/model1-network-gas.json
+          examples/mnist-784-128-64-10/runs/sizes.json

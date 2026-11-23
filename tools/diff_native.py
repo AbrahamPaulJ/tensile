@@ -94,14 +94,20 @@ def main():
         with open(os.path.join(args.ref, name), "rb") as f:
             return f.read()
 
-    inputs, pred, labels = load("inputs.bin"), load("pred.bin"), load("labels.bin")
+    inputs, pred = load("inputs.bin"), load("pred.bin")
     reference = [json.loads(line) for line in load("trace.jsonl").decode("utf-8").splitlines()]
     if any(line["i"] != n for n, line in enumerate(reference)):
         raise SystemExit("trace.jsonl: samples are not numbered from 0 in order")
     sample_bytes = len(inputs) // len(pred)
-    correct = sum(1 for p, t in zip(pred, labels) if p == t)
-    print("reference: %d samples of %d bytes, %d traced, accuracy %d of %d" % (
-        len(pred), sample_bytes, len(reference), correct, len(labels)))
+    if os.path.exists(os.path.join(args.ref, "labels.bin")):
+        labels = load("labels.bin")
+        correct = sum(1 for p, t in zip(pred, labels) if p == t)
+        print("reference: %d samples of %d bytes, %d traced, accuracy %d of %d" % (
+            len(pred), sample_bytes, len(reference), correct, len(labels)))
+    else:
+        # Vectors without labels (tools/ref_vectors.py on inputs of your own): nothing to score.
+        print("reference: %d samples of %d bytes, %d traced, no labels" % (
+            len(pred), sample_bytes, len(reference)))
 
     failures = 0
     for binary in args.binaries:

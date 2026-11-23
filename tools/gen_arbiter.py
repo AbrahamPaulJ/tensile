@@ -48,6 +48,12 @@ NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "
                 "ten", "eleven", "twelve"]
 
 
+# The generated honest-claim test is one test up to this many neurons (the shipped model has 42).
+SINGLE_TEST_LEAVES = 64
+# Above that, each test challenges about CHUNK_BUDGET / leaves neurons, 32 at most.
+CHUNK_BUDGET = 8000
+
+
 class ModelError(ValueError):
     pass
 
@@ -1154,15 +1160,18 @@ def argmax_low(values):
     return best
 
 
-def tests_source(shape, vectors_dir):
+def tests_source(shape, vectors_dir, samples=3):
     s = shape
     with open(os.path.join(vectors_dir, "trace.jsonl"), "r", encoding="utf-8") as f:
-        trace = json.loads(f.readline())
+        traces = [json.loads(line) for line in f.readlines()[:samples]]
+    with open(os.path.join(vectors_dir, "inputs.bin"), "rb") as f:
+        inputs = [f.read(s.n_in) for _ in traces]
+    trace = traces[0]
     if trace["i"] != 0:
         raise ModelError("trace.jsonl does not start with sample 0")
-    for k in s.layers():
+    for k in s.hiddens():
         if s.outs[k - 1] < 3:
-            raise ModelError("the generated tests need at least three neurons in every layer")
+            raise ModelError("the generated tests need at least three neurons in every hidden layer")
     # The neuron of each layer whose value the tests change, with a neighbour on each side.
     probe = {k: (5 if s.outs[k - 1] >= 7 else 1) for k in s.layers()}
     # The logit the tests change by one: the first of 3, 4, .., 1, 2 whose change leaves the argmax
@@ -1179,6 +1188,23 @@ def tests_source(shape, vectors_dir):
             break
     if wrong_logit is None:
         raise ModelError("no logit of sample 0 can change by one without changing the class")
+
+    # The sample whose vectors stand in for "vectors of another claim": the first one that differs
+    # from sample 0 in the input, in every hidden vector (the first as the tests change it) and in
+    # the logits, so that each substitution really breaks one commitment.
+    claimed_first = list(trace["hidden"][0])
+    claimed_first[probe[1]] += -1 if claimed_first[probe[1]] == 127 else 1
+    other = None
+    for n in range(1, len(traces)):
+        differs = (inputs[n] != inputs[0] and traces[n]["hidden"][0] != claimed_first
+                   and all(traces[n]["hidden"][k] != trace["hidden"][k] for k in range(1, s.hidden_count))
+                   and traces[n]["logits"] != trace["logits"])
+        if differs:
+            other = n
+            break
+    if other is None:
+        raise ModelError("none of reference samples 1..%d differs from sample 0 in every vector; the "
+                         "generated tests need one that does" % (len(traces) - 1))
 
     tree = commitment(s.model)
     leaf_count = tree["leaf_count"]
@@ -1265,19 +1291,40 @@ def tests_source(shape, vectors_dir):
     def no_fraud(call):
         return I1 + "assert!(failed_with<NoFraud>(%s))" % call
 
-    # An honest claim.
-    out += [test, "fn an_honest_claim_survives_every_challenge() uses (evm: mut Evm) {",
-            I1 + "let arbiter = deploy(window: LONG)",
-            I1 + "let id = post(arbiter, honest())"]
-    for k in s.layers():
-        out += [I1 + "for j in 0 .. %d {" % s.outs[k - 1],
-                I1 + no_fraud("challenge%d(arbiter, id, j, honest())" % k),
-                I1 + "}"]
-    out += [no_fraud("challenge_class(arbiter, id, honest())"),
-            I1 + "assert!(status(arbiter, id) == OPEN)",
-            I1 + "assert!(credit(arbiter, account: evm.address()) == Wei::zero())",
-            I1 + "assert!(burned(arbiter) == Wei::zero())",
-            "}", ""]
+    # An honest claim. Every proof is rebuilt from all the leaves and the test EVM never frees
+    # memory, so a large tree does not fit one test (1,000,000,000 gas): up to SINGLE_TEST_LEAVES
+    # leaves it is one test, as in the hand-written suite; above that, one test per chunk of
+    # neurons, still covering every neuron.
+    honest_tail = [I1 + "assert!(status(arbiter, id) == OPEN)",
+                   I1 + "assert!(credit(arbiter, account: evm.address()) == Wei::zero())",
+                   I1 + "assert!(burned(arbiter) == Wei::zero())",
+                   "}", ""]
+    if leaf_count <= SINGLE_TEST_LEAVES:
+        out += [test, "fn an_honest_claim_survives_every_challenge() uses (evm: mut Evm) {",
+                I1 + "let arbiter = deploy(window: LONG)",
+                I1 + "let id = post(arbiter, honest())"]
+        for k in s.layers():
+            out += [I1 + "for j in 0 .. %d {" % s.outs[k - 1],
+                    I1 + no_fraud("challenge%d(arbiter, id, j, honest())" % k),
+                    I1 + "}"]
+        out += [no_fraud("challenge_class(arbiter, id, honest())")] + honest_tail
+    else:
+        chunk = max(1, min(32, CHUNK_BUDGET // leaf_count))
+        for k in s.layers():
+            for first in range(0, s.outs[k - 1], chunk):
+                end = min(first + chunk, s.outs[k - 1])
+                out += [test,
+                        "fn an_honest_claim_survives_challenges_%d_to_%d_of_layer_%d() uses (evm: mut Evm) {"
+                        % (first, end - 1, k),
+                        I1 + "let arbiter = deploy(window: LONG)",
+                        I1 + "let id = post(arbiter, honest())",
+                        I1 + "for j in %d .. %d {" % (first, end),
+                        I1 + no_fraud("challenge%d(arbiter, id, j, honest())" % k),
+                        I1 + "}"] + honest_tail
+        out += [test, "fn an_honest_claim_survives_the_class_challenge() uses (evm: mut Evm) {",
+                I1 + "let arbiter = deploy(window: LONG)",
+                I1 + "let id = post(arbiter, honest())",
+                no_fraud("challenge_class(arbiter, id, honest())")] + honest_tail
 
     # One wrong hidden value per hidden layer.
     for k in s.hiddens():
@@ -1403,12 +1450,12 @@ def tests_source(shape, vectors_dir):
             I1 + "let claimed = wrong_%s(%d)" % (s.hid(1), j),
             I1 + "let id = post(arbiter, claimed)",
             I1 + "var other_input = claimed",
-            I1 + "other_input.x0 = reference::X1.words()"]
+            I1 + "other_input.x0 = reference::X%d.words()" % other]
     for k in s.hiddens():
         out += [I1 + "var other_%s = claimed" % s.hid(k),
-                I1 + "other_%s.%s = reference::HIDDEN%d_1.words()" % (s.hid(k), s.hid(k), k)]
+                I1 + "other_%s.%s = reference::HIDDEN%d_%d.words()" % (s.hid(k), s.hid(k), k, other)]
     out += [I1 + "var other_logits = claimed",
-            I1 + "other_logits.logits = reference::LOGITS1.values()",
+            I1 + "other_logits.logits = reference::LOGITS%d.values()" % other,
             I1 + "assert!(failed_with<InputMismatch>(challenge1(arbiter, id, %d, other_input)))" % j]
     for k in s.hiddens():
         out += [
@@ -1440,7 +1487,7 @@ pub use commitment::leaf
 """
 
 
-def generate(model, vectors_dir=None, lib=False):
+def generate(model, vectors_dir=None, lib=False, samples=3):
     """Return {file name: source} for the arbiter ingot's src directory."""
     shape = Shape(model)
     files = {
@@ -1450,7 +1497,7 @@ def generate(model, vectors_dir=None, lib=False):
         "commitment.fe": commitment_fe_source(shape),
     }
     if vectors_dir is not None:
-        files["arbiter_tests.fe"] = tests_source(shape, vectors_dir)
+        files["arbiter_tests.fe"] = tests_source(shape, vectors_dir, samples)
     if lib:
         sizes = " -> ".join([str(shape.n_in)] + [str(n) for n in shape.outs])
         files["lib.fe"] = fill(LIB, NAME=model["name"], SIZES=sizes)
@@ -1461,8 +1508,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", default=os.path.join(ROOT, "ref", "out", "model.json"))
     parser.add_argument("--vectors", default=None,
-                        help="directory with trace.jsonl, to generate arbiter_tests.fe (the model "
+                        help="directory with inputs.bin and trace.jsonl, to generate arbiter_tests.fe (the model "
                              "ingot must then hold at least two reference samples)")
+    parser.add_argument("--samples", type=int, default=3,
+                        help="number of reference samples the model ingot holds (tools/gen_fe.py "
+                             "--samples)")
     parser.add_argument("--lib", action="store_true", help="also write lib.fe")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
@@ -1470,7 +1520,7 @@ def main():
     with open(args.model, "r", encoding="utf-8") as f:
         model = json.load(f)
     try:
-        files = generate(model, args.vectors, args.lib)
+        files = generate(model, args.vectors, args.lib, args.samples)
     except ModelError as error:
         print("gen_arbiter: %s" % error, file=sys.stderr)
         return 1
