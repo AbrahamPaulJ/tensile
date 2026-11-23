@@ -69,8 +69,8 @@ MUTANTS = [
     ("n2_always_fraud", ARB, FRAUD, "Action::Challenge(true)", 1, "an honest claim can be slashed"),
     ("n1_never_fraud", ARB, FRAUD, "Action::Challenge(false)", 0, "a false hidden value stands"),
     ("n2_never_fraud", ARB, FRAUD, "Action::Challenge(false)", 1, "a false logit stands"),
-    ("n1_reads_neuron_0", ARB, "Hidden::from_words(hidden).get(j as usize)", "Hidden::from_words(hidden).get(0)", 0, "compares with the wrong hidden value"),
-    ("n2_reads_logit_0", ARB, "let claimed = logits[j as usize]", "let claimed = logits[0]", 0, "compares with the wrong logit"),
+    ("n1_reads_neuron_0", ARB, "Hidden::from_words(hidden).get(j.downcast_truncate())", "Hidden::from_words(hidden).get(0)", 0, "compares with the wrong hidden value"),
+    ("n2_reads_logit_0", ARB, "let claimed = logits[j.downcast_truncate()]", "let claimed = logits[0]", 0, "compares with the wrong logit"),
     ("class_never_fraud", ARB, "let fraud = Logits::from_raw(logits).argmax() != record.class as usize", "let fraud = false", 0, "a false class stands"),
     ("class_always_fraud", ARB, "let fraud = Logits::from_raw(logits).argmax() != record.class as usize", "let fraud = true", 0, "an honest class can be slashed"),
     # Settlement

@@ -33,6 +33,25 @@ jobs:
       - run: bash tools/m2_check.sh
       - run: bash tools/m3_check.sh
 
+  fe-267:
+    name: Same sources on Fe 26.7.0 (kernel, model, rule, contracts)
+    runs-on: ubuntu-latest
+    env:
+      # The entry is pinned to 26.5.1 (the job above). This job shows that the four ingots that do
+      # not use the native I/O API also pass `fe check` and `fe test` on the 26.7.0 release, from
+      # the same source. `ingots/cli` needs 26.5.1, so tools/check_fe267.sh names each ingot.
+      FE_267_URL: https://github.com/argotorg/fe/releases/download/v26.7.0/fe_linux_amd64
+      FE_267_SHA256: 4ef2b818e260f0ba0b0af4bd78468dda589dc4949503fffaef25d8188e5107d5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download the Fe 26.7.0 release binary and check its hash
+        run: |
+          mkdir -p "$HOME/fe-267"
+          curl -fsSL -o "$HOME/fe-267/fe" "$FE_267_URL"
+          echo "$FE_267_SHA256  $HOME/fe-267/fe" | sha256sum -c -
+          chmod +x "$HOME/fe-267/fe"
+      - run: FE267="$HOME/fe-267/fe" bash tools/check_fe267.sh
+
   wasm:
     name: WebAssembly build (Fe master, pinned)
     runs-on: ubuntu-latest
