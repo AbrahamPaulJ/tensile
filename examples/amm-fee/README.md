@@ -9,7 +9,7 @@ the pool, and applies a claim only if the claim's committed input hash is the ha
 
 Everything below is measured on one year of the mainnet Uniswap v3 USDC/WETH 0.05% pool
 (`data/SOURCE.md`). The generated tables are in `RESULTS.md`; `bash check.sh` rebuilds them and
-checks every figure (248 s here, no download, no NumPy).
+checks every figure (248 and 262 s in its last two runs here; no download, no NumPy).
 
 ## What it predicts, and how well
 
@@ -81,9 +81,10 @@ honest path costs 62.3% of simply running the network on-chain, and once the con
 decision against 466,408 for calling `Network.classify` directly: 13% less, in exchange for a
 bond, a dispute window and a watcher. (The direct route would also have to store the fee; that
 was not measured.) The mechanism pays when the model is larger (the two columns on the right),
-because a claim grows with the layer widths and a whole run with the number of weights. This example is here for the other half of the argument: a use where the input is
-on-chain data, the answer is consumed by a contract, and the model is better than the obvious
-rule. It does not show that a larger fee model would predict better.
+because a claim grows with the layer widths and a whole run with the number of weights. This
+example is here for the other half of the argument: a use where the input is on-chain data, the
+answer is consumed by a contract, and the model is better than the obvious rule. It does not show
+that a larger fee model would predict better.
 
 ## The consumer: `FeeOracle` (`ingots/consumer`, hand-written Fe, 8 tests)
 
@@ -92,9 +93,9 @@ rule. It does not show that a larger fee model would predict better.
 - `inputWords(end)` returns the packed 144 moves that end at move `end`: what a keeper runs the
   model on.
 - `apply(id, end)` hashes that window, requires `claimHashes(id)` of the arbiter to carry the same
-  input hash, and reads `result(id)`, which reverts unless the claim is final. Then `fee()`
-  returns the tier's fee for the 30 intervals the claim covers (the gap and the horizon), and the
-  default fee after that, so a keeper that stops only costs the pool its dynamic fee.
+  input hash, and reads `result(id)`, which reverts unless the claim is final. From then
+  until 30 intervals after the window's end (the gap and the horizon) `fee()` returns the tier's
+  fee, and the default fee after that, so a keeper that stops only costs the pool its dynamic fee.
 - Its effects are `ctx: Ctx, call: Call, log: mut Log`: it can read other contracts and write its
   own storage, and cannot send ETH or change the pool or the arbiter.
 
