@@ -83,3 +83,7 @@ sends a challenge is credited half the bond.
 | 9 | [`0x3589d190667e...`](https://sepolia.etherscan.io/tx/0x3589d190667e52d687c4c8dfd0028548a4d5656a6605f18f5014c61278e936b9) | sample 10, hidden neuron 0 changed by one |
 | 10 | [`0xe6c1f0b2d677...`](https://sepolia.etherscan.io/tx/0xe6c1f0b2d677f90f65f888298ab97cceffe273229957f15dced6c5953fefec9a) | sample 11, output 0 changed by one |
 | 11 | [`0xc0f72bd92ee4...`](https://sepolia.etherscan.io/tx/0xc0f72bd92ee49c0ad844b4471914f28e202f77d6db45e006e84d9bc7f98fee50) | sample 12, honest |
+
+Claim 9 has since been slashed, to show the path end to end: the calldata is what the watcher
+prints (`node demo/test/sepolia_calldata.mjs 9`), sent unchanged with `cast send`:
+[`0x9f9710bbdfec...`](https://sepolia.etherscan.io/tx/0x9f9710bbdfec3baefbde20f5b37aae6acd8e3ace81307a2e876d49994e2c6068), 356,478 gas.

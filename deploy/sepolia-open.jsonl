@@ -11,3 +11,4 @@
 {"label": "claim 9", "hash": "0x3589d190667e52d687c4c8dfd0028548a4d5656a6605f18f5014c61278e936b9", "block": 12196208, "gasUsed": 852582, "status": 1, "id": "9", "sample": "10", "posted": "hidden:0"}
 {"label": "claim 10", "hash": "0xe6c1f0b2d677f90f65f888298ab97cceffe273229957f15dced6c5953fefec9a", "block": 12196209, "gasUsed": 852277, "status": 1, "id": "10", "sample": "11", "posted": "logit:0"}
 {"label": "claim 11", "hash": "0xc0f72bd92ee49c0ad844b4471914f28e202f77d6db45e006e84d9bc7f98fee50", "block": 12196210, "gasUsed": 852282, "status": 1, "id": "11", "sample": "12", "posted": "honest"}
+{"label": "slash 9", "hash": "0x9f9710bbdfec3baefbde20f5b37aae6acd8e3ace81307a2e876d49994e2c6068", "gasUsed": 356478, "status": 1, "id": "9", "how": "node demo/test/sepolia_calldata.mjs 9, then cast send"}

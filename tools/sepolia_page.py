@@ -130,5 +130,12 @@ if os.path.exists(OPEN):
         kind, _, j = r["posted"].partition(":")
         posted = POSTED[kind] % j if "%s" in POSTED[kind] else POSTED[kind]
         w("| %s | [`%s...`](%s/tx/%s) | sample %s, %s |" % (r["id"], r["hash"][:14], SCAN, r["hash"], r["sample"], posted))
+    for r in opened:
+        if r["label"].startswith("slash "):
+            w("")
+            w("Claim %s has since been slashed, to show the path end to end: the calldata is what the watcher"
+              % r["id"])
+            w("prints (`node demo/test/sepolia_calldata.mjs %s`), sent unchanged with `cast send`:" % r["id"])
+            w("[`%s...`](%s/tx/%s), %s gas." % (r["hash"][:14], SCAN, r["hash"], "{:,}".format(r["gasUsed"])))
 open(os.path.join(ROOT, "docs", "sepolia.md"), "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
 print("docs/sepolia.md: %d recorded transactions" % len(rows))
