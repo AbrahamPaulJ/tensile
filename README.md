@@ -317,7 +317,10 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   is the best hand-written version found, and its arbiter passes the same Foundry suite. Fe is cheaper than the natural Solidity
   assembly loop (0.78x). Most of the 1.24x is a choice, not the compiler: a kernel written for the EVM
   alone, unrolled over 256-bit words, costs 1.06x (section 5), but it is eight times slower natively, and
-  this entry ships one kernel for every target. Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
+  this entry ships one kernel for every target. Where the rest goes is measured opcode by opcode in
+  [`docs/gas-gap.md`](docs/gas-gap.md): 68.7% of the neuron's gap is masks on narrow integers, most of
+  them on values that provably fit, and 27.4% is decoding array arguments into memory. The page lists
+  what the compiler could do about each and reproduces with `python3 tools/gas_gap.py`. Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
   0.03%, and solc without via-IR cannot compile the arbiter's twin at all, "Stack too deep" (section 6).
 - **Pinned to Fe 26.5.1, and it needs that version.** Fe 26.6.0 and 26.7.0 came out during the contest
   and change the language under this code. Tried on 26.7.0 on 2026-11-23: `tensile`, `model` and
