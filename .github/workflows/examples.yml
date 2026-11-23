@@ -40,6 +40,25 @@ jobs:
       - name: Bring your own model, end to end (reference, generate, fe test, build, native, anvil)
         run: bash examples/tiny/check.sh
 
+  generated-arbiter-fuzz:
+    name: Foundry fuzz and invariant suite of the generated three-layer arbiters (amm-fee, address-risk)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: fe --version
+      # evm/generated/GenArbiter*.t.sol against the committed generated arbiter of each example,
+      # with the fixture written from its committed model and reference vectors. The mutation run
+      # of the same suite (tools/gen_mutants.py) stays local, as tools/m3_mutants.py does.
+      - run: bash tools/gen_foundry.sh amm-fee address-risk
+
   mnist-784-128-64-10:
     name: MNIST 784-128-64-10, the whole check
     runs-on: ubuntu-latest
