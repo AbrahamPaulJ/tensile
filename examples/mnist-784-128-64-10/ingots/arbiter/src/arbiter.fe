@@ -251,7 +251,11 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
         ChallengeNeuron1 { id, j, x0, hidden1, row, bias, proof }
         uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
         {
-            let record = load(id)
+            // Two `u256` effects are in scope here (`root` and `count`), so the one
+            // `load` reads is named: Fe 26.7.0 will not pick between them.
+            let record = with (u256 = count) {
+                load(id)
+            }
             if j >= HIDDEN1 {
                 revert_error(NeuronOutOfRange { neuron: j })
             }
@@ -265,7 +269,8 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 revert_error(NotCommitted {})
             }
             let recomputed = layer1::neuron_from_words(row, x: x0, bias)
-            let claimed = Hidden1::from_words(hidden1).get(j as usize)
+            // `j < HIDDEN1` was checked above, so narrowing it loses nothing.
+            let claimed = Hidden1::from_words(hidden1).get(j.downcast_truncate())
             let challenger = ctx.caller()
             settle(
                 id,
@@ -280,7 +285,11 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
         ChallengeNeuron2 { id, j, hidden1, hidden2, row, bias, proof }
         uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
         {
-            let record = load(id)
+            // Two `u256` effects are in scope here (`root` and `count`), so the one
+            // `load` reads is named: Fe 26.7.0 will not pick between them.
+            let record = with (u256 = count) {
+                load(id)
+            }
             if j >= HIDDEN2 {
                 revert_error(NeuronOutOfRange { neuron: j })
             }
@@ -294,7 +303,8 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 revert_error(NotCommitted {})
             }
             let recomputed = layer2::neuron_from_words(row, x: hidden1, bias)
-            let claimed = Hidden2::from_words(hidden2).get(j as usize)
+            // `j < HIDDEN2` was checked above, so narrowing it loses nothing.
+            let claimed = Hidden2::from_words(hidden2).get(j.downcast_truncate())
             let challenger = ctx.caller()
             settle(
                 id,
@@ -309,7 +319,11 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
         ChallengeNeuron3 { id, j, hidden2, logits, row, bias, proof }
         uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
         {
-            let record = load(id)
+            // Two `u256` effects are in scope here (`root` and `count`), so the one
+            // `load` reads is named: Fe 26.7.0 will not pick between them.
+            let record = with (u256 = count) {
+                load(id)
+            }
             if j >= CLASSES as u256 {
                 revert_error(NeuronOutOfRange { neuron: j })
             }
@@ -323,7 +337,8 @@ pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 revert_error(NotCommitted {})
             }
             let recomputed = layer3::neuron_from_words(row, x: hidden2, bias)
-            let claimed = logits[j as usize]
+            // `j < CLASSES` was checked above, so narrowing it loses nothing.
+            let claimed = logits[j.downcast_truncate()]
             let challenger = ctx.caller()
             settle(
                 id,

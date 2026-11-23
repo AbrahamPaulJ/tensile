@@ -508,12 +508,17 @@ def arbiter_source(shape):
         vin, vout = s.layer_in(k), s.layer_out(k)
         limit = "CLASSES as u256" if last else s.hid_const(k)
         out_hash = "logits_hash(logits)" if last else "keccak_words(%s)" % vout
-        claimed = "logits[j as usize]" if last else "%s::from_words(%s).get(j as usize)" % (
+        claimed = "logits[j.downcast_truncate()]" if last else "%s::from_words(%s).get(j.downcast_truncate())" % (
             s.hid_type(k), vout)
+        bound = "CLASSES" if last else s.hid_const(k)
         out += [
             I2 + "ChallengeNeuron%d { id, j, %s, %s, row, bias, proof } uses (ctx, root, count, mut claims, "
             "mut credits, mut burned, mut log) {" % (k, vin, vout),
-            I3 + "let record = load(id)",
+            I3 + "// Two `u256` effects are in scope here (`root` and `count`), so the one",
+            I3 + "// `load` reads is named: Fe 26.7.0 will not pick between them.",
+            I3 + "let record = with (u256 = count) {",
+            I3 + I1 + "load(id)",
+            I3 + "}",
             I3 + "if j >= %s {" % limit,
             I3 + I1 + "revert_error(NeuronOutOfRange { neuron: j })",
             I3 + "}",
@@ -527,6 +532,7 @@ def arbiter_source(shape):
             I3 + I1 + "revert_error(NotCommitted {})",
             I3 + "}",
             I3 + "let recomputed = layer%d::neuron_from_words(row, x: %s, bias)" % (k, vin),
+            I3 + "// `j < %s` was checked above, so narrowing it loses nothing." % bound,
             I3 + "let claimed = %s" % claimed,
             I3 + "let challenger = ctx.caller()",
             I3 + "settle(id, record, now: ctx.timestamp(), action: Action::Challenge(recomputed != claimed), "

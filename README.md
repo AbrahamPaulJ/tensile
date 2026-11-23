@@ -140,7 +140,7 @@ let logits = with (Probe = printer) {
 | `ingots/dispute` | Fe, pure | The claim state machine |
 | `ingots/cli` | Fe, native | The classifier and auditor: reads samples or claims on stdin, names the first failing check |
 | `ingots/onchain` | Fe, contracts | `Arbiter`, `Network`, `NeuronCheck`, `RowsLow`, `RowsHigh`, the leaf commitment |
-| `wasm/` | Fe, WebAssembly | `entry.fe`, the module's exports; `tensile_wasm.fe`, `tensile` and `model` flattened into one file by `tools/gen_wasm.py` (the wasm target takes only standalone files); the built module in `wasm/out/` |
+| `wasm/` | Fe, WebAssembly | An ingot of its own: `src/lib.fe`, the module's exports, on top of `tensile` and `model`; the built module in `wasm/out/` |
 | `ref/` | Python, NumPy | Training, quantisation, and the integer reference: the oracle every other part must match |
 | `evm/` | Solidity | Foundry fuzz and invariant tests of the Fe bytecode; Solidity twins as gas baselines |
 | `demo/` | JavaScript | The page: an EVM in the browser running the `fe build` output |
@@ -243,25 +243,30 @@ npm run test:ui       # the page itself in Chrome, offline, from file://
 
 `bash tools/build_demo.sh` regenerates what the page embeds from a fresh `fe build`.
 
-### The WebAssembly build: a pinned master commit
+### Fe 26.7.0: the same source, and the WebAssembly build
 
-Fe's WebAssembly target was merged on 2026-11-05 ([argotorg/fe#1904](https://github.com/argotorg/fe/pull/1904)), two
-days before this part was built, and was in no release then, so this one part uses **fe 26.5.0 (89d07b9db)**,
-master commit `89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908`, which the organisers allow. Everything else uses
-26.5.1. The target has since shipped in the 26.7.0 release binaries (2026-11-18); this entry stays on the
-commit it was measured with (see Limitations). The built module is committed, so the demo needs no Rust.
+Fe 26.6.0 and 26.7.0 came out during the contest. The kernel, the model, the dispute rule and the
+contracts build and pass their tests on 26.7.0 from the same source as on 26.5.1:
 
 ```sh
-git clone https://github.com/argotorg/fe ~/fe-master && cd ~/fe-master && git checkout 89d07b9dbf7ea73d0ca6b9a5b4f14de7899d1908
-(cd crates/tree-sitter-fe && npm ci) && PATH="$PWD/crates/tree-sitter-fe/node_modules/.bin:$PATH" cargo build --release -p fe --features wasm
-cd - && FE=~/fe-master/target/release/fe bash tools/build_wasm.sh
+curl -fsSL -o ~/fe-267/fe --create-dirs https://github.com/argotorg/fe/releases/download/v26.7.0/fe_linux_amd64 && chmod +x ~/fe-267/fe
+sha256sum ~/fe-267/fe          # 4ef2b818e260f0ba0b0af4bd78468dda589dc4949503fffaef25d8188e5107d5
+bash tools/check_fe267.sh      # fe check and fe test of tensile, model, dispute, onchain: 62 tests, 49 s
+bash tools/build_wasm.sh       # the WebAssembly module, 70 s
 ```
 
-`tools/build_wasm.sh` flattens the ingots, runs all 26 kernel and model unit tests on the wasm backend
-(12 s), builds the module twice and requires identical bytes (37,471 bytes), then checks it against the
-reference: 10,000 of 10,000 classes, 10,000 of 10,000 logits and 32,000 of 32,000 hidden activations,
-about 380 microseconds per image in Node, and the same again for modules built at `-O 0` and `-O 2`. CI
-does all of this from a fresh build of that commit.
+The newer compiler makes the same contracts cheaper, measured with the same transactions
+(`docs/numbers.md`, section 7): `claim` 246,113 to 220,215 gas, the whole network 1,896,043 to 1,567,610,
+the arbiter 11,649 to 10,463 bytes. Against the Solidity twin that is 1.13x per claim, from 1.26x.
+
+Fe's WebAssembly target is in the release binaries from 26.7.0 and builds whole ingots, so the module is
+the small ingot `wasm/` on top of `ingots/tensile` and `ingots/model` as they stand. `tools/build_wasm.sh`
+runs all 26 kernel and model unit tests on the wasm backend, builds the module twice and requires
+identical bytes (33,172 bytes), then checks it against the reference: 10,000 of 10,000 classes, 10,000 of
+10,000 logits and 32,000 of 32,000 hidden activations, and the same again for modules built at `-O 0`
+and `-O 2`. CI does all of this with the release binary. The built module is committed, so the demo needs
+neither. (Until 2026-11-23 the module was built from a master commit, `89d07b9`, because no release had
+the target; the organisers allowed that.)
 
 Times are from one laptop (i5-13420H, WSL2 Ubuntu 24.04), with the repository on the Linux file system.
 
@@ -322,20 +327,18 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   them on values that provably fit, and 27.4% is decoding array arguments into memory. The page lists
   what the compiler could do about each and reproduces with `python3 tools/gas_gap.py`. Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
   0.03%, and solc without via-IR cannot compile the arbiter's twin at all, "Stack too deep" (section 6).
-- **Pinned to Fe 26.5.1, and it needs that version.** Fe 26.6.0 and 26.7.0 came out during the contest
-  and change the language under this code. Tried on 26.7.0 on 2026-11-23: `tensile`, `model` and
-  `dispute`, the pure ingots, pass their tests unchanged; `onchain` stops on 4 errors (a `u256` to
-  `usize` cast that must now be a checked `downcast`, and an effect the stricter rules call ambiguous);
-  `cli` stops on 48, because the native I/O interface it uses (`std::io::host`, `std::native::Args`)
-  was replaced. Porting would also change every gas figure (26.6.0 packs storage), so this entry stays
-  on the release it was measured with. Install 26.5.1 with the command above.
+- **Measured on Fe 26.5.1; the native CLI needs that version.** Every figure here comes from 26.5.1, and
+  the Sepolia contracts are its output. The kernel, the generated model, the dispute rule and the
+  contracts also pass `fe check` and `fe test` unchanged on the 26.7.0 release (`tools/check_fe267.sh`,
+  a CI job), and the 26.5.1 bytecode did not change by a byte when the source was made to build on
+  both. The native classifier and auditor (`ingots/cli`) do not build on 26.7.0, because the native I/O
+  interface they use (`std::io::host`, `std::native::Args`) was replaced. Install 26.5.1 with the
+  command above.
 - **The demo's chain is EthereumJS, not a real network.** Its watcher runs the WebAssembly build of the
   kernel, not the native auditor (`ingots/cli`), which does not run in a browser.
-- **The WebAssembly build rests on a master commit, not a release,** and its source is generated by
-  flattening two ingots into one file, because the target did not take ingots at that commit (26.7.0
-  does; on it the flattened file still passes its 26 tests, but the exports need 26.7.0's
-  `#[unsafe(export)]` form, so the module is not rebuilt there). Only the kernel and
-  the model are built for it; the dispute logic and the auditor are not.
+- **The WebAssembly module is built with a different release, 26.7.0,** the first with the target. Only
+  the kernel and the model are built for it; the dispute logic and the auditor are not. The recorded
+  video was made with the earlier module, built from a master commit, and its caption says so.
 
 Compiler defects found along the way, with minimal examples: `docs/upstream-reports.md`. Five were filed
 (argotorg/fe#1950 to #1954), and the Fe team fixed all five on master (PRs #1955 to #1959). This entry still builds with

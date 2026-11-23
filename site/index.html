@@ -155,6 +155,24 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   </div>
 </section>
 
+<section id="scale">
+  <h2>A dispute is priced by one neuron, not by the network</h2>
+  <p>A generator writes the arbiter for any dense network, and for the shipped model its output equals the hand-written contract byte for byte. A second model, MNIST 784-128-64-10 at 98.81% as integers, went through the whole pipeline. Measured the same way:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>784-32-10</th><th>784-128-64-10</th><th>Ratio</th></tr></thead>
+    <tbody>
+      <tr><td>Parameters</td><td>25,450</td><td>109,386</td><td>4.30x</td></tr>
+      <tr><td>Whole network on-chain, gas</td><td>1,896,043</td><td>8,219,318</td><td>4.33x</td></tr>
+      <tr><td>Claim, gas</td><td>246,113</td><td>274,284</td><td>1.11x</td></tr>
+      <tr><td>Dearest dispute, gas</td><td>178,662</td><td>185,003</td><td>1.04x</td></tr>
+      <tr><td>Dearest dispute against one whole run</td><td>9.4%</td><td>2.3%</td><td></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="honest">What does grow is the claim, with the sum of the layer widths, and a dispute is never much cheaper than about 66,000 gas. <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/USAGE.md">Bring your own model</a> in five commands; the <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/mnist-784-128-64-10/RESULTS.md">full results</a> include the unflattering rows.</p>
+</section>
+
 <section>
   <h2>How a lie gets caught</h2>
   <p>The usual trouble with optimistic schemes is two code bases, one off-chain and one on-chain, that must agree down to the rounding of a negative number. Here there is one.</p>
@@ -220,7 +238,7 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
 </section>
 
 <footer>
-  Tensile is an entry to the Fe Builders Challenge (FE-019) by <a href="https://github.com/AbrahamPaulJ">AbrahamPaulJ</a>. Apache-2.0. Built with Fe 26.5.1; the WebAssembly module with a pinned Fe master commit. Written with extensive AI assistance (Claude), as declared in the <a href="https://github.com/AbrahamPaulJ/tensile#declaration">README</a>. The MNIST images are from LeCun, Cortes and Burges.
+  Tensile is an entry to the Fe Builders Challenge (FE-019) by <a href="https://github.com/AbrahamPaulJ">AbrahamPaulJ</a>. Apache-2.0. Measured with Fe 26.5.1; the contracts also build on Fe 26.7.0, which builds the WebAssembly module. Written with extensive AI assistance (Claude), as declared in the <a href="https://github.com/AbrahamPaulJ/tensile#declaration">README</a>. The MNIST images are from LeCun, Cortes and Burges.
 </footer>
 </div>
 </body>
