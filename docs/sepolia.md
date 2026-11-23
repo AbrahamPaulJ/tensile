@@ -58,3 +58,28 @@ bash tools/check_deployed.sh
 The first prints the finalised answer, 7. The second ends in the claim's status: 2 is slashed, 3 is
 final. To repeat the whole run with your own key: `SEPOLIA_KEY_FILE=<file> bash tools/sepolia_run.sh`
 after removing `deploy/sepolia.jsonl`.
+
+## Open claims: be the watcher
+
+A second arbiter, [`0x6f2a37d517b82f1b46197d29d2c7485c5801808c`](https://sepolia.etherscan.io/address/0x6f2a37d517b82f1b46197d29d2c7485c5801808c), has a bond of 0.0005 ETH and a window of 30 days, and holds
+claims about reference samples 1 to 12 that nobody has challenged. Some are false, on purpose.
+[The watcher page](https://abrahampaulj.github.io/tensile/sepolia/) reads each one from the chain,
+re-runs the network in the browser with the WebAssembly build of the kernel, names the wrong value,
+and asks a public node whether the arbiter would accept the challenge. `node demo/test/sepolia.mjs`
+does the same from the command line, and a scheduled workflow runs it every six hours. Anyone who
+sends a challenge is credited half the bond.
+
+| Claim | Transaction | As posted |
+|---|---|---|
+| 0 | [`0x4a83e134ad00...`](https://sepolia.etherscan.io/tx/0x4a83e134ad0012c917a04cb4f5d876d5ec47666fa7d51f12bb8a85ff629295f6) | sample 1, honest |
+| 1 | [`0x3318190b0a65...`](https://sepolia.etherscan.io/tx/0x3318190b0a656c6c44e2591fcb0f9befcb2d452c8fa1f790b9def088f4edbe73) | sample 2, hidden neuron 5 changed by one |
+| 2 | [`0x237b0564be70...`](https://sepolia.etherscan.io/tx/0x237b0564be703368954af5c7e596229490064c8908afaac3d3b4c66979794e87) | sample 3, output 3 changed by one |
+| 3 | [`0x74ee84572008...`](https://sepolia.etherscan.io/tx/0x74ee8457200843cf4b213b54f021c126d36c224fa42701f25b49287f4da9b0d5) | sample 4, wrong class |
+| 4 | [`0x52f482d84fb0...`](https://sepolia.etherscan.io/tx/0x52f482d84fb06337ffa699385375029e093b92cd4f34d3578f4fd4263932f167) | sample 5, hidden neuron 17 changed by one |
+| 5 | [`0x0b4c7ccf6d5e...`](https://sepolia.etherscan.io/tx/0x0b4c7ccf6d5e74861d6dfed9af90c02f378082f48eee4676a5df7e74013290f8) | sample 6, honest |
+| 6 | [`0x29edad15014f...`](https://sepolia.etherscan.io/tx/0x29edad15014f2df38a848e5e9a451a594bd3e6ea3de44821a4239f4a1ef082b4) | sample 7, output 8 changed by one |
+| 7 | [`0xbe74e765f7f8...`](https://sepolia.etherscan.io/tx/0xbe74e765f7f82647d7d69b094220438b486b45b3b4059fa202e7a522b71d137b) | sample 8, hidden neuron 30 changed by one |
+| 8 | [`0x5a7257dea9f9...`](https://sepolia.etherscan.io/tx/0x5a7257dea9f98a381c7c61a28ee8d02cfa92589d0b3fa221fda2f9e9147274b8) | sample 9, wrong class |
+| 9 | [`0x3589d190667e...`](https://sepolia.etherscan.io/tx/0x3589d190667e52d687c4c8dfd0028548a4d5656a6605f18f5014c61278e936b9) | sample 10, hidden neuron 0 changed by one |
+| 10 | [`0xe6c1f0b2d677...`](https://sepolia.etherscan.io/tx/0xe6c1f0b2d677f90f65f888298ab97cceffe273229957f15dced6c5953fefec9a) | sample 11, output 0 changed by one |
+| 11 | [`0xc0f72bd92ee4...`](https://sepolia.etherscan.io/tx/0xc0f72bd92ee49c0ad844b4471914f28e202f77d6db45e006e84d9bc7f98fee50) | sample 12, honest |

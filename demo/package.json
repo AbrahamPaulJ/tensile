@@ -8,7 +8,9 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "node test/run.mjs",
-    "test:ui": "node test/ui.mjs"
+    "test:ui": "node test/ui.mjs",
+    "build:sepolia": "node build_sepolia.mjs",
+    "test:sepolia": "node test/sepolia.mjs"
   },
   "dependencies": {
     "@ethereumjs/block": "10.1.3",

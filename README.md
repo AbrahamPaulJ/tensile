@@ -11,9 +11,11 @@ whole network. An honest answer, claimed and finalised with no dispute, costs 15
 
 **[Try it live](https://abrahampaulj.github.io/tensile/demo/)** in the browser: no wallet, no install, no
 server. **[Watch it](https://abrahampaulj.github.io/tensile/#video)**, two and a quarter minutes (the clip above
-is 14 seconds of it). **[See it on Sepolia](docs/sepolia.md)**: the same bytecode, three false claims slashed
-and one honest claim finalised, every transaction linked. **[The project page](https://abrahampaulj.github.io/tensile/)**
-has all three. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
+is 14 seconds of it). **[Catch a lie on Sepolia](https://abrahampaulj.github.io/tensile/sepolia/)**: a
+dozen claims are open on a public chain, some false, and the page re-runs the network in your browser,
+names the wrong neuron and asks the chain whether the challenge would win; with a wallet you can send it
+and keep half the bond. Addresses and every transaction: [`docs/sepolia.md`](docs/sepolia.md).
+**[The project page](https://abrahampaulj.github.io/tensile/)** has all of these. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
 file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
 
 **For a judge with five minutes**, from the repository root:

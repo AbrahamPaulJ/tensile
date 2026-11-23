@@ -1,0 +1,13 @@
+{"label": "Arbiter", "hash": "0xc72aa873bfb6819efef5d7ff20b908eb932621c0aa6aeb428a79963a70a6e6fe", "block": 12196194, "gasUsed": 18365115, "status": 1, "address": "0x6f2a37d517b82f1b46197d29d2c7485c5801808c", "bond": "500000000000000", "window": "2592000"}
+{"label": "claim 0", "hash": "0x4a83e134ad0012c917a04cb4f5d876d5ec47666fa7d51f12bb8a85ff629295f6", "block": 12196196, "gasUsed": 949359, "status": 1, "id": "0", "sample": "1", "posted": "honest"}
+{"label": "claim 1", "hash": "0x3318190b0a656c6c44e2591fcb0f9befcb2d452c8fa1f790b9def088f4edbe73", "block": 12196198, "gasUsed": 851394, "status": 1, "id": "1", "sample": "2", "posted": "hidden:5"}
+{"label": "claim 2", "hash": "0x237b0564be703368954af5c7e596229490064c8908afaac3d3b4c66979794e87", "block": 12196199, "gasUsed": 852930, "status": 1, "id": "2", "sample": "3", "posted": "logit:3"}
+{"label": "claim 3", "hash": "0x74ee8457200843cf4b213b54f021c126d36c224fa42701f25b49287f4da9b0d5", "block": 12196200, "gasUsed": 851677, "status": 1, "id": "3", "sample": "4", "posted": "class"}
+{"label": "claim 4", "hash": "0x52f482d84fb06337ffa699385375029e093b92cd4f34d3578f4fd4263932f167", "block": 12196201, "gasUsed": 851574, "status": 1, "id": "4", "sample": "5", "posted": "hidden:17"}
+{"label": "claim 5", "hash": "0x0b4c7ccf6d5e74861d6dfed9af90c02f378082f48eee4676a5df7e74013290f8", "block": 12196202, "gasUsed": 851857, "status": 1, "id": "5", "sample": "6", "posted": "honest"}
+{"label": "claim 6", "hash": "0x29edad15014f2df38a848e5e9a451a594bd3e6ea3de44821a4239f4a1ef082b4", "block": 12196205, "gasUsed": 851773, "status": 1, "id": "6", "sample": "7", "posted": "logit:8"}
+{"label": "claim 7", "hash": "0xbe74e765f7f82647d7d69b094220438b486b45b3b4059fa202e7a522b71d137b", "block": 12196206, "gasUsed": 852325, "status": 1, "id": "7", "sample": "8", "posted": "hidden:30"}
+{"label": "claim 8", "hash": "0x5a7257dea9f98a381c7c61a28ee8d02cfa92589d0b3fa221fda2f9e9147274b8", "block": 12196207, "gasUsed": 852373, "status": 1, "id": "8", "sample": "9", "posted": "class"}
+{"label": "claim 9", "hash": "0x3589d190667e52d687c4c8dfd0028548a4d5656a6605f18f5014c61278e936b9", "block": 12196208, "gasUsed": 852582, "status": 1, "id": "9", "sample": "10", "posted": "hidden:0"}
+{"label": "claim 10", "hash": "0xe6c1f0b2d677f90f65f888298ab97cceffe273229957f15dced6c5953fefec9a", "block": 12196209, "gasUsed": 852277, "status": 1, "id": "10", "sample": "11", "posted": "logit:0"}
+{"label": "claim 11", "hash": "0xc0f72bd92ee49c0ad844b4471914f28e202f77d6db45e006e84d9bc7f98fee50", "block": 12196210, "gasUsed": 852282, "status": 1, "id": "11", "sample": "12", "posted": "honest"}

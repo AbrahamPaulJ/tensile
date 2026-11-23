@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tensile on Sepolia: be the watcher</title>
+<meta name="description" content="Claims about a neural network's answers are open on Sepolia. This page reads them, re-runs the network in your browser with the Fe kernel built for WebAssembly, and asks the chain whether the false ones can be slashed.">
+<style>
+:root {
+  --paper: #e9edf1; --panel: #f8fafb; --ink: #10171e; --soft: #4d5b68; --rule: #cdd5dd;
+  --accent: #17508f; --accent-ink: #ffffff; --slash: #bb2d12; --final: #0f6e4a; --pad-bg: #0c1117;
+  --display: Bahnschrift, "DIN Alternate", "Roboto Condensed", "Segoe UI", ui-sans-serif, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0f141a; --panel: #171e26; --ink: #e8edf2; --soft: #9aa8b5; --rule: #2d3844;
+    --accent: #79b0ee; --accent-ink: #0b1118; --slash: #f07f60; --final: #5bd0a0; --pad-bg: #070a0e;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+a { color: var(--accent); }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px 48px; }
+header { padding: 22px 0 14px; border-bottom: 1px solid var(--rule); }
+.mark { font: 700 20px/1 var(--display); letter-spacing: .14em; text-transform: uppercase; }
+.mark a { color: inherit; text-decoration: none; }
+h1 { font: 700 clamp(26px, 4.4vw, 42px)/1.08 var(--display); margin: 14px 0 10px; text-wrap: balance; }
+.lede { color: var(--soft); max-width: 52em; margin: 0; }
+.lede b { color: var(--ink); font-weight: 600; }
+.strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+.cell { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 10px 12px; min-width: 0; }
+.cell span { display: block; font: 11.5px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--soft); }
+.cell b { display: block; font: 600 15px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) { .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 14px; }
+h2 { font: 700 19px/1.2 var(--display); margin: 0 0 10px; }
+.label { font: 11.5px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--soft); margin: 14px 0 6px; }
+#claims { list-style: none; margin: 0; padding: 0; }
+#claims li { display: grid; grid-template-columns: 2.6em minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid transparent; border-bottom-color: var(--rule); cursor: pointer; }
+#claims li:hover, #claims li.on { border-color: var(--accent); border-radius: 3px; }
+#claims li b { font: 600 15px/1 var(--mono); }
+#claims li i { font-style: normal; font-size: 14.5px; color: var(--soft); }
+.tag { font: 600 12px/1 var(--mono); padding: 5px 7px; border-radius: 3px; border: 1px solid currentColor; white-space: nowrap; }
+.tag.false { color: var(--slash); } .tag.true { color: var(--final); } .tag.wait { color: var(--soft); }
+.row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+canvas { image-rendering: pixelated; width: 112px; height: 112px; background: var(--pad-bg); border: 1px solid var(--rule); border-radius: 3px; }
+.digit { font: 700 54px/1 var(--display); }
+.grid32 { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; max-width: 420px; }
+.grid32 div, .logits div { font: 11.5px/1 var(--mono); text-align: center; padding: 5px 0; background: color-mix(in srgb, var(--rule) 45%, transparent); border-radius: 2px; }
+.logits { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; max-width: 560px; }
+.bad { background: var(--slash) !important; color: #fff; font-weight: 700; }
+.verdict { margin: 14px 0 0; padding: 12px; border-left: 4px solid var(--soft); background: color-mix(in srgb, var(--rule) 35%, transparent); }
+.verdict.false { border-color: var(--slash); } .verdict.true { border-color: var(--final); }
+.verdict b { font-family: var(--display); font-size: 18px; }
+pre { margin: 6px 0 0; padding: 10px; background: var(--pad-bg); color: #dfe7ee; border-radius: 3px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto; }
+button { font: 600 15px/1 var(--display); letter-spacing: .03em; padding: 11px 16px; border-radius: 3px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+button.ghost { background: none; color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+.note { font-size: 14px; color: var(--soft); margin: 8px 0 0; }
+#error { color: var(--slash); font-weight: 600; }
+footer { margin-top: 28px; font-size: 14px; color: var(--soft); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="mark"><a href="../">Tensile</a></div>
+  <h1>Be the watcher. These claims are open on Sepolia right now.</h1>
+  <p class="lede">Someone posted answers of a neural network to a contract written in Fe, each with a bond. Some are lies. <b>This page reads each claim from the chain, re-runs the network here with the same Fe kernel built for WebAssembly, names the first wrong value, and asks a Sepolia node whether the contract would accept the challenge.</b> No wallet is needed to check. With one, you can send the challenge and be credited half the bond.</p>
+</header>
+
+<div class="strip">
+  <div class="cell"><span>Arbiter contract</span><b><a id="s-arbiter" target="_blank" rel="noopener"></a></b></div>
+  <div class="cell"><span>Claims</span><b id="s-count">reading the chain</b></div>
+  <div class="cell"><span>Bond per claim</span><b id="s-bond"></b></div>
+  <div class="cell"><span>Node answering</span><b id="s-node"></b></div>
+</div>
+<p id="error"></p>
+
+<div class="cols">
+  <div class="panel">
+    <h2>Claims on the arbiter</h2>
+    <ul id="claims"></ul>
+    <p class="note">Each line is audited as it loads: the verdict on the right is this browser's own run compared with what was claimed, and the chain's answer to the challenge.</p>
+  </div>
+  <div class="panel" id="detail">
+    <h2 id="d-title">Choose a claim</h2>
+    <div id="d-body" hidden>
+      <div class="row">
+        <div><p class="label">Input, from calldata</p><canvas id="d-input" width="28" height="28"></canvas></div>
+        <div><p class="label">Claimed</p><div class="digit" id="d-claimed"></div></div>
+        <div><p class="label">This browser (wasm)</p><div class="digit" id="d-wasm"></div></div>
+        <div><p class="label">Sepolia (Fe bytecode)</p><div class="digit" id="d-chain"></div></div>
+      </div>
+      <p class="label">32 hidden neurons as claimed (red: differs from this browser's run)</p>
+      <div class="grid32" id="d-hidden"></div>
+      <p class="label">10 outputs as claimed</p>
+      <div class="logits" id="d-logits"></div>
+      <div class="verdict" id="d-verdict"></div>
+      <p class="label">The challenge, as calldata for the arbiter</p>
+      <pre id="d-data"></pre>
+      <p class="label">Send it yourself</p>
+      <pre id="d-cast"></pre>
+      <div class="row" style="margin-top:12px">
+        <button id="d-send" disabled>Send with a browser wallet</button>
+        <a id="d-tx" target="_blank" rel="noopener"></a>
+      </div>
+      <p class="note" id="d-sendnote">Needs a wallet on Sepolia with a little test ETH for gas. The page never asks for a key.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  The contracts are the output of <code>fe build</code>, deployed unchanged: <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/sepolia.md">addresses, transactions and how to check the deployed code</a>. The same check runs from the command line with <code>node demo/test/sepolia.mjs</code>. <a href="../demo/">The offline demo</a> shows the whole protocol on a chain inside the tab. <a href="https://github.com/AbrahamPaulJ/tensile">Source</a>.
+</footer>
+</div>
+<script>window.TENSILE = /*ASSETS*/null;</script>
+<script>/*SCRIPT*/</script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+name: Sepolia watcher
+
+# Every six hours: reads every claim on the Sepolia arbiter back from the chain, re-runs the network
+# with the committed WebAssembly build of the Fe kernel, and puts each challenge to a public node.
+# Fails if an honest claim could be slashed, if a false claim could not, or if the bytecode on Sepolia
+# and the WebAssembly module disagree about any input. Read-only: no key, no transaction.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  push:
+    branches: [main]
+    paths: [demo/src/sepolia-core.js, demo/test/sepolia.mjs, deploy/**, .github/workflows/sepolia-watch.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: demo
+      - run: node test/sepolia.mjs
+        working-directory: demo

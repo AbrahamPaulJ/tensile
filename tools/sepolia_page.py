@@ -104,5 +104,31 @@ w("")
 w("The first prints the finalised answer, 7. The second ends in the claim's status: 2 is slashed, 3 is")
 w("final. To repeat the whole run with your own key: `SEPOLIA_KEY_FILE=<file> bash tools/sepolia_run.sh`")
 w("after removing `deploy/sepolia.jsonl`.")
+OPEN = os.path.join(ROOT, "deploy", "sepolia-open.jsonl")
+if os.path.exists(OPEN):
+    opened = [json.loads(line) for line in open(OPEN)]
+    second = next(r for r in opened if r["label"] == "Arbiter")
+    POSTED = {"honest": "honest", "hidden": "hidden neuron %s changed by one", "logit": "output %s changed by one",
+              "class": "wrong class"}
+    w("")
+    w("## Open claims: be the watcher")
+    w("")
+    w("A second arbiter, [`%s`](%s/address/%s), has a bond of %g ETH and a window of %d days, and holds"
+      % (second["address"], SCAN, second["address"], int(second["bond"]) / 1e18, int(second["window"]) // 86400))
+    w("claims about reference samples 1 to 12 that nobody has challenged. Some are false, on purpose.")
+    w("[The watcher page](https://abrahampaulj.github.io/tensile/sepolia/) reads each one from the chain,")
+    w("re-runs the network in the browser with the WebAssembly build of the kernel, names the wrong value,")
+    w("and asks a public node whether the arbiter would accept the challenge. `node demo/test/sepolia.mjs`")
+    w("does the same from the command line, and a scheduled workflow runs it every six hours. Anyone who")
+    w("sends a challenge is credited half the bond.")
+    w("")
+    w("| Claim | Transaction | As posted |")
+    w("|---|---|---|")
+    for r in opened:
+        if not r["label"].startswith("claim "):
+            continue
+        kind, _, j = r["posted"].partition(":")
+        posted = POSTED[kind] % j if "%s" in POSTED[kind] else POSTED[kind]
+        w("| %s | [`%s...`](%s/tx/%s) | sample %s, %s |" % (r["id"], r["hash"][:14], SCAN, r["hash"], r["sample"], posted))
 open(os.path.join(ROOT, "docs", "sepolia.md"), "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
 print("docs/sepolia.md: %d recorded transactions" % len(rows))
