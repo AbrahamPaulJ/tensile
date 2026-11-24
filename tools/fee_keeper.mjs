@@ -129,7 +129,13 @@ class Sender {
   async send(label, to, data, value = 0n, extra = {}) {
     if (this.stopped) return null;
     const call = { from: this.address, to, data: to0x(data), value: '0x' + value.toString(16) };
-    const estimate = await this.node.rpc('eth_estimateGas', [call]);
+    let estimate = await this.node.rpc('eth_estimateGas', [call]);
+    // After a transaction of this run, a public node may still answer from the block before it
+    // (a claim just finalised reads as open): ask again for up to a minute.
+    for (let attempt = 0; estimate.error && this.sent.length && attempt < 6; attempt++) {
+      await new Promise((done) => setTimeout(done, 10000));
+      estimate = await this.node.rpc('eth_estimateGas', [call]);
+    }
     if (estimate.error) {
       log(`${label}: not sent, the node's estimate reverts (${estimate.error.message})`);
       this.failed = true;
