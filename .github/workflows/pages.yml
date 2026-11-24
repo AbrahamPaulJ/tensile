@@ -30,6 +30,10 @@ jobs:
           cp demo/dist/tensile-demo.html _site/demo/index.html
           cp demo/dist/tensile-sepolia.html _site/sepolia/index.html
           cp demo/video/tensile-demo.mp4 _site/
+      # The live status page of the fee-tier system on Sepolia (tools/build_fee_live.mjs).
+      - run: |
+          mkdir -p _site/fee-live
+          cp demo/dist/tensile-fee-live.html _site/fee-live/index.html
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
