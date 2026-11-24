@@ -31,6 +31,11 @@ file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo
 - 1D convolutions and gradient-boosted tree ensembles, each with its own one-transaction dispute.
 - The kernel as a fixed-point library for other Fe projects ([`docs/LIBRARY.md`](docs/LIBRARY.md)).
 
+**Given back to Fe:** ten compiler issues filed with minimal examples. Five (argotorg/fe#1950 to #1954) are
+fixed upstream, each by its own PR; five more (#2071 to #2075) are open, among them a gas regression
+between 26.6.0 and 26.7.0 measured on this kernel. All 31 findings, re-run on the 26.7.0 release:
+[`docs/upstream-recheck-26.7.0.md`](docs/upstream-recheck-26.7.0.md).
+
 **For a judge with five minutes**, from the repository root:
 
 | Command | Needs | What it shows | Time |
