@@ -8,6 +8,7 @@ of them in the same change; never leave them apart.
 ## 1. Network
 
 A multilayer perceptron with `L` dense layers. The reference model is MNIST, 784 -> 32 -> 10.
+A layer other than the last may instead be a 1D convolution (section 8).
 
 - Layer `l` (1-based) has `IN_l` inputs and `OUT_l` outputs, with `IN_1 = 784` and
   `IN_{l+1} = OUT_l`.
@@ -127,3 +128,62 @@ must be rejected. Hashing the words in order is therefore hashing the byte encod
 zero padding to a multiple of 32 bytes; commitments hash the padded form.
 
 The commitment and dispute rules are in `docs/spec-dispute.md` (milestone 3).
+
+## 8. One-dimensional convolution (added 2026-11-24)
+
+A layer may be a 1D convolution without padding instead of a dense layer. Everything in sections
+2, 4 and 7 applies to it unchanged; only the shape of the arithmetic differs.
+
+**Layout.** A sequence of `L` positions with `C` channels is an activation vector of `L * C`
+values, position by position: channel `c` of position `p` is value `p * C + c`. A layer input
+(the network input or a hidden vector) is read this way by a convolution; the convolution's output
+is again position by position, so it can feed another convolution or a dense layer, which reads it
+as a flat vector.
+
+**Shape.** A convolution has `F` filters of kernel size `K` (positions) and stride `S >= 1`. Filter
+`j` is a row of `K * C` int8 weights, weight `k * C + c` applying to channel `c` of position `k` of
+the window. It produces
+
+```
+P = (L - K) / S + 1          positions (floor division; L >= K)
+out = P * F                  values
+```
+
+**Arithmetic.** For every position `p` in `0 .. P` and filter `j` in `0 .. F`, output value
+`p * F + j` is the dense neuron of section 3 with weight row `j` and bias `j`, applied to the
+`K * C` input values that start at value `p * S * C` (the window of position `p`):
+
+```
+acc[p * F + j] = b[j] + sum over i in 0 .. K*C of ( w[j][i] * x[p * S * C + i] )
+y[p * F + j]   = clamp( acc[p * F + j] >> shift, 0, 127 )      (hidden layer)
+```
+
+The shift, clamp, floor and scales are those of a dense layer: the accumulator has
+`F_{l-1} + FW_l` fractional bits and the output `F_l = F_{l-1} + FW_l - shift_l`. There is no
+pooling; downsampling is done with the stride. The last layer of a network is always dense, so a
+convolution always has a shift.
+
+**Overflow bound.** Every output is a dense neuron over `K * C` inputs in 0..127, so the bound of
+section 5 computed over the `F` filter rows is the bound of the convolution, whatever `L`, `S` or
+the position. The Fe code re-proves it at compile time with the dense `worst_case`.
+
+**Model file.** A convolution layer in `model.json` (section 5) has these fields:
+
+```json
+{
+  "kind": "conv1d",
+  "in": 288, "out": 4496,
+  "channels": 1, "kernel": 8, "stride": 1,
+  "weight_frac_bits": 7, "shift": 8,
+  "worst_case_abs_acc": 35632,
+  "weights": [[ "F rows of K * C integers in -127..127" ]],
+  "bias": [ "F integers, int32" ]
+}
+```
+
+- `in` is `L * C` and must be a multiple of `channels`; `out` must equal `P * F`, with `F` the
+  number of rows of `weights`. A reader rejects a file where these disagree.
+- A layer without `"kind"` is dense, so every model file written before this section is read as
+  before.
+- `trace.jsonl` lists a convolution's output like any hidden vector: `P * F` values, position by
+  position.

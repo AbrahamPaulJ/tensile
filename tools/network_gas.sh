@@ -7,9 +7,23 @@
 #   - `trace` of sample 0 (eth_call) must equal trace.jsonl: every hidden vector and every logit;
 #   - `classify` of sample 0 is then estimated and mined, and its gas recorded.
 #
+# If Osaka cannot run the forward pass in one transaction (the estimate is above the 16,777,216 gas a
+# transaction may have since EIP-7825), a fresh Osaka anvil with --enable-tx-gas-limit (anvil does
+# not enforce the cap by default) is asked again, its answers are recorded, a
+# transaction with a 30,000,000 gas limit is sent to show Osaka refuse it, and all of the above is
+# repeated on a fresh anvil at Prague, which has no per-transaction cap, with a block gas limit of
+# 1,000,000,000: the gas of the forward pass measured where it can run.
+#
+# If the `Network` is larger than a contract may be (EIP-170: 24,576 bytes of runtime code; the
+# generated network of a model with a convolution keeps every weight in its own code), every anvil
+# above is started with --disable-code-size-limit, the Network is deployed through a raw
+# eth_sendTransaction (its init code is too long to pass to `cast` as an argument), and the record
+# says so ("network_over_size_limit"). A dense network never takes this path.
+#
 # usage: network_gas.sh <fe-out-dir> <ref-dir> [record.json] [port] [samples]
 #   <fe-out-dir>  a directory with Network.bin and Rows0.bin, Rows1.bin, ... from `fe build`
-#                 (or RowsLow.bin and RowsHigh.bin: the hand-written network of ingots/onchain)
+#                 (or RowsLow.bin and RowsHigh.bin: the hand-written network of ingots/onchain;
+#                 or no weight contract at all: a network with a convolution)
 #   <ref-dir>     model.json, inputs.bin, pred.bin, trace.jsonl of the model
 export PATH="$HOME/.fe/bin:$HOME/.foundry/bin:$PATH"
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,67 +39,114 @@ samples="${5:-20}"
 rpc="http://127.0.0.1:$port"
 key=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 me=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-anvil --hardfork osaka --port $port > /dev/null 2>&1 &
-anvil_pid=$!
+cap=16777216
+anvil_pid=""
 trap 'kill $anvil_pid 2> /dev/null' EXIT
-sleep 2
 failures=0
+
+# A Network over the EIP-170 limit cannot be deployed on a real chain; it is measured on an anvil
+# without the limit.
+size_limit=24576
+runtime_bytes=$(( $(tr -d '\n' < "$out/Network.runtime.bin" | wc -c) / 2 ))
+init_bytes=$(( $(tr -d '\n' < "$out/Network.bin" | wc -c) / 2 ))
+oversize=""
+if [ "$runtime_bytes" -gt $size_limit ]; then
+  oversize="--disable-code-size-limit"
+  echo "Network: $runtime_bytes bytes of runtime code, over the $size_limit-byte limit of EIP-170 ($init_bytes bytes of init code); measured on anvil with $oversize"
+fi
+
+# start_chain <hardfork> [anvil arguments...]: a fresh anvil on the port.
+start_chain() {
+  [ -n "$anvil_pid" ] && kill $anvil_pid 2> /dev/null && wait $anvil_pid 2> /dev/null
+  anvil --hardfork "$@" $oversize --port $port > /dev/null 2>&1 &
+  anvil_pid=$!
+  sleep 2
+}
 
 deploy() {
   cast send --rpc-url $rpc --private-key $key --create "$1" --json \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["contractAddress"])'
 }
+# deploy_raw <init-code-file> <constructor-args-hex>: the same as deploy, through a raw JSON-RPC
+# request read from a file, for init code longer than an argument may be.
+deploy_raw() {
+  local body hash
+  body="$(mktemp)"
+  python3 -c '
+import json, sys
+code = open(sys.argv[1]).read().strip() + sys.argv[2]
+print(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_sendTransaction",
+                  "params": [{"from": sys.argv[3], "data": "0x" + code, "gas": hex(16000000)}]}))
+' "$1" "$2" "$me" > "$body"
+  hash=$(curl -s -H 'content-type: application/json' --data @"$body" $rpc \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["result"])')
+  rm -f "$body"
+  cast receipt --rpc-url $rpc "$hash" --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["contractAddress"])'
+}
 size_of() {
   echo $(( ($(cast code --rpc-url $rpc "$1" | wc -c) - 3) / 2 ))
 }
 
-holders=()
-types=()
-sizes=""
-i=0
-while [ -f "$out/Rows$i.bin" ]; do
-  address=$(deploy "0x$(cat "$out/Rows$i.bin")")
-  holders+=("$address")
-  types+=("address")
-  sizes="$sizes $(size_of "$address")"
-  i=$((i + 1))
-done
-if [ ${#holders[@]} -eq 0 ]; then
-  # The hand-written `Network` of ingots/onchain: two weight contracts with their own names.
-  for name in RowsLow RowsHigh; do
-    address=$(deploy "0x$(cat "$out/$name.bin")")
+# deploy_all: the weight contracts, then the network; sets network, network_size and sizes.
+deploy_all() {
+  local holders=() types=() address i=0
+  sizes=""
+  while [ -f "$out/Rows$i.bin" ]; do
+    address=$(deploy "0x$(cat "$out/Rows$i.bin")")
     holders+=("$address")
     types+=("address")
     sizes="$sizes $(size_of "$address")"
+    i=$((i + 1))
   done
-fi
-ctor=$(cast abi-encode "constructor($(IFS=,; echo "${types[*]}"))" "${holders[@]}")
-network=$(deploy "0x$(cat "$out/Network.bin")${ctor#0x}")
-network_size=$(size_of "$network")
-echo "Network at $network ($network_size bytes deployed), ${#holders[@]} weight contracts ($sizes bytes)"
+  if [ ${#holders[@]} -eq 0 ] && [ -f "$out/RowsLow.bin" ]; then
+    # The hand-written `Network` of ingots/onchain: two weight contracts with their own names.
+    for name in RowsLow RowsHigh; do
+      address=$(deploy "0x$(cat "$out/$name.bin")")
+      holders+=("$address")
+      types+=("address")
+      sizes="$sizes $(size_of "$address")"
+    done
+  fi
+  local ctor=""
+  if [ ${#holders[@]} -gt 0 ]; then
+    ctor=$(cast abi-encode "constructor($(IFS=,; echo "${types[*]}"))" "${holders[@]}")
+  fi
+  if [ -n "$oversize" ]; then
+    network=$(deploy_raw "$out/Network.bin" "${ctor#0x}")
+  else
+    network=$(deploy "0x$(cat "$out/Network.bin")${ctor#0x}")
+  fi
+  network_size=$(size_of "$network")
+  echo "Network at $network ($network_size bytes deployed), ${#holders[@]} weight contracts ($sizes bytes)"
+}
 
 n_in=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["layers"][0]["in"])' "$ref/model.json")
 words=$(( (n_in + 31) / 32 ))
 classify_sig="classify(uint256[$words])"
 # input_words <sample>: the input as packed words, in cast syntax.
 input_words() {
-  python3 "$root/tools/model_args.py" --ref "$ref" claim --sample "$1" | head -1
+  python3 "$root/tools/model_args.py" --ref "$ref" claim --sample "$1" 2> /dev/null | head -1
 }
+x0="$(input_words 0)"
+calldata=$(cast calldata "$classify_sig" "$x0")
+bytes=$(( (${#calldata} - 2) / 2 ))
 
-wrong=0
-for n in $(seq 0 $((samples - 1))); do
-  got=$(cast call --rpc-url $rpc "$network" "$classify_sig(uint256)" "$(input_words $n)" | cut -d' ' -f1)
-  want=$(python3 -c 'import sys; print(open(sys.argv[1], "rb").read()[int(sys.argv[2])])' "$ref/pred.bin" $n)
-  if [ "$got" != "$want" ]; then
-    echo "WRONG: classify of sample $n is $got, the reference says $want"
-    wrong=$((wrong + 1))
-  fi
-done
-echo "classify: $samples samples against pred.bin, $wrong mismatches"
-failures=$((failures + wrong))
+# check_answers: classify against pred.bin and trace against trace.jsonl; adds to failures.
+check_answers() {
+  local wrong=0 n got want raw
+  for n in $(seq 0 $((samples - 1))); do
+    got=$(cast call --rpc-url $rpc "$network" "$classify_sig(uint256)" "$(input_words $n)" | cut -d' ' -f1)
+    want=$(python3 -c 'import sys; print(open(sys.argv[1], "rb").read()[int(sys.argv[2])])' "$ref/pred.bin" $n)
+    if [ "$got" != "$want" ]; then
+      echo "WRONG: classify of sample $n is $got, the reference says $want"
+      wrong=$((wrong + 1))
+    fi
+  done
+  echo "classify: $samples samples against pred.bin, $wrong mismatches"
+  failures=$((failures + wrong))
 
-raw=$(cast call --rpc-url $rpc "$network" "trace(uint256[$words])" "$(input_words 0)")
-if python3 - "$ref" "$raw" <<'EOF'
+  raw=$(cast call --rpc-url $rpc "$network" "trace(uint256[$words])" "$(input_words 0)")
+  if python3 - "$ref" "$raw" <<'EOF'
 import json, sys
 ref, raw = sys.argv[1], sys.argv[2]
 trace = json.loads(open(ref + "/trace.jsonl", encoding="utf-8").readline())
@@ -102,28 +163,75 @@ if got != expected:
 print("trace: sample 0 equals trace.jsonl (%d hidden values, %d logits)"
       % (sum(len(h) for h in trace["hidden"]), len(trace["logits"])))
 EOF
-then :; else failures=$((failures + 1)); fi
+  then :; else failures=$((failures + 1)); fi
+}
 
-x0="$(input_words 0)"
+# send_classify <label>: mines classify of sample 0 and prints its row; sets used and execution.
+send_classify() {
+  used=$(cast send --rpc-url $rpc --private-key $key "$network" "$classify_sig" "$x0" --json \
+    | python3 -c 'import json, sys; print(int(json.load(sys.stdin)["gasUsed"], 16))')
+  execution=$(python3 "$root/tools/execution_gas.py" "$calldata" "$used")
+  printf '%-28s %9s %9s %9s %6d bytes of calldata\n' "$1" "$estimate" "$used" "$execution" $bytes
+}
+
+chain="anvil, Osaka"
+osaka_estimate=""
+osaka_send=""
+start_chain osaka
+deploy_all
 estimate=$(cast estimate --rpc-url $rpc --from $me "$network" "$classify_sig" "$x0" 2>&1 | head -1)
-calldata=$(cast calldata "$classify_sig" "$x0")
-used=$(cast send --rpc-url $rpc --private-key $key "$network" "$classify_sig" "$x0" --json \
-  | python3 -c 'import json, sys; print(int(json.load(sys.stdin)["gasUsed"], 16))')
-execution=$(python3 "$root/tools/execution_gas.py" "$calldata" "$used")
-bytes=$(( (${#calldata} - 2) / 2 ))
-printf '%-28s %9s %9s %9s %6d bytes of calldata\n' "Network.classify (sample 0)" "$estimate" "$used" "$execution" $bytes
+if [[ "$estimate" =~ ^[0-9]+$ ]] && [ "$estimate" -le $cap ]; then
+  check_answers
+  send_classify "Network.classify (sample 0)"
+else
+  # Over the cap. anvil (Foundry 1.9.0) does not enforce EIP-7825 unless asked, so Osaka is started
+  # again with --enable-tx-gas-limit; record what it says, then measure where the transaction can run.
+  echo "Osaka without --enable-tx-gas-limit, cast estimate of classify (sample 0): $estimate"
+  start_chain osaka --enable-tx-gas-limit
+  deploy_all
+  osaka_estimate=$(cast estimate --rpc-url $rpc --from $me "$network" "$classify_sig" "$x0" 2>&1 | grep -v '^\s*$' | head -1)
+  echo "Osaka, cast estimate of classify (sample 0): $osaka_estimate"
+  osaka_send=$(cast send --rpc-url $rpc --private-key $key --gas-limit 30000000 "$network" "$classify_sig" "$x0" \
+    --json 2>&1 | grep -v '^\s*$' | head -1)
+  echo "Osaka, cast send of classify (sample 0) with a 30,000,000 gas limit: $osaka_send"
+  if cast send --rpc-url $rpc --private-key $key --gas-limit 30000000 "$network" "$classify_sig" "$x0" \
+    --json > /dev/null 2>&1; then
+    echo "WRONG: Osaka mined a transaction with a gas limit above $cap"
+    failures=$((failures + 1))
+  fi
+  chain="anvil, Prague, block gas limit 1,000,000,000"
+  echo "=== on $chain"
+  start_chain prague --gas-limit 1000000000
+  deploy_all
+  estimate=$(cast estimate --rpc-url $rpc --from $me "$network" "$classify_sig" "$x0" 2>&1 | head -1)
+  check_answers
+  send_classify "Network.classify (sample 0)"
+  if [ "$used" -le $cap ]; then
+    echo "WRONG: the forward pass used $used gas on Prague, within the Osaka cap, but Osaka refused it"
+    failures=$((failures + 1))
+  else
+    python3 -c 'import sys; u, c = int(sys.argv[1]), int(sys.argv[2]); print("the forward pass needs %d gas, %.2f times the %d a transaction may use on Osaka" % (u, u / c, c))' "$used" $cap
+  fi
+fi
 echo "network_gas: $failures wrong result(s)"
 if [ -n "$record" ] && [ $failures -eq 0 ]; then
-  python3 - "$record" "$ref/model.json" "$estimate" "$used" "$execution" "$bytes" "$network_size" "$samples" "$(fe --version)" $sizes <<'EOF'
+  python3 - "$record" "$ref/model.json" "$estimate" "$used" "$execution" "$bytes" "$network_size" "$samples" "$(fe --version)" "$chain" "$osaka_estimate" "$osaka_send" "$oversize" "$runtime_bytes" "$init_bytes" $sizes <<'EOF'
 import json, sys
 record_path, model_path, estimate, used, execution, size, network_size, samples, fe_version = sys.argv[1:10]
+chain, osaka_estimate, osaka_send, oversize, runtime_bytes, init_bytes = sys.argv[10:16]
 model = json.load(open(model_path, encoding="utf-8"))
-record = {"model": model["name"], "fe": fe_version, "chain": "anvil, Osaka", "sample": 0,
+record = {"model": model["name"], "fe": fe_version, "chain": chain, "sample": 0,
           "classify": {"estimate": int(estimate), "gas_used": int(used), "execution": int(execution),
                        "calldata_bytes": int(size)},
           "classify_samples_checked": int(samples),
           "network_deployed_bytes": int(network_size),
-          "weight_contract_bytes": [int(v) for v in sys.argv[10:]]}
+          "weight_contract_bytes": [int(v) for v in sys.argv[16:]]}
+if osaka_estimate:
+    record["osaka"] = {"tx_gas_cap": 16777216, "estimate": osaka_estimate, "send_30m_gas_limit": osaka_send}
+if oversize:
+    record["network_over_size_limit"] = {"eip170_runtime_limit": 24576, "runtime_bytes": int(runtime_bytes),
+                                         "eip3860_initcode_limit": 49152, "init_code_bytes": int(init_bytes),
+                                         "anvil": oversize}
 with open(record_path, "w", encoding="utf-8", newline="\n") as f:
     json.dump(record, f, indent=1)
     f.write("\n")

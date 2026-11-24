@@ -1,4 +1,4 @@
-"""Run the NumPy reference on any dense model and write what the generators need.
+"""Run the NumPy reference on any model and write what the generators need.
 
 Usage:
     python tools/ref_vectors.py --model MODEL.json --out DIR [--inputs INPUTS.bin | --random N]
@@ -6,8 +6,9 @@ Usage:
 
 MODEL.json is a model in the format of docs/spec.md section 5: "name", "input_frac_bits" (7),
 and per layer "in", "out", "weight_frac_bits", "shift" (null on the last layer), "weights"
-(OUT rows of IN integers in -127..127) and "bias" (OUT int32). "worst_case_abs_acc" may be
-missing: it is computed here.
+(OUT rows of IN integers in -127..127) and "bias" (OUT int32). A convolution layer has
+"kind": "conv1d" with "channels", "kernel" and "stride" (docs/spec.md section 8).
+"worst_case_abs_acc" may be missing: it is computed here.
 
 Writes into DIR, in the formats of docs/spec.md section 6:
     model.json    the model with "worst_case_abs_acc" per layer (what tools/gen_fe.py reads)
@@ -61,7 +62,8 @@ def main():
     layers = []
     for lay in model["layers"]:
         bound = max(ref.worst_case_abs_acc(lay["weights"], lay["bias"]))
-        layers.append({"in": lay["in"], "out": lay["out"], "weight_frac_bits": lay["weight_frac_bits"],
+        shape = {key: lay[key] for key in ("kind", "channels", "kernel", "stride") if key in lay}
+        layers.append({**shape, "in": lay["in"], "out": lay["out"], "weight_frac_bits": lay["weight_frac_bits"],
                        "shift": lay["shift"], "worst_case_abs_acc": bound,
                        "weights": lay["weights"], "bias": lay["bias"]})
     out_model = {"name": model["name"], "input_frac_bits": model["input_frac_bits"], "layers": layers}

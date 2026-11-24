@@ -1,0 +1,8 @@
+[ingot]
+name = "arbiter"
+version = "0.1.0"
+
+[dependencies]
+tensile = { path = "../../../../ingots/tensile" }
+dispute = { path = "../../../../ingots/dispute" }
+model = true

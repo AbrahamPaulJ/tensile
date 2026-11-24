@@ -1,0 +1,130 @@
+{
+ "model": "amm-fee-conv-288",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 0,
+ "arbiter_runtime_bytes": 22565,
+ "calls": [
+  {
+   "call": "claim",
+   "signature": "claim(uint256[9],uint256[141],uint256[35],uint256[9],uint256[1],int32[3],uint8)",
+   "estimate": 617131,
+   "gas_used": 617131,
+   "execution": 517507,
+   "calldata_bytes": 6372
+  },
+  {
+   "call": "challengeFilter1 (8 x 1 window)",
+   "signature": "challengeFilter1(uint256,uint256,uint256,uint256[2],uint256[8],uint256,uint256[8],uint256[1],int32,bytes32[])",
+   "estimate": 126032,
+   "gas_used": 126032,
+   "execution": 90352,
+   "calldata_bytes": 1060
+  },
+  {
+   "call": "challengeFilter2 (4 x 16 window)",
+   "signature": "challengeFilter2(uint256,uint256,uint256,uint256[3],uint256[24],uint256,uint256[6],uint256[2],int32,bytes32[])",
+   "estimate": 107674,
+   "gas_used": 107674,
+   "execution": 64102,
+   "calldata_bytes": 1572
+  },
+  {
+   "call": "challengeFilter3 (4 x 16 window)",
+   "signature": "challengeFilter3(uint256,uint256,uint256,uint256[3],uint256[18],uint256,uint256[4],uint256[2],int32,bytes32[])",
+   "estimate": 100319,
+   "gas_used": 100319,
+   "execution": 60879,
+   "calldata_bytes": 1316
+  },
+  {
+   "call": "challengeNeuron4 (272 inputs)",
+   "signature": "challengeNeuron4(uint256,uint256,uint256[9],uint256[1],uint256[9],int32,bytes32[])",
+   "estimate": 110306,
+   "gas_used": 110306,
+   "execution": 76826,
+   "calldata_bytes": 996
+  },
+  {
+   "call": "challengeNeuron5 (32 inputs)",
+   "signature": "challengeNeuron5(uint256,uint256,uint256[1],int32[3],uint256[1],int32,bytes32[])",
+   "estimate": 75829,
+   "gas_used": 75829,
+   "execution": 50369,
+   "calldata_bytes": 452
+  },
+  {
+   "call": "challengeClass",
+   "signature": "challengeClass(uint256,int32[3])",
+   "estimate": 62940,
+   "gas_used": 62940,
+   "execution": 40920,
+   "calldata_bytes": 132
+  },
+  {
+   "call": "later challengeFilter1 (8 x 1 window)",
+   "signature": "challengeFilter1(uint256,uint256,uint256,uint256[2],uint256[8],uint256,uint256[8],uint256[1],int32,bytes32[])",
+   "estimate": 91832,
+   "gas_used": 91832,
+   "execution": 56152,
+   "calldata_bytes": 1060
+  },
+  {
+   "call": "later challengeFilter2 (4 x 16 window)",
+   "signature": "challengeFilter2(uint256,uint256,uint256,uint256[3],uint256[24],uint256,uint256[6],uint256[2],int32,bytes32[])",
+   "estimate": 107674,
+   "gas_used": 107674,
+   "execution": 64102,
+   "calldata_bytes": 1572
+  },
+  {
+   "call": "later challengeFilter3 (4 x 16 window)",
+   "signature": "challengeFilter3(uint256,uint256,uint256,uint256[3],uint256[18],uint256,uint256[4],uint256[2],int32,bytes32[])",
+   "estimate": 100319,
+   "gas_used": 100319,
+   "execution": 60879,
+   "calldata_bytes": 1316
+  },
+  {
+   "call": "later challengeNeuron4 (272 inputs)",
+   "signature": "challengeNeuron4(uint256,uint256,uint256[9],uint256[1],uint256[9],int32,bytes32[])",
+   "estimate": 110306,
+   "gas_used": 110306,
+   "execution": 76826,
+   "calldata_bytes": 996
+  },
+  {
+   "call": "later challengeNeuron5 (32 inputs)",
+   "signature": "challengeNeuron5(uint256,uint256,uint256[1],int32[3],uint256[1],int32,bytes32[])",
+   "estimate": 75829,
+   "gas_used": 75829,
+   "execution": 50369,
+   "calldata_bytes": 452
+  },
+  {
+   "call": "later challengeClass",
+   "signature": "challengeClass(uint256,int32[3])",
+   "estimate": 62940,
+   "gas_used": 62940,
+   "execution": 40920,
+   "calldata_bytes": 132
+  },
+  {
+   "call": "finalize",
+   "signature": "finalize(uint256)",
+   "estimate": 55273,
+   "gas_used": 55273,
+   "execution": 34081,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "withdraw (13 credits)",
+   "signature": "withdraw()",
+   "estimate": 35614,
+   "gas_used": 29945,
+   "execution": 8881,
+   "calldata_bytes": 4
+  }
+ ],
+ "binding": "tree"
+}

@@ -143,6 +143,66 @@ def layer(weights, bias, x, shift):
     return clamp_act(shift_floor(acc, shift))
 
 
+def conv_positions(length, kernel, stride):
+    """Number of positions of a convolution without padding (spec section 8)."""
+    return (length - kernel) // stride + 1
+
+
+def conv_shape(lay):
+    """(L, C, K, S, P, filters) of a "conv1d" layer dict; raises ValueError if its fields disagree."""
+    c, k, s = lay["channels"], lay["kernel"], lay["stride"]
+    for name, value in (("channels", c), ("kernel", k), ("stride", s)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("conv1d: %s must be a positive integer" % name)
+    if lay["in"] % c != 0:
+        raise ValueError("conv1d: in is not a whole number of positions of %d channels" % c)
+    length = lay["in"] // c
+    if length < k:
+        raise ValueError("conv1d: the kernel is longer than the sequence")
+    filters = len(lay["weights"])
+    p = conv_positions(length, k, s)
+    if lay["out"] != p * filters:
+        raise ValueError("conv1d: out must be positions * filters = %d * %d" % (p, filters))
+    return length, c, k, s, p, filters
+
+
+def conv1d_acc(weights, bias, x, channels, stride):
+    """Accumulators of a 1D convolution without padding (spec section 8).
+
+    weights: (FILTERS, K * C), filter j as K positions of C channels.  bias: (FILTERS,).
+    x: (L * C,) or (N, L * C), position by position.  Returns (P * FILTERS,) or (N, P * FILTERS):
+    value p * FILTERS + j is `_neuron_arith` (the arithmetic of a dense neuron) of filter j on the
+    K * C values of x that start at value p * stride * C.
+    """
+    w = _as_int64(weights, "weights")
+    b = _as_int64(bias, "bias")
+    xv = _as_int64(x, "activations")
+    if w.ndim != 2 or b.shape != (w.shape[0],) or w.shape[1] % channels != 0:
+        raise ValueError("weights must be (FILTERS, K * C) and bias (FILTERS,)")
+    if xv.ndim not in (1, 2) or xv.shape[-1] % channels != 0 or xv.shape[-1] < w.shape[1]:
+        raise ValueError("input shape %s does not hold positions of %d channels" % (xv.shape, channels))
+    span = w.shape[1]
+    _check_operands(w, b, xv[..., :span])
+    if xv.size and (int(xv.min()) < ACT_MIN or int(xv.max()) > ACT_MAX):
+        raise ValueError("activation outside 0..127")
+    count = conv_positions(xv.shape[-1] // channels, span // channels, stride)
+    starts = np.arange(count) * (stride * channels)
+    # patches[..., p, :] is the window of position p.
+    patches = xv[..., starts[:, None] + np.arange(span)[None, :]]
+    acc = np.stack([_neuron_arith(w[j], b[j], patches) for j in range(w.shape[0])], axis=-1)
+    return acc.reshape(xv.shape[:-1] + (count * w.shape[0],))
+
+
+def layer_of(lay, x):
+    """Run one layer given as a model dict entry: a dense layer, or `"kind": "conv1d"`."""
+    if lay.get("kind", "dense") == "conv1d":
+        acc = conv1d_acc(lay["weights"], lay["bias"], x, lay["channels"], lay["stride"])
+        if lay["shift"] is None:
+            return acc
+        return clamp_act(shift_floor(acc, lay["shift"]))
+    return layer(lay["weights"], lay["bias"], x, lay["shift"])
+
+
 def run(model, x0):
     """Run the whole network on x0, shape (IN_1,) or (N, IN_1), values 0..127.
 
@@ -158,7 +218,7 @@ def run(model, x0):
         last = idx == len(layers) - 1
         if last != (lay["shift"] is None):
             raise ValueError("exactly the last layer must have shift null")
-        x = layer(lay["weights"], lay["bias"], x, lay["shift"])
+        x = layer_of(lay, x)
         if not last:
             hidden.append(x)
     return hidden, x, argmax_low(x)
@@ -191,7 +251,16 @@ def check_model(model):
     for idx, lay in enumerate(layers):
         w = _as_int64(lay["weights"], "weights")
         b = _as_int64(lay["bias"], "bias")
-        if w.shape != (lay["out"], lay["in"]) or b.shape != (lay["out"],):
+        kind = lay.get("kind", "dense")
+        if kind == "conv1d":
+            _, c, k, _, _, filters = conv_shape(lay)
+            if w.shape != (filters, k * c) or b.shape != (filters,):
+                raise ValueError("layer %d: weights or bias shape does not match the filters" % (idx + 1))
+            if idx == len(layers) - 1:
+                raise ValueError("the last layer must be dense")
+        elif kind != "dense":
+            raise ValueError("layer %d: unknown kind %r" % (idx + 1, kind))
+        elif w.shape != (lay["out"], lay["in"]) or b.shape != (lay["out"],):
             raise ValueError("layer %d: weights or bias shape does not match in/out" % (idx + 1))
         if prev_out is not None and lay["in"] != prev_out:
             raise ValueError("layer %d: in != out of the previous layer" % (idx + 1))

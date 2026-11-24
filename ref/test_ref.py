@@ -307,6 +307,37 @@ def test_export_is_deterministic():
             check(info["files"][name][1] == again, "%s: reported hash" % name)
 
 
+def test_conv1d():
+    """conv1d_acc and layer_of (docs/spec.md section 8) against the definition written as plain
+    Python loops, on random shapes, strides, weights and inputs; and the shape rules."""
+    rng = random.Random(8)
+    for _ in range(60):
+        c, k, s, f = rng.randint(1, 5), rng.randint(1, 6), rng.randint(1, 4), rng.randint(1, 5)
+        length = k + rng.randint(0, 12)
+        p = (length - k) // s + 1
+        w = [[rng.randint(-127, 127) for _ in range(k * c)] for _ in range(f)]
+        b = [rng.randint(-50000, 50000) for _ in range(f)]
+        x = [rng.randint(0, 127) for _ in range(length * c)]
+        shift = rng.randint(0, 12)
+        expected = []
+        for pos in range(p):
+            for j in range(f):
+                acc = b[j] + sum(w[j][kk * c + cc] * x[(pos * s + kk) * c + cc] for kk in range(k) for cc in range(c))
+                expected.append(min(max(acc >> shift, 0), 127))
+        lay = {"kind": "conv1d", "in": length * c, "out": p * f, "channels": c, "kernel": k, "stride": s,
+               "weights": w, "bias": b, "shift": shift}
+        check(ref.conv_shape(lay)[4] == p, "conv_shape positions")
+        got = [int(v) for v in ref.layer_of(lay, np.array(x, dtype=np.int64))]
+        check(got == expected, "conv1d differs from the loops: C %d K %d S %d F %d L %d" % (c, k, s, f, length))
+        batch = ref.layer_of(lay, np.array([x, x], dtype=np.int64))
+        check([int(v) for v in batch[1]] == expected, "conv1d on a batch")
+    bad = {"kind": "conv1d", "in": 10, "out": 9, "channels": 1, "kernel": 3, "stride": 1,
+           "weights": [[1, 2, 3]], "bias": [0], "shift": 0}
+    raises(ValueError, lambda: ref.conv_shape(bad), "out must be positions * filters")
+    raises(ValueError, lambda: ref.conv_shape(dict(bad, kernel=11, out=0)), "kernel longer than the sequence")
+    raises(ValueError, lambda: ref.conv_shape(dict(bad, channels=3)), "in not a multiple of channels")
+
+
 def main():
     t0 = time.perf_counter()
     for name in export.OUT_FILES:
@@ -324,6 +355,7 @@ def main():
         ("argmax tie rule", test_argmax),
         ("int32 overflow detection", test_overflow),
         ("operand range checks", test_operand_checks),
+        ("1D convolution against plain loops", test_conv1d),
         ("exported file sizes and model.json structure", lambda: test_file_sizes(model)),
         ("inputs.bin and labels.bin are the MNIST test set", test_inputs_are_mnist),
         ("pure-Python recomputation on %d images" % N_PURE, lambda: test_pure_python(model, np_model, x0)),

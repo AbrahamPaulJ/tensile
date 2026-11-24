@@ -1,0 +1,293 @@
+//! Convolution over a sequence: a filter is a neuron that reads one window.
+//!
+//! A sequence of `L` positions with `C` channels is an activation vector of
+//! `L * C` values, position by position (`docs/spec.md` section 8). A filter
+//! of kernel size `K` is a `Row` of `K * C` weights, and its output at
+//! position `p` is `neuron` on the `K * C` values that start at position
+//! `p * S`: the function a dense layer runs once per row. So the overflow
+//! proof of a dense layer (`worst_case`) is the proof of a convolution, and a
+//! dispute about one output value re-runs one `neuron` on one window.
+use ingot::accumulators::{Accumulators, Bias, Q}
+use ingot::activations::Activations
+use ingot::bound::{I32_MAX, worst_case}
+use ingot::dense::{dot_fits_i32, neuron}
+use ingot::packed::{Packed, word_count}
+use ingot::testing::sequence
+use ingot::weights::{Row, Weights}
+
+/// Number of positions a filter of kernel size `kernel` visits on a sequence
+/// of `length` positions, moving `stride` positions at a time, without
+/// padding: `(length - kernel) / stride + 1`.
+pub const fn positions(_ length: usize, _ kernel: usize, _ stride: usize) -> usize {
+    (length - kernel) / stride + 1
+}
+
+/// Number of values a convolution with `filters` filters produces: one per
+/// position and filter.
+pub const fn conv_outputs(
+    _ length: usize,
+    _ kernel: usize,
+    _ stride: usize,
+    _ filters: usize,
+) -> usize {
+    positions(length, kernel, stride) * filters
+}
+
+/// The `M` values of `x` that start at value `start`, as a vector of their
+/// own. Fails if the window does not lie inside `x`.
+///
+/// A window is cut out of the packed words with two shifts per word, so it
+/// costs the same wherever it starts.
+pub fn window<const N: usize, const M: usize, const F: usize>(
+    x: Activations<N, F>,
+    start: usize,
+) -> Activations<M, F> {
+    assert!(start + M <= N)
+    var words: [u256; word_count(M)] = [0; word_count(M)]
+    let first = start / 32
+    let up: u256 = ((start % 32) * 8) as u256
+    for k in 0 .. word_count(M) {
+        var word = x.values.words[first + k] << up
+        if up != 0 && first + k + 1 < word_count(N) {
+            word |= x.values.words[first + k + 1] >> (256 - up)
+        }
+        words[k] = word
+    }
+    if M % 32 != 0 {
+        // The last word also holds what follows the window: keep `M % 32`
+        // bytes of it, so that the padding is zero.
+        let unused: u256 = ((32 - M % 32) * 8) as u256
+        words[M / 32] = (words[M / 32] >> unused) << unused
+    }
+    Activations { values: Packed { words } }
+}
+
+/// A sequence of `N / C` positions with `C` channels each, `N` values in
+/// all: activation `c` of position `p` is value `p * C + c` of the flat
+/// vector. The channel count is part of the type, so a filter cannot be run
+/// over a sequence with another number of channels.
+pub struct Sequence<const N: usize, const C: usize, const F: usize> {
+    pub(ingot) flat: Activations<N, F>,
+}
+
+impl<const N: usize, const C: usize, const F: usize> Sequence<N, C, F> {
+    /// Reads a flat vector as positions of `C` channels. It must hold a whole
+    /// number of positions.
+    pub fn from_flat(_ flat: Activations<N, F>) -> Self where N % C == 0 {
+        // `Packed` is `Copy`, so this copies the words and leaves `flat` to
+        // the caller.
+        Self { flat: Activations { values: flat.values } }
+    }
+
+    /// The flat vector.
+    pub fn flat(own self) -> Activations<N, F> {
+        self.flat
+    }
+}
+
+/// The filters of a convolution: `OUT` rows of `IN` weights, a kernel of
+/// `IN / C` positions of `C` channels, row `j` producing channel `j` of the
+/// output, applied every `S` positions.
+pub struct Filters<
+    const OUT: usize,
+    const IN: usize,
+    const C: usize,
+    const S: usize,
+    const FW: usize,
+> { pub(ingot) weights: Weights<OUT, IN, FW> }
+
+impl<const OUT: usize, const IN: usize, const C: usize, const S: usize, const FW: usize> Filters<
+    OUT,
+    IN,
+    C,
+    S,
+    FW,
+> {
+    /// A convolution from its filters, which are the weights of a dense layer
+    /// with `IN` inputs. A filter must cover whole positions and must move.
+    pub const fn new(_ weights: own Weights<OUT, IN, FW>) -> Self where IN % C == 0, S > 0 {
+        Self { weights }
+    }
+
+    /// Filter `j`.
+    pub const fn row(self, _ j: usize) -> Row<IN, FW> {
+        self.weights.rows[j]
+    }
+
+    /// The filters as the weights of a dense layer, one row per filter: what
+    /// `worst_case` takes, so a convolution's overflow proof is a dense one.
+    pub const fn weights(own self) -> Weights<OUT, IN, FW> {
+        self.weights
+    }
+}
+
+/// One output value of a convolution: filter `row` on the `IN` values of `x`
+/// that start at value `start` (`docs/spec.md` section 8). It is `neuron` on
+/// `window`, the two functions `conv1d` runs for every position and filter,
+/// so a dispute that re-runs one output runs the code of the whole layer.
+pub fn filter_at<const IN: usize, const FW: usize, const N: usize, const F: usize>(
+    row: Row<IN, FW>,
+    x: Activations<N, F>,
+    start: usize,
+    bias: Q<{ F + FW }>,
+) -> Q<{ F + FW }>
+where dot_fits_i32(IN)
+{
+    neuron(row, x: window(x, start), bias)
+}
+
+/// The accumulators of a convolution without padding: for every position `p`
+/// in `0 .. positions(N / C, IN / C, S)` and every filter `j`, value
+/// `p * OUT + j` is `neuron(filter j, the IN values of x from position p * S,
+/// bias j)` (`docs/spec.md` section 8). The result is again position by
+/// position, so after `requantise` it is a sequence of `OUT` channels.
+///
+/// The number of outputs `M` is a parameter of its own that the `where`
+/// clause ties to the shapes, so a result declared with another length does
+/// not compile.
+pub fn conv1d<
+    const OUT: usize,
+    const IN: usize,
+    const C: usize,
+    const S: usize,
+    const FW: usize,
+    const N: usize,
+    const F: usize,
+    const M: usize,
+>(
+    filters: Filters<OUT, IN, C, S, FW>,
+    x: Sequence<N, C, F>,
+    bias: Bias<OUT, { F + FW }>,
+) -> Accumulators<M, { F + FW }>
+where dot_fits_i32(IN), M == conv_outputs(N / C, IN / C, S, OUT)
+{
+    var raw: [i32; M] = [0; M]
+    for p in 0 .. M / OUT {
+        let patch: Activations<IN, F> = window(x: x.flat, start: p * S * C)
+        for j in 0 .. OUT {
+            raw[p * OUT + j] = neuron(row: filters.weights.rows[j], x: patch, bias: bias.at(j))
+                .raw()
+        }
+    }
+    Accumulators::from_raw(raw)
+}
+
+static_assert(positions(8, 8, 1) == 1)
+static_assert(positions(288, 8, 2) == 141)
+static_assert(positions(10, 3, 4) == 2)
+
+/// `window` the obvious way, one value at a time.
+fn window_equals_the_values<const N: usize, const M: usize>(start: usize) -> bool {
+    let values: [i8; N] = sequence(start: 3, step: 11, modulus: 128)
+    let cut: Activations<M, 7> = window(x: Activations<N, 7>::pack(values), start)
+    var expected: [i8; M] = [0; M]
+    for i in 0 .. M {
+        expected[i] = values[start + i]
+    }
+    cut == Activations::pack(expected)
+}
+
+#[test]
+fn a_window_is_the_same_values_wherever_it_starts() {
+    for start in 0 .. 70 {
+        assert!(window_equals_the_values<100, 1>(start))
+        assert!(window_equals_the_values<100, 31>(start))
+    }
+    for start in 0 .. 36 {
+        assert!(window_equals_the_values<100, 32>(start))
+        assert!(window_equals_the_values<100, 33>(start))
+        assert!(window_equals_the_values<100, 64>(start))
+        assert!(window_equals_the_values<100, 65>(start))
+    }
+    assert!(window_equals_the_values<100, 100>(start: 0))
+    assert!(window_equals_the_values<64, 32>(start: 32))
+    assert!(window_equals_the_values<64, 7>(start: 57))
+}
+
+/// The convolution written the obvious way over plain arrays: 9 positions of
+/// 3 channels, 2 filters of kernel size 4, stride 2, so 3 output positions.
+fn plain_conv(weights: [[i8; 12]; 2], x: [i8; 27], bias: [i32; 2]) -> [i32; 6] {
+    var out: [i32; 6] = [0; 6]
+    for p in 0 .. 3 {
+        for j in 0 .. 2 {
+            var sum = bias[j]
+            for k in 0 .. 4 {
+                for c in 0 .. 3 {
+                    sum += (weights[j][k * 3 + c] as i32) * (x[(p * 2 + k) * 3 + c] as i32)
+                }
+            }
+            out[p * 2 + j] = sum
+        }
+    }
+    out
+}
+
+#[test]
+fn conv1d_equals_the_plain_loops() {
+    let x: [i8; 27] = sequence(start: 9, step: 5, modulus: 128)
+    let first: [i8; 12] = sequence(start: 1, step: 3, modulus: 256)
+    let second: [i8; 12] = sequence(start: 130, step: 7, modulus: 256)
+    let filters = Filters<2, 12, 3, 2, 6>::new(Weights::new([Row::pack(first), Row::pack(second)]))
+    let bias = Bias<2, 13>::from_raw([1000, -2000])
+    let acc: Accumulators<6, 13> = conv1d(
+        filters,
+        x: Sequence<27, 3, 7>::from_flat(Activations::pack(x)),
+        bias,
+    )
+    let expected = plain_conv(weights: [first, second], x, bias: [1000, -2000])
+    assert!(acc == Accumulators<6, 13>::from_raw(expected))
+}
+
+/// The filters of `conv1d_equals_the_plain_loops`.
+const TWO: Filters<2, 12, 3, 2, 6> = Filters::new(
+    Weights::new(
+        [
+            Row::pack(sequence(start: 1, step: 3, modulus: 256)),
+            Row::pack(sequence(start: 130, step: 7, modulus: 256)),
+        ],
+    ),
+)
+const TWO_BIAS: Bias<2, 13> = Bias::from_raw([1000, -2000])
+
+static_assert(worst_case(weights: TWO.weights(), bias: TWO_BIAS) <= I32_MAX)
+
+#[test]
+fn filter_at_is_every_output_of_conv1d() {
+    let x: [i8; 27] = sequence(start: 9, step: 5, modulus: 128)
+    let flat = Activations<27, 7>::pack(x)
+    let acc: Accumulators<6, 13> = conv1d(
+        filters: TWO,
+        x: Sequence<27, 3, 7>::from_flat(Activations::pack(x)),
+        bias: TWO_BIAS,
+    )
+    for p in 0 .. 3 {
+        for j in 0 .. 2 {
+            let one = filter_at(
+                row: TWO.row(j),
+                x: flat,
+                start: p * 2 * 3,
+                bias: TWO_BIAS.at(j),
+            )
+            assert!(one.raw() == acc.at(p * 2 + j).raw())
+        }
+    }
+}
+
+#[test]
+fn a_filter_as_long_as_the_sequence_is_a_dense_neuron() {
+    let x: [i8; 40] = sequence(start: 2, step: 9, modulus: 128)
+    let row: [i8; 40] = sequence(start: 77, step: 37, modulus: 256)
+    let filters = Filters<1, 40, 1, 1, 7>::new(Weights::new([Row::pack(row)]))
+    let bias = Bias<1, 14>::from_raw([-55])
+    let acc: Accumulators<1, 14> = conv1d(
+        filters,
+        x: Sequence<40, 1, 7>::from_flat(Activations::pack(x)),
+        bias,
+    )
+    let dense = neuron(
+        row: Row<40, 7>::pack(row),
+        x: Activations<40, 7>::pack(x),
+        bias: Q<14>::from_raw(-55),
+    )
+    assert!(acc.at(0).raw() == dense.raw())
+}

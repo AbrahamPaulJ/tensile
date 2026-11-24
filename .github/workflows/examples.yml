@@ -167,3 +167,30 @@ jobs:
           examples/address-risk-trees/runs/ensemble-gas.json
           examples/address-risk-trees/runs/gate-gas.json
           examples/address-risk-trees/runs/sizes.json
+
+  amm-fee-conv:
+    name: AMM fee tier with 1D convolutions (288 moves in), the whole check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: fe --version
+      # All of check.sh, on the committed tick series (examples/amm-fee/data), model and reference
+      # output: nothing is downloaded and nothing is trained here. 443 s on the development laptop.
+      - run: bash examples/amm-fee-conv/check.sh
+      - name: The generated sources and the recorded gas and sizes are what this run produced
+        run: >
+          git diff --exit-code --
+          examples/amm-fee-conv/ingots
+          examples/amm-fee-conv/fe.toml
+          examples/amm-fee-conv/runs/arbiter-gas.json
+          examples/amm-fee-conv/runs/arbiter-gas-flat.json
+          examples/amm-fee-conv/runs/network-gas.json
+          examples/amm-fee-conv/runs/sizes.json

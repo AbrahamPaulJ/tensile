@@ -1,0 +1,1382 @@
+//! Unit tests of `Arbiter` on reference sample 0: an honest claim survives
+//! every challenge; a claim with one wrong hidden value, one wrong logit or a
+//! wrong class is slashed by the challenge the auditor would name and by no
+//! other (for a convolution, the filter at that position); malformed claims, wrong proofs and vectors that do not match the
+//! commitments are rejected with their own errors; finalising and
+//! withdrawing move the bond. Each failed call is checked for its error
+//! selector, so a revert for the wrong reason fails the test.
+//!
+//! The proofs are built here from the model's own rows, by the same rule as
+//! `tools/gen_tree.py`; the root must come out as the generated `MODEL_ROOT`.
+use core::abi::Encode
+use core::error::ErrorVariant
+use core::marker::Copy
+use core::message::MsgVariant
+use core::ptr::MemVec
+use ingot::{Arbiter, ArbiterMsg, leaf}
+use ingot::vectors::{word_leaf, word_parent}
+use ingot::signals::{
+    BondTooSmall,
+    ClaimNotOpen,
+    ClassOutOfRange,
+    InputMismatch,
+    MalformedHidden,
+    MalformedInput,
+    NeuronOutOfRange,
+    NoFraud,
+    NotCommitted,
+    NotFinal,
+    NothingToWithdraw,
+    OutputMismatch,
+    PositionOutOfRange,
+    TooEarly,
+    TooLate,
+    TransferFailed,
+    UnknownClaim,
+}
+use model::{commitment, layer1, layer2, layer3, layer4, layer5, reference}
+use std::abi::{Bytes32, DynArray, FixedBytes, Sol}
+use std::evm::{
+    Address,
+    Call,
+    CallOutcome,
+    Ctx,
+    Duration,
+    Evm,
+    Timestamp,
+    Wei,
+    is_error,
+    seconds,
+    wei,
+}
+use tensile::Activations
+
+/// Gas given to every call: the Osaka limit of one transaction.
+const GAS: u256 = 16777216
+
+/// The bond the test arbiters require.
+const BOND: Wei = wei(1_000_000)
+
+/// What a slash credits the challenger: half the bond. The rest is burned.
+const REWARD: Wei = wei(500_000)
+const BURN: Wei = wei(500_000)
+
+/// A window no test can reach the end of.
+const LONG: Duration = seconds(1_000_000)
+
+/// Status codes (`dispute::Status::code`).
+const OPEN: u8 = 1
+const SLASHED: u8 = 2
+const FINAL: u8 = 3
+
+/// Number of leaves of the neuron tree: 16 filters of layer 1, then 16 filters of layer 2, then 16 filters of layer 3, then 32 of layer 4, then 3 of layer 5.
+const LEAVES: usize = 83
+
+/// The longest proof in a tree of 83 leaves.
+const DEPTH: usize = 7
+
+/// The vectors of one claim.
+struct Vectors {
+    x0: [u256; 9],
+    hidden1: [u256; 141],
+    hidden2: [u256; 35],
+    hidden3: [u256; 9],
+    hidden4: [u256; 1],
+    logits: [i32; 3],
+    class: u8,
+}
+
+impl Copy for Vectors {}
+
+/// The honest claim for reference sample 0.
+fn honest() -> Vectors {
+    Vectors {
+        x0: reference::X0.words(),
+        hidden1: reference::HIDDEN1_0.words(),
+        hidden2: reference::HIDDEN2_0.words(),
+        hidden3: reference::HIDDEN3_0.words(),
+        hidden4: reference::HIDDEN4_0.words(),
+        logits: reference::LOGITS0.values(),
+        class: reference::CLASS0.downcast_truncate(),
+    }
+}
+
+/// The honest claim with value `j` of hidden vector 1 changed by one, in
+/// its packed word (byte `j % 32` of word `j / 32`, `docs/spec.md` section 7).
+fn wrong_hidden1(_ j: usize) -> Vectors {
+    var vectors = honest()
+    let shift: u256 = ((31 - j % 32) * 8) as u256
+    let word = vectors.hidden1[j / 32]
+    let old = (word >> shift) & 0xff
+    let new: u256 = if old == 127 { 126 } else { old + 1 }
+    vectors.hidden1[j / 32] = word ^ ((old ^ new) << shift)
+    vectors
+}
+
+/// The honest claim with value `j` of hidden vector 2 changed by one, in
+/// its packed word (byte `j % 32` of word `j / 32`, `docs/spec.md` section 7).
+fn wrong_hidden2(_ j: usize) -> Vectors {
+    var vectors = honest()
+    let shift: u256 = ((31 - j % 32) * 8) as u256
+    let word = vectors.hidden2[j / 32]
+    let old = (word >> shift) & 0xff
+    let new: u256 = if old == 127 { 126 } else { old + 1 }
+    vectors.hidden2[j / 32] = word ^ ((old ^ new) << shift)
+    vectors
+}
+
+/// The honest claim with value `j` of hidden vector 3 changed by one, in
+/// its packed word (byte `j % 32` of word `j / 32`, `docs/spec.md` section 7).
+fn wrong_hidden3(_ j: usize) -> Vectors {
+    var vectors = honest()
+    let shift: u256 = ((31 - j % 32) * 8) as u256
+    let word = vectors.hidden3[j / 32]
+    let old = (word >> shift) & 0xff
+    let new: u256 = if old == 127 { 126 } else { old + 1 }
+    vectors.hidden3[j / 32] = word ^ ((old ^ new) << shift)
+    vectors
+}
+
+/// The honest claim with value `j` of hidden vector 4 changed by one, in
+/// its packed word (byte `j % 32` of word `j / 32`, `docs/spec.md` section 7).
+fn wrong_hidden4(_ j: usize) -> Vectors {
+    var vectors = honest()
+    let shift: u256 = ((31 - j % 32) * 8) as u256
+    let word = vectors.hidden4[j / 32]
+    let old = (word >> shift) & 0xff
+    let new: u256 = if old == 127 { 126 } else { old + 1 }
+    vectors.hidden4[j / 32] = word ^ ((old ^ new) << shift)
+    vectors
+}
+
+/// The honest claim with logit `j` changed by one.
+fn wrong_logit(_ j: usize) -> Vectors {
+    var vectors = honest()
+    vectors.logits[j] += 1
+    vectors
+}
+
+/// The honest claim with another class.
+fn wrong_class() -> Vectors {
+    var vectors = honest()
+    vectors.class = (vectors.class + 1) % 3
+    vectors
+}
+
+fn deploy(window: Duration) -> Address uses (evm: mut Evm) {
+    evm.create2<Arbiter>(
+        value: Wei::zero(),
+        args: (commitment::MODEL_ROOT, BOND, window),
+        salt: 0,
+    )
+}
+
+/// Posts `vectors` with the bond and returns the claim number.
+fn post(arbiter: Address, _ vectors: Vectors) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: BOND,
+        message: claim_message(vectors),
+    )
+}
+
+fn claim_message(_ vectors: Vectors) -> ArbiterMsg::Claim {
+    ArbiterMsg::Claim {
+        x0: vectors.x0,
+        hidden1: vectors.hidden1,
+        hidden2: vectors.hidden2,
+        hidden3: vectors.hidden3,
+        hidden4: vectors.hidden4,
+        logits: vectors.logits,
+        class: vectors.class,
+    }
+}
+
+/// Every leaf of the neuron tree, in tree order.
+fn leaves() -> [u256; LEAVES] {
+    var out: [u256; LEAVES] = [0; LEAVES]
+    for j in 0 .. 16 {
+        out[j] = leaf(
+            layer: 1,
+            neuron: j as u256,
+            bias: layer1::bias(j).raw(),
+            row: layer1::row(j).words(),
+        )
+    }
+    for j in 0 .. 16 {
+        out[16 + j] = leaf(
+            layer: 2,
+            neuron: j as u256,
+            bias: layer2::bias(j).raw(),
+            row: layer2::row(j).words(),
+        )
+    }
+    for j in 0 .. 16 {
+        out[32 + j] = leaf(
+            layer: 3,
+            neuron: j as u256,
+            bias: layer3::bias(j).raw(),
+            row: layer3::row(j).words(),
+        )
+    }
+    for j in 0 .. 32 {
+        out[48 + j] = leaf(
+            layer: 4,
+            neuron: j as u256,
+            bias: layer4::bias(j).raw(),
+            row: layer4::row(j).words(),
+        )
+    }
+    for j in 0 .. 3 {
+        out[80 + j] = leaf(
+            layer: 5,
+            neuron: j as u256,
+            bias: layer5::bias(j).raw(),
+            row: layer5::row(j).words(),
+        )
+    }
+    out
+}
+
+/// The proof of leaf `index` and its length, by the rule of
+/// `docs/spec-dispute.md` section 2 (sorted pairs, the odd last node promoted).
+/// The root the walk reaches must be the generated one.
+fn proof_for(_ index: usize) -> ([u256; DEPTH], usize) {
+    var level = leaves()
+    var count = LEAVES
+    var position = index
+    var proof: [u256; DEPTH] = [0; DEPTH]
+    var len: usize = 0
+    while count > 1 {
+        var next: usize = 0
+        var k: usize = 0
+        while k < count {
+            if k + 1 == count {
+                level[next] = level[k]
+            } else {
+                if position == k {
+                    proof[len] = level[k + 1]
+                    len += 1
+                } else if position == k + 1 {
+                    proof[len] = level[k]
+                    len += 1
+                }
+                level[next] = std::evm::merkle::hash_pair_sorted(level[k], level[k + 1])
+            }
+            if position == k || position == k + 1 {
+                position = next
+            }
+            next += 1
+            k += 2
+        }
+        count = next
+    }
+    assert!(level[0] == commitment::MODEL_ROOT)
+    (proof, len)
+}
+
+/// The first `len` nodes of `proof` as the `bytes32[]` a challenge carries.
+fn as_bytes32(_ proof: [u256; DEPTH], len: usize) -> DynArray<Bytes32> {
+    var nodes = MemVec::with_capacity(len)
+    for i in 0 .. len {
+        nodes.push(FixedBytes<32> { val: proof[i] })
+    }
+    DynArray::from_slice(nodes.as_slice())
+}
+
+/// The proof of filter `j` of layer 1.
+fn proof1(_ j: usize) -> DynArray<Bytes32> {
+    let found = proof_for(j)
+    as_bytes32(found.0, len: found.1)
+}
+
+/// The proof of filter `j` of layer 2.
+fn proof2(_ j: usize) -> DynArray<Bytes32> {
+    let found = proof_for(16 + j)
+    as_bytes32(found.0, len: found.1)
+}
+
+/// The proof of filter `j` of layer 3.
+fn proof3(_ j: usize) -> DynArray<Bytes32> {
+    let found = proof_for(32 + j)
+    as_bytes32(found.0, len: found.1)
+}
+
+/// The proof of neuron `j` of layer 4.
+fn proof4(_ j: usize) -> DynArray<Bytes32> {
+    let found = proof_for(48 + j)
+    as_bytes32(found.0, len: found.1)
+}
+
+/// The proof of neuron `j` of layer 5.
+fn proof5(_ j: usize) -> DynArray<Bytes32> {
+    let found = proof_for(80 + j)
+    as_bytes32(found.0, len: found.1)
+}
+
+fn attempt<M>(arbiter: Address, _ message: own M) -> CallOutcome
+uses (evm: mut Evm)
+where M: MsgVariant<Sol> + Encode<Sol>
+{
+    evm.try_call(addr: arbiter, gas: GAS, value: Wei::zero(), message)
+}
+
+/// Every node of the word tree of `words` in heap order: node 1 is the root,
+/// node `n` has children `2n` and `2n + 1`, leaf `i` is node `WIDTH + i`
+/// (`NODES` is `2 * WIDTH`). The parents are sorted-pair hashes, so the order
+/// of two children does not matter.
+fn word_nodes<const N: usize, const WIDTH: usize, const NODES: usize>(
+    _ words: [u256; N],
+) -> [u256; NODES] {
+    var nodes: [u256; NODES] = [0; NODES]
+    for i in 0 .. N {
+        nodes[WIDTH + i] = word_leaf(i, words[i])
+    }
+    var n = WIDTH - 1
+    while n > 0 {
+        nodes[n] = word_parent(nodes[2 * n], nodes[2 * n + 1])
+        n -= 1
+    }
+    nodes
+}
+
+/// The proof of word `index`.
+fn word_proof<const N: usize, const WIDTH: usize, const NODES: usize, const D: usize>(
+    _ words: [u256; N],
+    _ index: usize,
+) -> [u256; D] {
+    let nodes: [u256; NODES] = word_nodes<N, WIDTH, NODES>(words)
+    var proof: [u256; D] = [0; D]
+    var node = WIDTH + index
+    for d in 0 .. D {
+        proof[d] = nodes[node ^ 1]
+        node = node / 2
+    }
+    proof
+}
+
+/// The proofs of the `W` words from index `first` on, one after another.
+fn span_proofs<
+    const N: usize,
+    const WIDTH: usize,
+    const NODES: usize,
+    const D: usize,
+    const W: usize,
+    const WD: usize,
+>(_ words: [u256; N], _ first: usize) -> [u256; WD] {
+    let nodes: [u256; NODES] = word_nodes<N, WIDTH, NODES>(words)
+    var proofs: [u256; WD] = [0; WD]
+    for i in 0 .. W {
+        var node = WIDTH + first + i
+        for d in 0 .. D {
+            proofs[i * D + d] = nodes[node ^ 1]
+            node = node / 2
+        }
+    }
+    proofs
+}
+
+/// A challenge of output `position * 16 + filter` of layer 1 that names filter `named`,
+/// sends the row of filter `row_of` with its bias plus `bias_offset` and the proof of filter
+/// `proof_of`, and opens the input words from `span_first(position) + span_shift` and the
+/// output word `index / 32 + word_shift`, each with its genuine proof in `vectors`.
+fn filter1_message(
+    id: u256,
+    named: usize,
+    position: usize,
+    _ vectors: Vectors,
+    row_of: usize,
+    bias_offset: i32,
+    proof_of: usize,
+    span_shift: usize,
+    word_shift: usize,
+) -> ArbiterMsg::ChallengeFilter1 {
+    let first = layer1::span_first(if position < 281 { position } else { 0 }) + span_shift
+    var span: [u256; 2] = [0; 2]
+    for i in 0 .. 2 {
+        span[i] = vectors.x0[first + i]
+    }
+    var at = (position * 16 + named) / 32 + word_shift
+    if at >= 141 { at = 140 }
+    ArbiterMsg::ChallengeFilter1 {
+        id,
+        filter: named as u256,
+        position: position as u256,
+        span,
+        span_proof: span_proofs<9, 16, 32, 4, 2, 8>(vectors.x0, first),
+        word: vectors.hidden1[at],
+        word_proof: word_proof<141, 256, 512, 8>(vectors.hidden1, at),
+        row: layer1::row(row_of).words(),
+        bias: layer1::bias(row_of).raw() + bias_offset,
+        proof: proof1(proof_of),
+    }
+}
+
+/// The honest challenge of filter `filter` at `position` of layer 1.
+fn filter1(
+    arbiter: Address,
+    id: u256,
+    _ filter: usize,
+    _ position: usize,
+    _ vectors: Vectors,
+) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        filter1_message(
+            id,
+            named: filter,
+            position,
+            vectors,
+            row_of: filter,
+            bias_offset: 0,
+            proof_of: filter,
+            span_shift: 0,
+            word_shift: 0,
+        ),
+    )
+}
+
+/// A challenge of output `position * 16 + filter` of layer 2 that names filter `named`,
+/// sends the row of filter `row_of` with its bias plus `bias_offset` and the proof of filter
+/// `proof_of`, and opens the input words from `span_first(position) + span_shift` and the
+/// output word `index / 32 + word_shift`, each with its genuine proof in `vectors`.
+fn filter2_message(
+    id: u256,
+    named: usize,
+    position: usize,
+    _ vectors: Vectors,
+    row_of: usize,
+    bias_offset: i32,
+    proof_of: usize,
+    span_shift: usize,
+    word_shift: usize,
+) -> ArbiterMsg::ChallengeFilter2 {
+    let first = layer2::span_first(if position < 70 { position } else { 0 }) + span_shift
+    var span: [u256; 3] = [0; 3]
+    for i in 0 .. 3 {
+        span[i] = vectors.hidden1[first + i]
+    }
+    var at = (position * 16 + named) / 32 + word_shift
+    if at >= 35 { at = 34 }
+    ArbiterMsg::ChallengeFilter2 {
+        id,
+        filter: named as u256,
+        position: position as u256,
+        span,
+        span_proof: span_proofs<141, 256, 512, 8, 3, 24>(vectors.hidden1, first),
+        word: vectors.hidden2[at],
+        word_proof: word_proof<35, 64, 128, 6>(vectors.hidden2, at),
+        row: layer2::row(row_of).words(),
+        bias: layer2::bias(row_of).raw() + bias_offset,
+        proof: proof2(proof_of),
+    }
+}
+
+/// The honest challenge of filter `filter` at `position` of layer 2.
+fn filter2(
+    arbiter: Address,
+    id: u256,
+    _ filter: usize,
+    _ position: usize,
+    _ vectors: Vectors,
+) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        filter2_message(
+            id,
+            named: filter,
+            position,
+            vectors,
+            row_of: filter,
+            bias_offset: 0,
+            proof_of: filter,
+            span_shift: 0,
+            word_shift: 0,
+        ),
+    )
+}
+
+/// A challenge of output `position * 16 + filter` of layer 3 that names filter `named`,
+/// sends the row of filter `row_of` with its bias plus `bias_offset` and the proof of filter
+/// `proof_of`, and opens the input words from `span_first(position) + span_shift` and the
+/// output word `index / 32 + word_shift`, each with its genuine proof in `vectors`.
+fn filter3_message(
+    id: u256,
+    named: usize,
+    position: usize,
+    _ vectors: Vectors,
+    row_of: usize,
+    bias_offset: i32,
+    proof_of: usize,
+    span_shift: usize,
+    word_shift: usize,
+) -> ArbiterMsg::ChallengeFilter3 {
+    let first = layer3::span_first(if position < 17 { position } else { 0 }) + span_shift
+    var span: [u256; 3] = [0; 3]
+    for i in 0 .. 3 {
+        span[i] = vectors.hidden2[first + i]
+    }
+    var at = (position * 16 + named) / 32 + word_shift
+    if at >= 9 { at = 8 }
+    ArbiterMsg::ChallengeFilter3 {
+        id,
+        filter: named as u256,
+        position: position as u256,
+        span,
+        span_proof: span_proofs<35, 64, 128, 6, 3, 18>(vectors.hidden2, first),
+        word: vectors.hidden3[at],
+        word_proof: word_proof<9, 16, 32, 4>(vectors.hidden3, at),
+        row: layer3::row(row_of).words(),
+        bias: layer3::bias(row_of).raw() + bias_offset,
+        proof: proof3(proof_of),
+    }
+}
+
+/// The honest challenge of filter `filter` at `position` of layer 3.
+fn filter3(
+    arbiter: Address,
+    id: u256,
+    _ filter: usize,
+    _ position: usize,
+    _ vectors: Vectors,
+) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        filter3_message(
+            id,
+            named: filter,
+            position,
+            vectors,
+            row_of: filter,
+            bias_offset: 0,
+            proof_of: filter,
+            span_shift: 0,
+            word_shift: 0,
+        ),
+    )
+}
+
+/// A neuron challenge of layer 4 with the committed row, bias and proof of `j`.
+fn challenge4(arbiter: Address, id: u256, _ j: usize, _ vectors: Vectors) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        ArbiterMsg::ChallengeNeuron4 {
+            id,
+            j: j as u256,
+            hidden3: vectors.hidden3,
+            hidden4: vectors.hidden4,
+            row: layer4::row(j).words(),
+            bias: layer4::bias(j).raw(),
+            proof: proof4(j),
+        },
+    )
+}
+
+/// A neuron challenge of layer 5 with the committed row, bias and proof of `j`.
+fn challenge5(arbiter: Address, id: u256, _ j: usize, _ vectors: Vectors) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        ArbiterMsg::ChallengeNeuron5 {
+            id,
+            j: j as u256,
+            hidden4: vectors.hidden4,
+            logits: vectors.logits,
+            row: layer5::row(j).words(),
+            bias: layer5::bias(j).raw(),
+            proof: proof5(j),
+        },
+    )
+}
+
+fn challenge_class(arbiter: Address, id: u256, _ vectors: Vectors) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        ArbiterMsg::ChallengeClass { id, logits: vectors.logits },
+    )
+}
+
+fn finalize(arbiter: Address, id: u256) -> CallOutcome uses (evm: mut Evm) {
+    attempt(arbiter, ArbiterMsg::Finalize { id })
+}
+
+fn status(arbiter: Address, id: u256) -> u8 uses (evm: mut Evm) {
+    let info: (Address, Wei, Timestamp, u8, u8) = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: Wei::zero(),
+            message: ArbiterMsg::ClaimInfo { id },
+        )
+    info.4
+}
+
+fn credit(arbiter: Address, account: Address) -> Wei uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::CreditOf { account },
+    )
+}
+
+fn burned(arbiter: Address) -> Wei uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::Burned {},
+    )
+}
+
+/// After one slash by this test's account: half the bond is its credit, the
+/// other half is burned, and the arbiter still holds all of it.
+fn slashed_once(arbiter: Address) -> bool uses (evm: mut Evm) {
+    credit(arbiter, account: evm.address()) == REWARD
+        && burned(arbiter) == BURN
+        && evm.balance(arbiter) == BOND
+}
+
+fn claim_count(arbiter: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::ClaimCount {},
+    )
+}
+
+/// Whether the call reverted with error `E`.
+fn failed_with<E>(_ outcome: CallOutcome) -> bool where E: ErrorVariant<Sol> {
+    !outcome.success() && is_error<E>(outcome.returndata())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_every_filter_of_layer_1_at_positions_0_140_280()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    for f in 0 .. 16 {
+        assert!(failed_with<NoFraud>(filter1(arbiter, id, f, 0, honest())))
+        assert!(
+            failed_with<NoFraud>(filter1(arbiter, id, f, 140, honest())),
+        )
+        assert!(
+            failed_with<NoFraud>(filter1(arbiter, id, f, 280, honest())),
+        )
+    }
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_every_filter_of_layer_2_at_positions_0_35_69()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    for f in 0 .. 16 {
+        assert!(failed_with<NoFraud>(filter2(arbiter, id, f, 0, honest())))
+        assert!(
+            failed_with<NoFraud>(filter2(arbiter, id, f, 35, honest())),
+        )
+        assert!(
+            failed_with<NoFraud>(filter2(arbiter, id, f, 69, honest())),
+        )
+    }
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_every_filter_of_layer_3_at_positions_0_8_16()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    for f in 0 .. 16 {
+        assert!(failed_with<NoFraud>(filter3(arbiter, id, f, 0, honest())))
+        assert!(failed_with<NoFraud>(filter3(arbiter, id, f, 8, honest())))
+        assert!(
+            failed_with<NoFraud>(filter3(arbiter, id, f, 16, honest())),
+        )
+    }
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_challenges_0_to_31_of_layer_4()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    for j in 0 .. 32 {
+        assert!(failed_with<NoFraud>(challenge4(arbiter, id, j, honest())))
+    }
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_challenges_0_to_2_of_layer_5() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    for j in 0 .. 3 {
+        assert!(failed_with<NoFraud>(challenge5(arbiter, id, j, honest())))
+    }
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_the_class_challenge() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, honest())),
+    )
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_value_of_layer_1_is_slashed_by_its_filter_at_its_position_only()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    // Output 2241 is filter 1 at position 140.
+    let claimed = wrong_hidden1(2241)
+    let id = post(arbiter, claimed)
+    // The other filters at that position, and that filter at the positions next to it,
+    // recompute to the committed values.
+    assert!(
+        failed_with<NoFraud>(filter1(arbiter, id, 0, 140, claimed)),
+    )
+    assert!(
+        failed_with<NoFraud>(filter1(arbiter, id, 2, 140, claimed)),
+    )
+    assert!(
+        failed_with<NoFraud>(filter1(arbiter, id, 1, 139, claimed)),
+    )
+    assert!(
+        failed_with<NoFraud>(filter1(arbiter, id, 1, 141, claimed)),
+    )
+    // The class is still the argmax of the committed logits.
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, claimed)),
+    )
+    assert!(status(arbiter, id) == OPEN)
+
+    assert!(filter1(arbiter, id, 1, 140, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+    // Terminal: nothing moves it again, and it has no result.
+    assert!(
+        failed_with<ClaimNotOpen>(filter1(arbiter, id, 1, 140, claimed)),
+    )
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(
+        failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
+    )
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_value_of_layer_2_is_slashed_by_its_filter_at_its_position_only()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    // Output 561 is filter 1 at position 35.
+    let claimed = wrong_hidden2(561)
+    let id = post(arbiter, claimed)
+    // The other filters at that position, and that filter at the positions next to it,
+    // recompute to the committed values.
+    assert!(failed_with<NoFraud>(filter2(arbiter, id, 0, 35, claimed)))
+    assert!(failed_with<NoFraud>(filter2(arbiter, id, 2, 35, claimed)))
+    assert!(failed_with<NoFraud>(filter2(arbiter, id, 1, 34, claimed)))
+    assert!(failed_with<NoFraud>(filter2(arbiter, id, 1, 36, claimed)))
+    // The class is still the argmax of the committed logits.
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, claimed)),
+    )
+    assert!(status(arbiter, id) == OPEN)
+
+    assert!(filter2(arbiter, id, 1, 35, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+    // Terminal: nothing moves it again, and it has no result.
+    assert!(
+        failed_with<ClaimNotOpen>(filter2(arbiter, id, 1, 35, claimed)),
+    )
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(
+        failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
+    )
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_value_of_layer_3_is_slashed_by_its_filter_at_its_position_only()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    // Output 129 is filter 1 at position 8.
+    let claimed = wrong_hidden3(129)
+    let id = post(arbiter, claimed)
+    // The other filters at that position, and that filter at the positions next to it,
+    // recompute to the committed values.
+    assert!(failed_with<NoFraud>(filter3(arbiter, id, 0, 8, claimed)))
+    assert!(failed_with<NoFraud>(filter3(arbiter, id, 2, 8, claimed)))
+    assert!(failed_with<NoFraud>(filter3(arbiter, id, 1, 7, claimed)))
+    assert!(failed_with<NoFraud>(filter3(arbiter, id, 1, 9, claimed)))
+    // The class is still the argmax of the committed logits.
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, claimed)),
+    )
+    assert!(status(arbiter, id) == OPEN)
+
+    assert!(filter3(arbiter, id, 1, 8, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+    // Terminal: nothing moves it again, and it has no result.
+    assert!(
+        failed_with<ClaimNotOpen>(filter3(arbiter, id, 1, 8, claimed)),
+    )
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(
+        failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
+    )
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_value_of_hidden_layer_4_is_slashed_by_its_neuron_only()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let claimed = wrong_hidden4(5)
+    let id = post(arbiter, claimed)
+    // The other neurons of layer 4 recompute to the committed values.
+    assert!(failed_with<NoFraud>(challenge4(arbiter, id, 4, claimed)))
+    assert!(failed_with<NoFraud>(challenge4(arbiter, id, 6, claimed)))
+    // The class is still the argmax of the committed logits.
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, claimed)),
+    )
+    assert!(status(arbiter, id) == OPEN)
+
+    assert!(challenge4(arbiter, id, 5, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+    // Terminal: nothing moves it again, and it has no result.
+    assert!(
+        failed_with<ClaimNotOpen>(challenge4(arbiter, id, 5, claimed)),
+    )
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(
+        failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
+    )
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_logit_is_slashed_by_its_neuron_only() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let claimed = wrong_logit(1)
+    let id = post(arbiter, claimed)
+    assert!(failed_with<NoFraud>(filter1(arbiter, id, 0, 0, claimed)))
+    assert!(failed_with<NoFraud>(filter2(arbiter, id, 0, 0, claimed)))
+    assert!(failed_with<NoFraud>(filter3(arbiter, id, 0, 0, claimed)))
+    assert!(failed_with<NoFraud>(challenge4(arbiter, id, 0, claimed)))
+    assert!(failed_with<NoFraud>(challenge5(arbiter, id, 0, claimed)))
+    // Logit 1 plus one does not change the argmax, so the class is consistent
+    // with the wrong logits: only the neuron challenge catches this claim.
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, claimed)),
+    )
+    assert!(challenge5(arbiter, id, 1, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_class_is_slashed_by_the_class_challenge_only() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let claimed = wrong_class()
+    let id = post(arbiter, claimed)
+    assert!(failed_with<NoFraud>(filter1(arbiter, id, 0, 0, claimed)))
+    assert!(failed_with<NoFraud>(filter2(arbiter, id, 0, 0, claimed)))
+    assert!(failed_with<NoFraud>(filter3(arbiter, id, 0, 0, claimed)))
+    assert!(failed_with<NoFraud>(challenge4(arbiter, id, 0, claimed)))
+    assert!(failed_with<NoFraud>(challenge5(arbiter, id, 0, claimed)))
+    assert!(challenge_class(arbiter, id, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn malformed_claims_are_rejected() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    var high_input = honest()
+    high_input.x0[0] |= 0x80 << 248
+    var high_hidden1 = honest()
+    high_hidden1.hidden1[0] |= 0x80 << 248
+    var high_hidden2 = honest()
+    high_hidden2.hidden2[0] |= 0x80 << 248
+    var high_hidden3 = honest()
+    high_hidden3.hidden3[0] |= 0x80 << 248
+    var high_hidden4 = honest()
+    high_hidden4.hidden4[0] |= 0x80 << 248
+    var hidden_padding = honest()
+    hidden_padding.hidden1[0] = 0
+    var class = honest()
+    class.class = 3
+    assert!(
+        failed_with<MalformedInput>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(high_input),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<MalformedHidden>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(high_hidden1),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<MalformedHidden>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(high_hidden2),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<MalformedHidden>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(high_hidden3),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<MalformedHidden>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(high_hidden4),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<ClassOutOfRange>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(class),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<BondTooSmall>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND - wei(1),
+                message: claim_message(honest()),
+            ),
+        ),
+    )
+    assert!(claim_count(arbiter) == 0)
+    // A hidden vector with a word of zeros is well formed, whatever it claims.
+    assert!(
+        evm.try_call(
+            addr: arbiter,
+            gas: GAS,
+            value: BOND,
+            message: claim_message(hidden_padding),
+        )
+            .success(),
+    )
+    assert!(claim_count(arbiter) == 1)
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_filter_challenge_is_rejected() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let claimed = wrong_hidden1(2241)
+    let id = post(arbiter, claimed)
+    // The proof of another filter, another bias, another filter's row: none verifies.
+    assert!(
+        failed_with<NotCommitted>(
+            attempt(
+                arbiter,
+                filter1_message(
+                    id,
+                    named: 1,
+                    position: 140,
+                    claimed,
+                    row_of: 1,
+                    bias_offset: 0,
+                    proof_of: 2,
+                    span_shift: 0,
+                    word_shift: 0,
+                ),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<NotCommitted>(
+            attempt(
+                arbiter,
+                filter1_message(
+                    id,
+                    named: 1,
+                    position: 140,
+                    claimed,
+                    row_of: 1,
+                    bias_offset: 1,
+                    proof_of: 1,
+                    span_shift: 0,
+                    word_shift: 0,
+                ),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<NotCommitted>(
+            attempt(
+                arbiter,
+                filter1_message(
+                    id,
+                    named: 1,
+                    position: 140,
+                    claimed,
+                    row_of: 2,
+                    bias_offset: 0,
+                    proof_of: 1,
+                    span_shift: 0,
+                    word_shift: 0,
+                ),
+            ),
+        ),
+    )
+    // A filter or a position that the layer does not have.
+    assert!(
+        failed_with<NeuronOutOfRange>(
+            attempt(
+                arbiter,
+                filter1_message(
+                    id,
+                    named: 16,
+                    position: 140,
+                    claimed,
+                    row_of: 1,
+                    bias_offset: 0,
+                    proof_of: 1,
+                    span_shift: 0,
+                    word_shift: 0,
+                ),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<PositionOutOfRange>(
+            attempt(
+                arbiter,
+                filter1_message(
+                    id,
+                    named: 1,
+                    position: 281,
+                    claimed,
+                    row_of: 1,
+                    bias_offset: 0,
+                    proof_of: 1,
+                    span_shift: 0,
+                    word_shift: 0,
+                ),
+            ),
+        ),
+    )
+    // Genuine words with genuine proofs, opened at the wrong place: the input words
+    // that follow the window's, and the output word after the claimed value's.
+    assert!(
+        failed_with<InputMismatch>(
+            attempt(
+                arbiter,
+                filter1_message(
+                    id,
+                    named: 1,
+                    position: 0,
+                    claimed,
+                    row_of: 1,
+                    bias_offset: 0,
+                    proof_of: 1,
+                    span_shift: 1,
+                    word_shift: 0,
+                ),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<OutputMismatch>(
+            attempt(
+                arbiter,
+                filter1_message(
+                    id,
+                    named: 1,
+                    position: 140,
+                    claimed,
+                    row_of: 1,
+                    bias_offset: 0,
+                    proof_of: 1,
+                    span_shift: 0,
+                    word_shift: 1,
+                ),
+            ),
+        ),
+    )
+    assert!(status(arbiter, id) == OPEN)
+    assert!(filter1(arbiter, id, 1, 140, claimed).success())
+}
+
+#[test(balance = 10_000_000)]
+fn vectors_that_do_not_match_the_commitments_are_rejected()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let claimed = honest()
+    let id = post(arbiter, claimed)
+    var other_input = claimed
+    other_input.x0 = reference::X1.words()
+    var other_hidden1 = claimed
+    other_hidden1.hidden1 = reference::HIDDEN1_1.words()
+    var other_hidden2 = claimed
+    other_hidden2.hidden2 = reference::HIDDEN2_1.words()
+    var other_hidden3 = claimed
+    other_hidden3.hidden3 = reference::HIDDEN3_1.words()
+    var other_hidden4 = claimed
+    other_hidden4.hidden4 = reference::HIDDEN4_1.words()
+    var other_logits = claimed
+    other_logits.logits = reference::LOGITS1.values()
+    assert!(
+        failed_with<InputMismatch>(filter1(arbiter, id, 0, 0, other_input)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(filter1(arbiter, id, 0, 0, other_hidden1)),
+    )
+    assert!(
+        failed_with<InputMismatch>(filter2(arbiter, id, 0, 0, other_hidden1)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(filter2(arbiter, id, 0, 0, other_hidden2)),
+    )
+    assert!(
+        failed_with<InputMismatch>(filter3(arbiter, id, 0, 0, other_hidden2)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(filter3(arbiter, id, 0, 0, other_hidden3)),
+    )
+    assert!(
+        failed_with<InputMismatch>(challenge4(arbiter, id, 0, other_hidden3)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(challenge4(arbiter, id, 0, other_hidden4)),
+    )
+    assert!(
+        failed_with<InputMismatch>(challenge5(arbiter, id, 0, other_hidden4)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(challenge5(arbiter, id, 0, other_logits)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(challenge_class(arbiter, id, other_logits)),
+    )
+    assert!(
+        failed_with<UnknownClaim>(challenge_class(arbiter, id: 7, claimed)),
+    )
+    assert!(status(arbiter, id) == OPEN)
+}
+
+#[test(balance = 10_000_000)]
+fn finalising_after_the_window_returns_the_bond() uses (evm: mut Evm) {
+    // A window of zero: the deadline is now, so a challenge is already too
+    // late and finalising is allowed.
+    let arbiter = deploy(window: seconds(0))
+    let id = post(arbiter, wrong_class())
+    assert!(
+        failed_with<TooLate>(challenge_class(arbiter, id, wrong_class())),
+    )
+    assert!(finalize(arbiter, id).success())
+    assert!(status(arbiter, id) == FINAL)
+    let result: u8 = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: Wei::zero(),
+            message: ArbiterMsg::ResultOf { id },
+        )
+    assert!(result == wrong_class().class)
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(
+        failed_with<ClaimNotOpen>(challenge_class(arbiter, id, wrong_class())),
+    )
+    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(burned(arbiter) == Wei::zero())
+    assert!(evm.balance(arbiter) == BOND)
+    // The test runner's own address cannot receive ETH, so this withdrawal
+    // fails in the transfer: the credit and the balance must be untouched.
+    assert!(
+        failed_with<TransferFailed>(attempt(arbiter, ArbiterMsg::Withdraw {})),
+    )
+    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(evm.balance(arbiter) == BOND)
+}
+
+#[test(balance = 10_000_000)]
+fn withdrawing_pays_the_credit_once() uses (evm: mut Evm) {
+    let arbiter = deploy(window: seconds(0))
+    let wallet = evm.create2<Wallet>(value: Wei::zero(), args: (), salt: 1)
+    let vectors = honest()
+    let id: u256 = evm
+        .call(
+            addr: wallet,
+            gas: GAS,
+            value: BOND,
+            message: WalletMsg::Post {
+                arbiter,
+                x0: vectors.x0,
+                hidden1: vectors.hidden1,
+                hidden2: vectors.hidden2,
+                hidden3: vectors.hidden3,
+                hidden4: vectors.hidden4,
+                logits: vectors.logits,
+                class: vectors.class,
+            },
+        )
+    assert!(finalize(arbiter, id).success())
+    assert!(credit(arbiter, account: wallet) == BOND)
+    assert!(evm.balance(wallet) == Wei::zero())
+
+    let paid: Wei = evm
+        .call(
+            addr: wallet,
+            gas: GAS,
+            value: Wei::zero(),
+            message: WalletMsg::Collect { arbiter },
+        )
+    assert!(paid == BOND)
+    assert!(evm.balance(wallet) == BOND)
+    assert!(evm.balance(arbiter) == Wei::zero())
+    assert!(credit(arbiter, account: wallet) == Wei::zero())
+    assert!(
+        !attempt(arbiter: wallet, WalletMsg::Collect { arbiter }).success(),
+    )
+    assert!(evm.balance(wallet) == BOND)
+}
+
+/// What the test wallet does: post a claim with the ETH it is sent, collect
+/// its credits.
+msg WalletMsg {
+    #[selector = sol(
+        "post(address,uint256[9],uint256[141],uint256[35],uint256[9],uint256[1],int32[3],uint8)",
+    )]
+    Post {
+        arbiter: Address,
+        x0: [u256; 9],
+        hidden1: [u256; 141],
+        hidden2: [u256; 35],
+        hidden3: [u256; 9],
+        hidden4: [u256; 1],
+        logits: [i32; 3],
+        class: u8,
+    } -> u256,
+    #[selector = sol("collect(address)")]
+    Collect { arbiter: Address } -> Wei,
+}
+
+/// A claimant that can receive ETH, which the test runner's address cannot.
+contract Wallet uses (ctx: Ctx, call: mut Call) {
+    recv {
+        #[payable]
+        WalletMsg::Post { arbiter, x0, hidden1, hidden2, hidden3, hidden4, logits, class } -> u256
+        uses (ctx, mut call)
+        {
+            call.call(
+                addr: arbiter,
+                gas: GAS,
+                value: ctx.value(),
+                message: ArbiterMsg::Claim {
+                    x0,
+                    hidden1,
+                    hidden2,
+                    hidden3,
+                    hidden4,
+                    logits,
+                    class,
+                },
+            )
+        }
+
+        WalletMsg::Collect { arbiter } -> Wei uses (mut call) {
+            call.call(
+                addr: arbiter,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ArbiterMsg::Withdraw {},
+            )
+        }
+
+        /// Plain ETH transfers (the arbiter's `withdraw`) are accepted.
+        #[payable]
+        _ {}
+    }
+}
+
+#[test(balance = 10_000_000)]
+fn finalising_before_the_deadline_is_too_early() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    assert!(failed_with<TooEarly>(finalize(arbiter, id)))
+    assert!(
+        failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
+    )
+    assert!(
+        failed_with<NothingToWithdraw>(attempt(arbiter, ArbiterMsg::Withdraw {})),
+    )
+    assert!(status(arbiter, id) == OPEN)
+}

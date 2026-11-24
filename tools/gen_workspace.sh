@@ -1,5 +1,5 @@
 #!/bin/bash
-# Makes (or refreshes) an Fe workspace for one dense model. Its ingots depend on this repository's
+# Makes (or refreshes) an Fe workspace for one model. Its ingots depend on this repository's
 # `tensile` and `dispute` ingots by relative path:
 #
 #   ingots/model     kernel constants, overflow proofs, reference tests      tools/gen_fe.py
@@ -14,6 +14,9 @@
 #   <vectors-dir> holds inputs.bin and trace.jsonl for the model (docs/spec.md section 6), written
 #   by the reference (tools/ref_vectors.py); the first [samples] (default 3, at least 2) become Fe
 #   unit tests of the model ingot.
+#
+# A model with a convolution (docs/spec.md section 8) gets the word-tree binding unless BINDING=flat
+# is set (tools/gen_arbiter.py --binding).
 #
 # The files named above and the fe.toml files are overwritten. Other ingots found under
 # <workspace-dir>/ingots (your own contracts) are kept and listed as workspace members.
@@ -68,7 +71,8 @@ members = [${members%, }]
 EOF
 
 python3 "$root/tools/gen_fe.py" --model "$model" --vectors "$vectors" --samples "$samples" --out "$dir/ingots/model/src"
-python3 "$root/tools/gen_arbiter.py" --model "$model" --vectors "$vectors" --samples "$samples" --lib --out "$dir/ingots/arbiter/src"
+python3 "$root/tools/gen_arbiter.py" --model "$model" --vectors "$vectors" --samples "$samples" --lib \
+  ${BINDING:+--binding "$BINDING"} --out "$dir/ingots/arbiter/src"
 python3 "$root/tools/gen_tree.py" --model "$model" --out "$dir/build/tree.json"
 if [ "$network" = network ]; then
   python3 "$root/tools/gen_network.py" --model "$model" --out "$dir/ingots/network/src"

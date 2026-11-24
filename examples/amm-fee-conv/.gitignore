@@ -1,0 +1,6 @@
+# Rebuilt from ../amm-fee/data/ticks.csv by dataset.py (check.sh, step 1).
+out/inputs.bin
+out/labels.bin
+out/past.bin
+# Build outputs (the neuron tree, fe build artifacts, native binaries).
+build/

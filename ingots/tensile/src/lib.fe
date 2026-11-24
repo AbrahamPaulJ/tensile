@@ -19,6 +19,7 @@
 pub use accumulators::{Accumulators, Bias, Q}
 pub use activations::Activations
 pub use bound::{I32_MAX, neuron_bound, worst_case}
+pub use conv::{Filters, Sequence, conv1d, filter_at, positions, window}
 pub use dense::{dense, dot_fits_i32, neuron}
 pub use packed::{Packed, word_count}
 pub use probe::{Blind, Probe}

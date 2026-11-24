@@ -7,6 +7,13 @@
 #   the class wrong; challengeNeuronK against each (it succeeds and slashes); challengeClass;
 #   finalize of the honest claim after the window (anvil's clock is moved); withdraw.
 #
+# A convolution (docs/spec.md section 8) is challenged with challengeFilterK at filter 0, position
+# 0 (output 0) instead, under the binding the arbiter was generated with: BINDING=flat or tree,
+# default tree for a model with a convolution (tools/gen_arbiter.py --binding).
+#
+# ANVIL_ARGS, if set, is added to the anvil command line (examples/amm-fee-conv measures an arbiter
+# over the EIP-170 size limit with ANVIL_ARGS=--disable-code-size-limit).
+#
 # The first slash of a run also pays for two storage slots that go from zero to non-zero: the
 # challenger's credit and the contract's `burned` total (17,100 gas more each than a later write).
 # In the sequence above that falls on challengeNeuron1 alone, which is how docs/numbers.md reports
@@ -39,12 +46,32 @@ me=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 bond=1000000000000000000
 window=3600
 rows="$(mktemp)"
-anvil --hardfork osaka --port $port > /dev/null 2>&1 &
+anvil --hardfork osaka $ANVIL_ARGS --port $port > /dev/null 2>&1 &
 anvil_pid=$!
 trap 'kill $anvil_pid 2> /dev/null; rm -f "$rows"' EXIT
 sleep 2
 failures=0
-args() { python3 "$root/tools/model_args.py" --ref "$ref" --tree "$tree" "$@"; }
+args() { python3 "$root/tools/model_args.py" --ref "$ref" --tree "$tree" ${BINDING:+--binding "$BINDING"} "$@"; }
+
+# challenge <label prefix> <claim id> <layer K>: the challenge of output 0 of layer K of the claim
+# with that output wrong, a neuron challenge or, for a convolution, a filter challenge.
+challenge() {
+  local prefix="$1" id="$2" k="$3"
+  mapfile -t neuron < <(args proof $k 0)
+  if [ "$(args kind $k)" = conv1d ]; then
+    mapfile -t vectors < <(args filter $k --position 0 --filter 0 --mutate out:$k:0)
+    local window
+    window=$(python3 -c 'import json, sys; l = json.load(open(sys.argv[1]))["layers"][int(sys.argv[2]) - 1]; print("%d x %d window" % (l["kernel"], l["channels"]))' "$ref/model.json" $k)
+    measure "${prefix}challengeFilter$k ($window)" 0 "$arbiter" "$(args signature challenge $k)" \
+      $id 0 0 "${vectors[@]}" "${neuron[0]}" "${neuron[1]}" "${neuron[2]}"
+    return
+  fi
+  mapfile -t vectors < <(args challenge $k --mutate out:$k:0)
+  local inputs
+  inputs=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["layers"][int(sys.argv[2]) - 1]["in"])' "$ref/model.json" $k)
+  measure "${prefix}challengeNeuron$k ($inputs inputs)" 0 "$arbiter" "$(args signature challenge $k)" \
+    $id 0 "${vectors[0]}" "${vectors[1]}" "${neuron[0]}" "${neuron[1]}" "${neuron[2]}"
+}
 
 json_field() {
   python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
@@ -101,12 +128,8 @@ mapfile -t bad_class < <(args claim --mutate class)
 cast send --rpc-url $rpc --private-key $key --value $bond "$arbiter" "$claim_sig" "${bad_class[@]}" --json > /dev/null
 
 for k in $(seq 1 $layers); do
-  mapfile -t vectors < <(args challenge $k --mutate out:$k:0)
-  mapfile -t neuron < <(args proof $k 0)
-  inputs=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["layers"][int(sys.argv[2]) - 1]["in"])' "$ref/model.json" $k)
-  measure "challengeNeuron$k ($inputs inputs)" 0 "$arbiter" "$(args signature challenge $k)" \
-    $k 0 "${vectors[0]}" "${vectors[1]}" "${neuron[0]}" "${neuron[1]}" "${neuron[2]}"
-  expect_status $k 2 "challengeNeuron$k"
+  challenge "" $k $k
+  expect_status $k 2 "the challenge of layer $k"
 done
 class_id=$((layers + 1))
 logits_index=$layers
@@ -120,13 +143,9 @@ for k in $(seq 1 $layers); do
 done
 cast send --rpc-url $rpc --private-key $key --value $bond "$arbiter" "$claim_sig" "${bad_class[@]}" --json > /dev/null
 for k in $(seq 1 $layers); do
-  mapfile -t vectors < <(args challenge $k --mutate out:$k:0)
-  mapfile -t neuron < <(args proof $k 0)
-  inputs=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["layers"][int(sys.argv[2]) - 1]["in"])' "$ref/model.json" $k)
   id=$((layers + 1 + k))
-  measure "later challengeNeuron$k ($inputs inputs)" 0 "$arbiter" "$(args signature challenge $k)" \
-    $id 0 "${vectors[0]}" "${vectors[1]}" "${neuron[0]}" "${neuron[1]}" "${neuron[2]}"
-  expect_status $id 2 "the later challengeNeuron$k"
+  challenge "later " $id $k
+  expect_status $id 2 "the later challenge of layer $k"
 done
 class_id=$((2 * layers + 2))
 measure "later challengeClass" 0 "$arbiter" "$class_sig" $class_id "${bad_class[$logits_index]}"
@@ -170,9 +189,9 @@ if [ "$balance" != "$expected_burn" ]; then
 fi
 echo "arbiter_gas_any: $failures wrong result(s)"
 if [ -n "$record" ] && [ $failures -eq 0 ]; then
-  python3 - "$rows" "$record" "$ref/model.json" "$runtime" "$(fe --version)" <<'EOF'
+  python3 - "$rows" "$record" "$ref/model.json" "$runtime" "$(fe --version)" "${BINDING:-tree}" <<'EOF'
 import json, sys
-rows_path, record_path, model_path, runtime, fe_version = sys.argv[1:6]
+rows_path, record_path, model_path, runtime, fe_version, binding = sys.argv[1:7]
 model = json.load(open(model_path, encoding="utf-8"))
 calls = []
 for line in open(rows_path, encoding="utf-8"):
@@ -182,6 +201,8 @@ for line in open(rows_path, encoding="utf-8"):
                   "calldata_bytes": int(size)})
 record = {"model": model["name"], "fe": fe_version, "chain": "anvil, Osaka", "sample": 0,
           "arbiter_runtime_bytes": int(runtime), "calls": calls}
+if any(layer.get("kind") == "conv1d" for layer in model["layers"]):
+    record["binding"] = binding
 with open(record_path, "w", encoding="utf-8", newline="\n") as f:
     json.dump(record, f, indent=1)
     f.write("\n")

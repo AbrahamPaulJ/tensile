@@ -1,0 +1,27 @@
+{
+ "model": "amm-fee-conv-288",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Prague, block gas limit 1,000,000,000",
+ "sample": 0,
+ "classify": {
+  "estimate": 17966815,
+  "gas_used": 17966815,
+  "execution": 17941287,
+  "calldata_bytes": 292
+ },
+ "classify_samples_checked": 20,
+ "network_deployed_bytes": 70261,
+ "weight_contract_bytes": [],
+ "osaka": {
+  "tx_gas_cap": 16777216,
+  "estimate": "17966815",
+  "send_30m_gas_limit": "{\"schema_version\":1,\"success\":false,\"data\":null,\"errors\":[{\"level\":\"error\",\"code\":\"cast.error\",\"message\":\"server returned an error response: error code -32000: intrinsic gas too high -- tx.gas_limit > resolved tx gas limit cap\"}],\"warnings\":[]}"
+ },
+ "network_over_size_limit": {
+  "eip170_runtime_limit": 24576,
+  "runtime_bytes": 70261,
+  "eip3860_initcode_limit": 49152,
+  "init_code_bytes": 70282,
+  "anvil": "--disable-code-size-limit"
+ }
+}
