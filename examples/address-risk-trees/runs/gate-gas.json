@@ -1,0 +1,52 @@
+{
+ "model": "address-risk-trees-300x6",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "cleared_sample": 0,
+ "flagged_sample": 6,
+ "gate_deployed_bytes": 1051,
+ "calls": [
+  {
+   "call": "claim (cleared sample)",
+   "signature": "claim(uint256[1],uint256[19],uint8)",
+   "gas_used": 204576,
+   "calldata_bytes": 676
+  },
+  {
+   "call": "claim (flagged sample)",
+   "signature": "claim(uint256[1],uint256[19],uint8)",
+   "gas_used": 187356,
+   "calldata_bytes": 676
+  },
+  {
+   "call": "finalize (cleared sample)",
+   "signature": "finalize(uint256)",
+   "gas_used": 63811,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "finalize (flagged sample)",
+   "signature": "finalize(uint256)",
+   "gas_used": 46723,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "score A (cleared)",
+   "signature": "score(address,uint256,uint256[1])",
+   "gas_used": 89070,
+   "calldata_bytes": 100
+  },
+  {
+   "call": "score B (flagged)",
+   "signature": "score(address,uint256,uint256[1])",
+   "gas_used": 89060,
+   "calldata_bytes": 100
+  },
+  {
+   "call": "enter (A, cleared)",
+   "signature": "enter()",
+   "gas_used": 46989,
+   "calldata_bytes": 4
+  }
+ ]
+}

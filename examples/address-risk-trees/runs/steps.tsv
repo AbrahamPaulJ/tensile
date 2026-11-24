@@ -1,0 +1,19 @@
+ok	0.3	model file, vectors and metrics	address-risk-trees-300x6: 300 trees of depth 6 over 14 features; the dense example's 7054 test rows: accuracy 0.9122, precision 0.7959, recall 0.6351, F1 0.7065, majority baseline 0.8337 (recomputed from pred.bin and labels.bin)
+ok	7.2	pure-Python reference again	the pure-Python reference, run again on out/inputs.bin, reproduces out/pred.bin and out/trace.jsonl
+ok	10.6	regenerate the workspace	the regenerated workspace equals the committed one (16 Fe files)
+ok	0.7	fe fmt --check	fe fmt --check: clean (workspace and ingots/trees)
+ok	7.9	fe test trees kernel (sonatina)	trees on sonatina: test result: ok. 8 passed; 0 failed
+ok	7.9	fe test trees kernel (native)	trees on native: test result: ok. 8 passed; 0 failed
+ok	8.1	trees compile-fail cases	compile-fail (trees): 10 passed, 0 failed
+ok	13.7	fe test model (sonatina)	model on sonatina: test result: ok. 16 passed; 0 failed
+ok	14.2	fe test model (native)	model on native: test result: ok. 16 passed; 0 failed
+ok	35.4	fe test arbiter (sonatina)	arbiter on sonatina: test result: ok. 16 passed; 0 failed
+ok	26.5	fe test consumer (sonatina)	consumer on sonatina: test result: ok. 7 passed; 0 failed
+ok	13.4	fe test cli (native)	cli on native: test result: ok. 5 passed; 0 failed
+ok	35.4	fe build (all contracts)	built 10 contracts
+ok	0.7	runtime sizes	largest: Trees0, 17693 of 24576 bytes
+ok	44.9	native classifier vs reference	diff_native_trees: PASS, zero mismatches
+ok	14.2	anvil: arbiter transactions	trees_gas: 0 wrong result(s)
+ok	14.9	anvil: whole forest on-chain	ensemble_gas: 0 wrong result(s)
+ok	9.2	anvil: the gate, end to end	gate_anvil: 0 wrong result(s)
+total	265.9	fe 26.5.1 (149c758)	8

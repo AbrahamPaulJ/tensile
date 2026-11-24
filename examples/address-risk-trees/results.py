@@ -167,10 +167,16 @@ def main():
     w("| `Arbiter` deployed bytes (limit 24,576) | %s | %s |"
       % (n(d_arb["arbiter_runtime_bytes"]), n(arb["arbiter_runtime_bytes"])))
     w("")
-    w("Whole-forest runs measured: %s. \"Later slashes\" are each challenge's second measurement in a run,"
+    w("Whole-forest runs measured: %s."
       % "; ".join("sample %d, %s gas (%s of execution)" % (r["sample"], n(r["gas_used"]), n(r["execution"]))
                   for r in ens["classify"]))
-    w("when the challenger's credit and the `burned` total are already non-zero.")
+    w("\"Later slashes\" are each challenge's second measurement in a run, when the challenger's credit")
+    w("and the `burned` total are already non-zero; the first tree challenge, %s gas, is the first slash"
+      % n(first_trees[0]["gas_used"]))
+    w("ever and also turns those two slots from zero to non-zero. Tree %d has a proof of %d siblings,"
+      % (trees - 1, len(forest["trees"][-1]["proof"])))
+    w("not %d: with %d leaves the last nodes are promoted unchanged up the Merkle tree."
+      % (proof_len, trees + 1))
     w("")
     w("### What the numbers show")
     w("")
@@ -189,26 +195,36 @@ def main():
         w("  walked) while the claim grows only by its committed outputs (%d words). The answer still"
           % forest["shape"]["output_words"])
         w("  arrives only after the challenge window; a contract that needs it at once calls `Ensemble`.")
-    w("- **A dispute stays small:** the dearest one costs %s gas, %s of a whole run. Walking one tree"
-      % (n(dearest), ratio(dearest, whole["gas_used"])))
-    w("  is %d comparisons; the rest of a tree challenge is the fixed cost of a slash (hashing the two"
+    dearest_name = [c["call"] for c in first_trees + [first_class] if c["gas_used"] == dearest][0]
+    w("- **A dispute stays small:** the dearest one (`%s`) costs %s gas, %s of a whole run. Walking one"
+      % (dearest_name, n(dearest), ratio(dearest, whole["gas_used"])))
+    w("  tree is %d comparisons; the rest of a tree challenge is the fixed cost of a slash (hashing the two"
       % depth)
     w("  committed vectors, the Merkle proof, the storage writes of the settlement).")
     w("- **Per tree, the whole run costs about %s gas of execution** (%s over %d trees, including the"
       % (n(int(round(per_tree_whole))), n(whole["execution"]), trees))
     w("  calls to the holders and the sum). A tree challenge replaces all of that with one walk.")
+    d_first = [c for c in d_arb["calls"] if c["call"].startswith("challengeNeuron1")][0]
     if dearest < d_dearest:
         w("- **The dearest tree dispute is cheaper than the dearest neuron dispute of the dense network**")
         w("  (%s against %s gas), although the forest has %s parameters against %s."
           % (n(dearest), n(d_dearest), n(nodes + leaves), n(d_params)))
     else:
-        w("- **The dearest tree dispute costs more than the dearest neuron dispute of the dense network**")
-        w("  (%s against %s gas): a tree's words and its proof are longer calldata than a 14-input row."
-          % (n(dearest), n(d_dearest)))
+        w("- **In absolute gas a tree dispute costs more than a neuron dispute of the small dense network**")
+        w("  (%s against %s gas, the dearest of each). Its calldata is %s bytes against %s: the tree's"
+          % (n(dearest), n(d_dearest), n(first_trees[0]["calldata_bytes"]), n(d_first["calldata_bytes"])))
+        w("  %d words, a proof of %d siblings and the %d committed output words, which are also hashed."
+          % (forest["shape"]["tree_words"], proof_len, forest["shape"]["output_words"]))
+        w("  Against what each model costs to run whole, the tree dispute is the cheaper by far (%s"
+          % ratio(dearest, whole["gas_used"]))
+        w("  against %s)." % ratio(d_dearest, d_whole))
     w("- **The forest is the better model on these rows** by F1 (%.4f against %.4f) and accuracy (%s"
       % (m["f1"], dm["f1"], pct(m["accuracy"])))
-    w("  against %s), as expected for tabular data. It is also %s times the dense network's parameters."
+    w("  against %s), as is common for tabular data. It is also about %s times the dense network's size"
       % (pct(dm["accuracy"]), "%.0f" % ((nodes + leaves) / d_params)))
+    w("  (counting a node and a leaf as one parameter each), which is why running it whole costs %s"
+      % ratio(whole["gas_used"], d_whole))
+    w("  of the dense network's whole run.")
     w("")
     w("## 3. The use, end to end: `RiskGate` on anvil")
     w("")
