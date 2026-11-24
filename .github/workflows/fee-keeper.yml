@@ -27,7 +27,10 @@ jobs:
   keep:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '*/10 * * * *' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: write
     concurrency:
       group: fee-keeper
       cancel-in-progress: false
@@ -50,6 +53,19 @@ jobs:
             exit 0
           fi
           node tools/fee_keeper.mjs
+      # GitHub's schedule has run hours late on this repository, or not at all. So each run starts
+      # the next one itself, nine minutes later, unless another run is already queued or going
+      # (a scheduled run that does arrive restarts the cycle if it ever breaks). Ends 2026-12-03.
+      - name: Start the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$(date -u +%Y%m%d)" -lt 20261203 ] || exit 0
+          sleep 540
+          others=$(gh run list -R "$GITHUB_REPOSITORY" --workflow fee-keeper.yml --limit 20 --json databaseId,status \
+            --jq "[.[] | select(.status != \"completed\" and .databaseId != $GITHUB_RUN_ID)] | length")
+          if [ "$others" = "0" ]; then gh workflow run fee-keeper.yml -R "$GITHUB_REPOSITORY" --ref main; fi
 
   watch:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '37 * * * *' }}
