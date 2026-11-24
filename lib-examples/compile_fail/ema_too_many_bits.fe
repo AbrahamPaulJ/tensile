@@ -1,0 +1,10 @@
+// expect: static assertion failed
+// A fork of the average that keeps 12 fractional bits instead of 8, for more precision, with the
+// same proof line. At the extreme tick, 2 * 887272 * 4096 does not fit an int32: in Solidity 0.8
+// the update would revert exactly when the price moves most (the oracle stuck), and in an
+// `unchecked` block or after an `int32(..)` cast it would wrap to a wrong average.
+use ema::ema_fits
+
+const ALPHA_BITS: usize = 12
+
+static_assert(ema_fits(max_sample: 887272, alpha_bits: ALPHA_BITS))

@@ -1,0 +1,133 @@
+//! A forest: `TREES` trees of one depth over one input, and the base scores.
+use core::num::UnsignedAbs
+use ingot::probe::TreeProbe
+use ingot::scores::{Base, Outputs, sum_fits_i32, target}
+use ingot::tree::Tree
+use tensile::{Accumulators, Activations}
+
+/// A tree ensemble (`docs/spec-trees.md` sections 2 to 4): `TREES` complete
+/// trees of depth `DEPTH` over `IN` features, leaf values with `LF`
+/// fractional bits, and `CLASSES` class scores. The score of class `c` is its
+/// base plus the outputs of the trees whose `target` is `c`; the class is the
+/// highest score, the lowest index winning a tie.
+///
+/// Every size is a type parameter: a forest cannot be built from trees of
+/// another depth or another number of features, run on an input of another
+/// length, or give scores for another number of classes. The `where` clause
+/// on `scores` proves at compile time, from `TREES` and the 16-bit leaves
+/// alone, that no score can overflow.
+pub struct Forest<
+    const TREES: usize,
+    const DEPTH: usize,
+    const IN: usize,
+    const CLASSES: usize,
+    const LF: usize,
+> { pub(ingot) trees: [Tree<DEPTH, IN, LF>; TREES], pub(ingot) base: Base<CLASSES, LF> }
+
+impl<
+    const TREES: usize,
+    const DEPTH: usize,
+    const IN: usize,
+    const CLASSES: usize,
+    const LF: usize,
+> Forest<TREES, DEPTH, IN, CLASSES, LF> {
+    /// A forest from its trees, in order, and its base scores. Fails unless
+    /// there are 2 to 255 classes and at least one tree.
+    pub const fn new(_ trees: own [Tree<DEPTH, IN, LF>; TREES], base: Base<CLASSES, LF>) -> Self {
+        assert!(CLASSES >= 2 && CLASSES <= 255 && TREES >= 1)
+        Self { trees, base }
+    }
+
+    /// Tree `t`.
+    pub const fn tree(self, _ t: usize) -> Tree<DEPTH, IN, LF> {
+        self.trees[t]
+    }
+
+    /// The base scores.
+    pub const fn base(self) -> Base<CLASSES, LF> {
+        self.base
+    }
+
+    /// The output of every tree on `x`. The probe is shown each tree's leaf
+    /// and value, in tree order.
+    pub fn walk<const F: usize>(self, _ x: Activations<IN, F>) -> Outputs<TREES, LF>
+    uses (probe: mut TreeProbe)
+    {
+        var values: [i32; TREES] = [0; TREES]
+        for t in 0 .. TREES {
+            let tree = self.trees[t]
+            let leaf = tree.leaf_index(x)
+            let value = tree.leaf(leaf)
+            probe.reached(tree: t, leaf, value)
+            values[t] = value.raw()
+        }
+        Outputs::pack(values)
+    }
+
+    /// The output of every tree on `x`, with nothing observing.
+    pub const fn outputs<const F: usize>(self, _ x: Activations<IN, F>) -> Outputs<TREES, LF> {
+        var values: [i32; TREES] = [0; TREES]
+        var t: usize = 0
+        while t < TREES {
+            values[t] = self.trees[t].eval(x).raw()
+            t += 1
+        }
+        Outputs::pack(values)
+    }
+
+    /// The class scores on `x`.
+    pub const fn scores<const F: usize>(self, _ x: Activations<IN, F>) -> Accumulators<CLASSES, LF>
+    where sum_fits_i32(TREES)
+    {
+        self.outputs(x).scores(self.base)
+    }
+
+    /// The largest absolute class score over every input: for each class,
+    /// `|base|` plus the largest absolute leaf of every tree that adds to it,
+    /// the largest over the classes. The type already proves that no score
+    /// can overflow; this is the model's actual range, which the generated
+    /// model ingot compares with the value its model file records.
+    pub const fn worst_case(self) -> u256 {
+        var largest: [u256; TREES] = [0; TREES]
+        var t: usize = 0
+        while t < TREES {
+            largest[t] = self.trees[t].largest_leaf()
+            t += 1
+        }
+        score_bound(self.base, largest)
+    }
+}
+
+/// The largest absolute class score of a forest whose tree `t` has largest
+/// absolute leaf `largest[t]`: for each class, `|base|` plus the largest
+/// leaves of the trees that add to it; the largest over the classes. A large
+/// forest's generated model ingot checks each tree's `largest_leaf` in a
+/// constant of its own and this sum in another, because one evaluation of
+/// `worst_case` over every leaf of hundreds of trees exceeds the compiler's
+/// budget of steps for one constant.
+pub const fn score_bound<const TREES: usize, const CLASSES: usize, const LF: usize>(
+    _ base: Base<CLASSES, LF>,
+    _ largest: [u256; TREES],
+) -> u256 {
+    var bounds: [u256; CLASSES] = [0; CLASSES]
+    var c: usize = 0
+    while c < CLASSES {
+        bounds[c] = base.at(c).raw().unsigned_abs() as u256
+        c += 1
+    }
+    var t: usize = 0
+    while t < TREES {
+        let k = target(t, classes: CLASSES)
+        bounds[k] = bounds[k] + largest[t]
+        t += 1
+    }
+    var worst: u256 = 0
+    c = 0
+    while c < CLASSES {
+        if bounds[c] > worst {
+            worst = bounds[c]
+        }
+        c += 1
+    }
+    worst
+}

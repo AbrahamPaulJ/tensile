@@ -1,0 +1,753 @@
+//! Unit tests of `Arbiter` on reference sample 0: an honest claim survives
+//! every challenge; a claim with one wrong tree output or a wrong class is
+//! slashed by the challenge a watcher would name and by no other; a forged
+//! output with a class that follows from it is caught only by its tree;
+//! malformed claims, wrong proofs and vectors that do not match the
+//! commitments are rejected with their own errors; finalising and
+//! withdrawing move the bond. Each failed call is checked for its error
+//! selector, so a revert for the wrong reason fails the test.
+//!
+//! The proofs are built here from the model's own trees and base scores, by
+//! the rule of `tools/trees_ref.py`; the root must come out as the generated
+//! `MODEL_ROOT`, which proves that the compiled model is the committed one.
+use core::abi::Encode
+use core::error::ErrorVariant
+use core::marker::Copy
+use core::message::MsgVariant
+use core::ptr::MemVec
+use ingot::{Arbiter, ArbiterMsg, header_leaf, tree_leaf}
+use ingot::signals::{
+    BondTooSmall,
+    ClaimNotOpen,
+    ClassOutOfRange,
+    InputMismatch,
+    MalformedInput,
+    MalformedOutputs,
+    NoFraud,
+    NotCommitted,
+    NotFinal,
+    NothingToWithdraw,
+    OutputMismatch,
+    TooEarly,
+    TooLate,
+    TransferFailed,
+    TreeOutOfRange,
+    UnknownClaim,
+}
+use model::{Input, Outputs, commitment, reference, tree}
+use std::abi::{Bytes32, DynArray, FixedBytes, Sol}
+use std::evm::{
+    Address,
+    Call,
+    CallOutcome,
+    Ctx,
+    Duration,
+    Evm,
+    Timestamp,
+    Wei,
+    is_error,
+    seconds,
+    wei,
+}
+
+/// Gas given to every call: the Osaka limit of one transaction.
+const GAS: u256 = 16777216
+
+/// The bond the test arbiters require.
+const BOND: Wei = wei(1_000_000)
+
+/// What a slash credits the challenger: half the bond. The rest is burned.
+const REWARD: Wei = wei(500_000)
+const BURN: Wei = wei(500_000)
+
+/// A window no test can reach the end of.
+const LONG: Duration = seconds(1_000_000)
+
+/// Status codes (`dispute::Status::code`).
+const OPEN: u8 = 1
+const SLASHED: u8 = 2
+const FINAL: u8 = 3
+
+/// Number of leaves of the commitment: 300 trees, then the header.
+const LEAVES: usize = 301
+
+/// The longest proof in a tree of 301 leaves.
+const DEPTH: usize = 9
+
+/// The vectors of one claim.
+struct Vectors { x0: [u256; 1], outputs: [u256; 19], class: u8 }
+
+impl Copy for Vectors {}
+
+/// The honest claim for reference sample 0.
+fn honest() -> Vectors {
+    Vectors {
+        x0: reference::X0.words(),
+        outputs: reference::OUTPUTS0.words(),
+        class: reference::CLASS0.downcast_truncate(),
+    }
+}
+
+/// The output values of reference sample 0.
+fn values() -> [i32; 300] {
+    var out: [i32; 300] = [0; 300]
+    for t in 0 .. 300 {
+        out[t] = reference::OUTPUTS0.get(t).raw()
+    }
+    out
+}
+
+/// The honest claim with the output of tree `t` changed by one.
+fn wrong_output(_ t: usize) -> Vectors {
+    var raw = values()
+    raw[t] = if raw[t] == 32767 { 32766 } else { raw[t] + 1 }
+    var vectors = honest()
+    vectors.outputs = Outputs::pack(raw).words()
+    vectors
+}
+
+/// The honest claim with another class.
+fn wrong_class() -> Vectors {
+    var vectors = honest()
+    vectors.class = (vectors.class + 1) % 2
+    vectors
+}
+
+fn deploy(window: Duration) -> Address uses (evm: mut Evm) {
+    evm.create2<Arbiter>(
+        value: Wei::zero(),
+        args: (commitment::MODEL_ROOT, BOND, window),
+        salt: 0,
+    )
+}
+
+/// Posts `vectors` with the bond and returns the claim number.
+fn post(arbiter: Address, _ vectors: Vectors) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: BOND,
+        message: claim_message(vectors),
+    )
+}
+
+fn claim_message(_ vectors: Vectors) -> ArbiterMsg::Claim {
+    ArbiterMsg::Claim { x0: vectors.x0, outputs: vectors.outputs, class: vectors.class }
+}
+
+/// Every leaf of the commitment, in order: the trees, then the header.
+fn leaves() -> [u256; LEAVES] {
+    var out: [u256; LEAVES] = [0; LEAVES]
+    for t in 0 .. 300 {
+        out[t] = tree_leaf(tree: t as u256, words: tree(t).words())
+    }
+    out[300] = header_leaf()
+    out
+}
+
+/// The proof of leaf `index` and its length, by the rule of
+/// `docs/spec-dispute.md` section 2 (sorted pairs, the odd last node promoted).
+/// The root the walk reaches must be the generated one.
+fn proof_for(_ all: [u256; LEAVES], _ index: usize) -> ([u256; DEPTH], usize) {
+    var level = all
+    var count = LEAVES
+    var position = index
+    var proof: [u256; DEPTH] = [0; DEPTH]
+    var len: usize = 0
+    while count > 1 {
+        var next: usize = 0
+        var k: usize = 0
+        while k < count {
+            if k + 1 == count {
+                level[next] = level[k]
+            } else {
+                if position == k {
+                    proof[len] = level[k + 1]
+                    len += 1
+                } else if position == k + 1 {
+                    proof[len] = level[k]
+                    len += 1
+                }
+                level[next] = std::evm::merkle::hash_pair_sorted(level[k], level[k + 1])
+            }
+            if position == k || position == k + 1 {
+                position = next
+            }
+            next += 1
+            k += 2
+        }
+        count = next
+    }
+    assert!(level[0] == commitment::MODEL_ROOT)
+    (proof, len)
+}
+
+/// The first `len` nodes of `proof` as the `bytes32[]` a challenge carries.
+fn as_bytes32(_ proof: [u256; DEPTH], len: usize) -> DynArray<Bytes32> {
+    var nodes = MemVec::with_capacity(len)
+    for i in 0 .. len {
+        nodes.push(FixedBytes<32> { val: proof[i] })
+    }
+    DynArray::from_slice(nodes.as_slice())
+}
+
+/// The proof of tree `t`.
+fn proof_of(_ all: [u256; LEAVES], _ t: usize) -> DynArray<Bytes32> {
+    let found = proof_for(all, t)
+    as_bytes32(found.0, len: found.1)
+}
+
+fn attempt<M>(arbiter: Address, _ message: own M) -> CallOutcome
+uses (evm: mut Evm)
+where M: MsgVariant<Sol> + Encode<Sol>
+{
+    evm.try_call(addr: arbiter, gas: GAS, value: Wei::zero(), message)
+}
+
+/// A tree challenge of tree `t` with its committed words and proof.
+fn challenge(
+    arbiter: Address,
+    id: u256,
+    _ all: [u256; LEAVES],
+    _ t: usize,
+    _ vectors: Vectors,
+) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        ArbiterMsg::ChallengeTree {
+            id,
+            t: t as u256,
+            x0: vectors.x0,
+            outputs: vectors.outputs,
+            tree: tree(t).words(),
+            proof: proof_of(all, t),
+        },
+    )
+}
+
+fn challenge_class(arbiter: Address, id: u256, _ vectors: Vectors) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        ArbiterMsg::ChallengeClass { id, outputs: vectors.outputs },
+    )
+}
+
+fn finalize(arbiter: Address, id: u256) -> CallOutcome uses (evm: mut Evm) {
+    attempt(arbiter, ArbiterMsg::Finalize { id })
+}
+
+fn status(arbiter: Address, id: u256) -> u8 uses (evm: mut Evm) {
+    let info: (Address, Wei, Timestamp, u8, u8) = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: Wei::zero(),
+            message: ArbiterMsg::ClaimInfo { id },
+        )
+    info.4
+}
+
+fn credit(arbiter: Address, account: Address) -> Wei uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::CreditOf { account },
+    )
+}
+
+fn burned(arbiter: Address) -> Wei uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::Burned {},
+    )
+}
+
+/// After one slash by this test's account: half the bond is its credit, the
+/// other half is burned, and the arbiter still holds all of it.
+fn slashed_once(arbiter: Address) -> bool uses (evm: mut Evm) {
+    credit(arbiter, account: evm.address()) == REWARD
+        && burned(arbiter) == BURN
+        && evm.balance(arbiter) == BOND
+}
+
+fn claim_count(arbiter: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::ClaimCount {},
+    )
+}
+
+/// Whether the call reverted with error `E`.
+fn failed_with<E>(_ outcome: CallOutcome) -> bool where E: ErrorVariant<Sol> {
+    !outcome.success() && is_error<E>(outcome.returndata())
+}
+
+#[test]
+fn the_compiled_model_is_the_committed_one() {
+    // `proof_for` rebuilds the root from the model ingot's trees and base
+    // scores and requires `MODEL_ROOT`.
+    let all = leaves()
+    let (_, len) = proof_for(all, 0)
+    assert!(len > 0)
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_the_challenges_of_trees_0_to_99()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    let all = leaves()
+    for t in 0 .. 100 {
+        assert!(
+            failed_with<NoFraud>(challenge(arbiter, id, all, t, honest())),
+        )
+    }
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, honest())),
+    )
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_the_challenges_of_trees_100_to_199()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    let all = leaves()
+    for t in 100 .. 200 {
+        assert!(
+            failed_with<NoFraud>(challenge(arbiter, id, all, t, honest())),
+        )
+    }
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, honest())),
+    )
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_the_challenges_of_trees_200_to_299()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    let all = leaves()
+    for t in 200 .. 300 {
+        assert!(
+            failed_with<NoFraud>(challenge(arbiter, id, all, t, honest())),
+        )
+    }
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, honest())),
+    )
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_tree_output_is_slashed_by_its_tree_only() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_output(5)
+    let id = post(arbiter, claimed)
+    // The other trees end at the committed values.
+    assert!(
+        failed_with<NoFraud>(challenge(arbiter, id, all, 4, claimed)),
+    )
+    assert!(
+        failed_with<NoFraud>(challenge(arbiter, id, all, 6, claimed)),
+    )
+    // One step of one leaf does not change the class: it still follows from
+    // the committed outputs, so only the tree challenge catches this claim.
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, claimed)),
+    )
+    assert!(status(arbiter, id) == OPEN)
+
+    assert!(challenge(arbiter, id, all, 5, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+    // Terminal: nothing moves it again, and it has no result.
+    assert!(
+        failed_with<ClaimNotOpen>(challenge(arbiter, id, all, 5, claimed)),
+    )
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(
+        failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
+    )
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_class_is_slashed_by_the_class_challenge_only() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_class()
+    let id = post(arbiter, claimed)
+    assert!(
+        failed_with<NoFraud>(challenge(arbiter, id, all, 0, claimed)),
+    )
+    assert!(
+        failed_with<NoFraud>(challenge(arbiter, id, all, 299, claimed)),
+    )
+    assert!(challenge_class(arbiter, id, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+}
+
+/// Test row 4 (`trace.jsonl`), on which the forest says class 0.
+const FORGED_X: [u256; 1] = [0x2e4a3c2f4b29384d2e48304c3e22000000000000000000000000000000000000]
+
+/// Its true tree outputs.
+const FORGED_TRUE: [u256; 19] = [
+    0x0ae40878066d08d30031052603c6002e0003008bfe1300f3ffa6fdb101380033,
+    0xfe28fddffbd9fe3cfcecfe70019ffe9dff2d0046000d0091030bffe103a60014,
+    0xfef6001fffa300480117004f000401a2002f002cff49ffa5ffedffd8ffa10057,
+    0xffd8ff070016ffcdfe820036000ffc6dff1effd8ffe5ff3dffeafffdff65003a,
+    0x00e8000b0039ffa6ffdc0029ffd6ffc6fffeffef00b900620008fddcfffa0015,
+    0x001d004500ff0024fcfbfffeffe70005fecf001800010028fffaffd1ff9c0035,
+    0xffeb0021ff61011dff2dffc6004dffd1001affd5fffc0021ffdcffdb00330003,
+    0xfffc0002fffb001f0031fff40002ffa20080000efeb7ff3f000a0080ffcd001e,
+    0x000cffe4ffe9fffd00020006000d0002ff69fffffff8ffa5000c0004ffdbfffc,
+    0xffe9000d0004001a0001ffd2003b0022000efffc000cffe8fffb0011ffdd0019,
+    0xffde00010017000c0019ffa70018001a0023005900030089ff7bfffd0026fffc,
+    0xfff9fff4000f0002001afffefff00002ffedff48000dffe6000800280009000a,
+    0xfff900130011000b0013ffe30012fffc0010fff10005000d0018fffd0003fff7,
+    0xfff4ffff0001001e0004000fffd9ffff000efd40ffcdfffc0007ffd9ffee000a,
+    0xffd3000cfffe001e0005000efffe0004fff6ffc30002007bffed00170001fff0,
+    0xfffa002fffe6fff1fff50143006e004c0120004bfff9fff7ffe90011fff1009a,
+    0xffebff090003fff40002fffffffd0008fff9ffeb0008000700020023fffd0059,
+    0x0044fffa00030008fffd0008fffbfffdfffafffc000700040001fff7fffafffc,
+    0x00010006000000070004fffc0009fffdfffe000bff53fffe0000000000000000,
+]
+
+/// Test row 4 with the output of tree 0 forged to 32767, and the class
+/// that follows from the forged outputs: 1, where the forest says 0.
+fn forged() -> Vectors {
+    var raw: [i32; 300] = [0; 300]
+    let honest_outputs = Outputs::from_words(FORGED_TRUE)
+    for t in 0 .. 300 {
+        raw[t] = honest_outputs.get(t).raw()
+    }
+    raw[0] = 32767
+    Vectors { x0: FORGED_X, outputs: Outputs::pack(raw).words(), class: 1 }
+}
+
+#[test(balance = 10_000_000)]
+fn a_forged_output_with_a_consistent_class_is_caught_only_by_its_tree()
+uses (evm: mut Evm)
+{
+    // The strongest lie: the class is the one the forged outputs add up to,
+    // so the class challenge finds nothing. Only re-walking tree 0 does.
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = forged()
+    let x = Input::from_words(FORGED_X)
+    assert!(model::outputs(x) == Outputs::from_words(FORGED_TRUE))
+    assert!(model::classify(x) == 0)
+    let id = post(arbiter, claimed)
+    assert!(
+        failed_with<NoFraud>(challenge_class(arbiter, id, claimed)),
+    )
+    assert!(
+        failed_with<NoFraud>(challenge(arbiter, id, all, 1, claimed)),
+    )
+    assert!(challenge(arbiter, id, all, 0, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn malformed_claims_are_rejected() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    var padding = honest()
+    padding.x0[0] |= 1
+    var high_input = honest()
+    high_input.x0[0] |= 0x80 << 248
+    var class = honest()
+    class.class = 2
+    assert!(
+        failed_with<MalformedInput>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(padding),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<MalformedInput>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(high_input),
+            ),
+        ),
+    )
+    var output_padding = honest()
+    output_padding.outputs[18] |= 1
+    assert!(
+        failed_with<MalformedOutputs>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(output_padding),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<ClassOutOfRange>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND,
+                message: claim_message(class),
+            ),
+        ),
+    )
+    assert!(
+        failed_with<BondTooSmall>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND - wei(1),
+                message: claim_message(honest()),
+            ),
+        ),
+    )
+    assert!(claim_count(arbiter) == 0)
+    // Any 16-bit value is a possible output: a claim of all zeros is well
+    // formed, whatever it claims.
+    var zeros = honest()
+    zeros.outputs = [0; 19]
+    assert!(
+        evm.try_call(
+            addr: arbiter,
+            gas: GAS,
+            value: BOND,
+            message: claim_message(zeros),
+        ).success(),
+    )
+    assert!(claim_count(arbiter) == 1)
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_tree_or_proof_is_rejected() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_output(5)
+    let id = post(arbiter, claimed)
+    // The proof of another tree; another tree's words; one bit of the tree.
+    let other_proof = ArbiterMsg::ChallengeTree {
+        id,
+        t: 5,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: tree(5).words(),
+        proof: proof_of(all, 6),
+    }
+    let other_tree = ArbiterMsg::ChallengeTree {
+        id,
+        t: 5,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: tree(6).words(),
+        proof: proof_of(all, 5),
+    }
+    var flipped = tree(5).words()
+    flipped[7] = flipped[7] ^ 1
+    let one_bit = ArbiterMsg::ChallengeTree {
+        id,
+        t: 5,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: flipped,
+        proof: proof_of(all, 5),
+    }
+    let beyond = ArbiterMsg::ChallengeTree {
+        id,
+        t: 300,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: tree(5).words(),
+        proof: proof_of(all, 5),
+    }
+    assert!(failed_with<NotCommitted>(attempt(arbiter, other_proof)))
+    assert!(failed_with<NotCommitted>(attempt(arbiter, other_tree)))
+    assert!(failed_with<NotCommitted>(attempt(arbiter, one_bit)))
+    assert!(failed_with<TreeOutOfRange>(attempt(arbiter, beyond)))
+    assert!(status(arbiter, id) == OPEN)
+    assert!(challenge(arbiter, id, all, 5, claimed).success())
+}
+
+#[test(balance = 10_000_000)]
+fn vectors_that_do_not_match_the_commitments_are_rejected()
+uses (evm: mut Evm)
+{
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_output(5)
+    let id = post(arbiter, claimed)
+    var other_input = claimed
+    other_input.x0 = reference::X1.words()
+    var other_outputs = claimed
+    other_outputs.outputs = reference::OUTPUTS1.words()
+    assert!(
+        failed_with<InputMismatch>(challenge(arbiter, id, all, 5, other_input)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(challenge(arbiter, id, all, 5, other_outputs)),
+    )
+    assert!(
+        failed_with<OutputMismatch>(challenge_class(arbiter, id, other_outputs)),
+    )
+    assert!(
+        failed_with<UnknownClaim>(challenge_class(arbiter, id: 7, claimed)),
+    )
+    assert!(status(arbiter, id) == OPEN)
+}
+
+#[test(balance = 10_000_000)]
+fn finalising_after_the_window_returns_the_bond() uses (evm: mut Evm) {
+    // A window of zero: the deadline is now, so a challenge is already too
+    // late and finalising is allowed.
+    let arbiter = deploy(window: seconds(0))
+    let id = post(arbiter, wrong_class())
+    assert!(
+        failed_with<TooLate>(challenge_class(arbiter, id, wrong_class())),
+    )
+    assert!(finalize(arbiter, id).success())
+    assert!(status(arbiter, id) == FINAL)
+    let result: u8 = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: Wei::zero(),
+            message: ArbiterMsg::ResultOf { id },
+        )
+    assert!(result == wrong_class().class)
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(
+        failed_with<ClaimNotOpen>(challenge_class(arbiter, id, wrong_class())),
+    )
+    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(burned(arbiter) == Wei::zero())
+    assert!(evm.balance(arbiter) == BOND)
+    // The test runner's own address cannot receive ETH, so this withdrawal
+    // fails in the transfer: the credit and the balance must be untouched.
+    assert!(
+        failed_with<TransferFailed>(attempt(arbiter, ArbiterMsg::Withdraw {})),
+    )
+    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(evm.balance(arbiter) == BOND)
+}
+
+#[test(balance = 10_000_000)]
+fn withdrawing_pays_the_credit_once() uses (evm: mut Evm) {
+    let arbiter = deploy(window: seconds(0))
+    let wallet = evm.create2<Wallet>(value: Wei::zero(), args: (), salt: 1)
+    let vectors = honest()
+    let id: u256 = evm
+        .call(
+            addr: wallet,
+            gas: GAS,
+            value: BOND,
+            message: WalletMsg::Post {
+                arbiter,
+                x0: vectors.x0,
+                outputs: vectors.outputs,
+                class: vectors.class,
+            },
+        )
+    assert!(finalize(arbiter, id).success())
+    assert!(credit(arbiter, account: wallet) == BOND)
+    assert!(evm.balance(wallet) == Wei::zero())
+
+    let paid: Wei = evm
+        .call(
+            addr: wallet,
+            gas: GAS,
+            value: Wei::zero(),
+            message: WalletMsg::Collect { arbiter },
+        )
+    assert!(paid == BOND)
+    assert!(evm.balance(wallet) == BOND)
+    assert!(evm.balance(arbiter) == Wei::zero())
+    assert!(credit(arbiter, account: wallet) == Wei::zero())
+    assert!(
+        !attempt(arbiter: wallet, WalletMsg::Collect { arbiter }).success(),
+    )
+    assert!(evm.balance(wallet) == BOND)
+}
+
+/// What the test wallet does: post a claim with the ETH it is sent, collect
+/// its credits.
+msg WalletMsg {
+    #[selector = sol("post(address,uint256[1],uint256[19],uint8)")]
+    Post { arbiter: Address, x0: [u256; 1], outputs: [u256; 19], class: u8 } -> u256,
+    #[selector = sol("collect(address)")]
+    Collect { arbiter: Address } -> Wei,
+}
+
+/// A claimant that can receive ETH, which the test runner's address cannot.
+contract Wallet uses (ctx: Ctx, call: mut Call) {
+    recv {
+        #[payable]
+        WalletMsg::Post { arbiter, x0, outputs, class } -> u256
+        uses (ctx, mut call)
+        {
+            call.call(
+                addr: arbiter,
+                gas: GAS,
+                value: ctx.value(),
+                message: ArbiterMsg::Claim { x0, outputs, class },
+            )
+        }
+
+        WalletMsg::Collect { arbiter } -> Wei uses (mut call) {
+            call.call(
+                addr: arbiter,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ArbiterMsg::Withdraw {},
+            )
+        }
+
+        /// Plain ETH transfers (the arbiter's `withdraw`) are accepted.
+        #[payable]
+        _ {}
+    }
+}
+
+#[test(balance = 10_000_000)]
+fn finalising_before_the_deadline_is_too_early() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    assert!(failed_with<TooEarly>(finalize(arbiter, id)))
+    assert!(
+        failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })),
+    )
+    assert!(
+        failed_with<NothingToWithdraw>(attempt(arbiter, ArbiterMsg::Withdraw {})),
+    )
+    assert!(status(arbiter, id) == OPEN)
+}

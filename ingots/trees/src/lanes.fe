@@ -1,0 +1,105 @@
+//! Packed 16-bit lanes: the storage of tree nodes, leaf values and the
+//! per-tree outputs of a claim (`docs/spec-trees.md` section 6).
+use core::num::IntWord
+
+/// Number of 256-bit words that hold `n` 16-bit lanes.
+pub const fn lane_words(_ n: usize) -> usize {
+    (n + 15) / 16
+}
+
+/// Bit position of lane `i` inside its word: lane `i` is the 16 bits at
+/// position `i % 16` of word `i / 16`, counting from the most significant.
+pub const fn lane_shift(_ i: usize) -> u256 {
+    ((15 - i % 16) * 16) as u256
+}
+
+/// Lane `i` of a word, read as an unsigned value 0..65535.
+pub const fn lane_of(_ word: u256, _ i: usize) -> u256 {
+    (word >> lane_shift(i)) & 0xffff
+}
+
+/// A lane read as a 16-bit two's complement value, widened to an int32.
+pub const fn signed(_ lane: u256) -> i32 {
+    // 0..65535, so the narrowing loses nothing.
+    let value: i32 = (lane & 0xffff).downcast_truncate()
+    if value >= 32768 { value - 65536 } else { value }
+}
+
+/// The sum of the 16 lanes of a word, each read as a signed 16-bit value:
+/// -524,288 to 524,272. A whole word at a time, without a loop: the even and
+/// the odd lanes are added into eight 32-bit fields, the fields are added by
+/// one multiplication (no field can carry into the next: the total is below
+/// 2^20), and every lane at or above 0x8000 counts 65,536 less.
+#[arithmetic(unchecked)]
+pub const fn lane_sum(_ word: u256) -> i32 {
+    let pairs = (word & LOW_HALVES) + ((word >> 16) & LOW_HALVES)
+    let unsigned_sum: i32 = ((pairs * FIELD_ONES) >> 224).downcast_truncate()
+    let negative: i32 = ((((word >> 15) & LANE_ONES) * LANE_ONES) >> 240).downcast_truncate()
+    unsigned_sum - negative * 65536
+}
+
+/// The low 16 bits of every 32-bit field.
+const LOW_HALVES: u256 = 0x0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff
+/// 1 in every 32-bit field.
+const FIELD_ONES: u256 = 0x0000000100000001000000010000000100000001000000010000000100000001
+/// 1 in every 16-bit lane.
+const LANE_ONES: u256 = 0x0001000100010001000100010001000100010001000100010001000100010001
+
+/// Whether every lane at or after lane `n` of the last word is zero, where
+/// `words` hold lanes 0..n-1 (`n` lanes take `lane_words(n)` words).
+pub const fn tail_is_zero(_ last: u256, _ n: usize) -> bool {
+    if n % 16 == 0 { return true }
+    last << ((n % 16) * 16) as u256 == 0
+}
+
+/// The largest and smallest value a 16-bit lane holds as a signed value.
+pub const I16_MAX: i32 = 32767
+pub const I16_MIN: i32 = -32768
+
+static_assert(lane_words(0) == 0)
+static_assert(lane_words(16) == 1)
+static_assert(lane_words(17) == 2)
+static_assert(lane_of(
+        0x0001ffff00000000000000000000000000000000000000000000000000000000,
+        0,
+    ) == 1)
+static_assert(lane_of(
+        0x0001ffff00000000000000000000000000000000000000000000000000000000,
+        1,
+    )
+    == 0xffff)
+static_assert(signed(0xffff) == -1)
+static_assert(signed(0x8000) == -32768)
+static_assert(signed(0x7fff) == 32767)
+static_assert(tail_is_zero(
+    0x0001ffff00000000000000000000000000000000000000000000000000000000,
+    2,
+))
+static_assert(!tail_is_zero(
+    0x0001ffff00000000000000000000000000000000000000000000000000000000,
+    1,
+))
+static_assert(tail_is_zero(0xffff, 16))
+// `lane_sum` at its edges: nothing, every lane -1, -32768 and 32767, and a
+// mix (-1, 300, 32767 and thirteen zeros) against adding lane by lane.
+static_assert(lane_sum(0) == 0)
+static_assert(lane_sum(LANE_ONES * 0xffff) == -16)
+static_assert(lane_sum(LANE_ONES * 0x8000) == -524288)
+static_assert(lane_sum(LANE_ONES * 0x7fff) == 524272)
+static_assert(lane_sum(MIXED) == 33066)
+static_assert(lane_sum(MIXED) == by_lanes(MIXED))
+static_assert(lane_sum(LANE_ONES * 0x8001 + 5) == by_lanes(LANE_ONES * 0x8001 + 5))
+
+/// Three lanes, -1, 300 and 32767, then zeros.
+const MIXED: u256 = 0xffff012c7fff0000000000000000000000000000000000000000000000000000
+
+/// The sum of a word's 16 lanes, one at a time: what `lane_sum` must equal.
+const fn by_lanes(_ word: u256) -> i32 {
+    var total: i32 = 0
+    var i: usize = 0
+    while i < 16 {
+        total = total + signed(lane_of(word, i))
+        i += 1
+    }
+    total
+}

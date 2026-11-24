@@ -1,0 +1,7 @@
+[ingot]
+name = "model"
+version = "0.1.0"
+
+[dependencies]
+tensile = { path = "../../../../ingots/tensile" }
+trees = { path = "../../../../ingots/trees" }

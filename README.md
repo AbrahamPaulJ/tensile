@@ -15,6 +15,13 @@ is 14 seconds of it). **[Catch a lie on Sepolia](https://abrahampaulj.github.io/
 dozen claims were posted on a public chain, some false, and the page re-runs the network in your browser,
 names the wrong neuron and asks the chain whether the challenge would win; with a wallet you can send it
 and keep half the bond. Addresses and every transaction: [`docs/sepolia.md`](docs/sepolia.md).
+**[Watch the fee tier live](https://abrahampaulj.github.io/tensile/fee-live/)**: the fee-tier example runs on
+Sepolia on real mainnet data. A keeper relays the mainnet USDC/WETH pool's tick at every 50th block,
+`FeeOracle` (Fe) builds the model's input from those ticks, and about every hour the keeper posts the
+network's tier with a bond; one deliberately false claim from a second account was slashed. The page
+re-reads every relayed tick from mainnet and re-runs every claim in your browser. The relay is a trust
+assumption a mainnet deployment would not have (the oracle would read the pool itself), and it is checked
+tick by tick. Addresses and every transaction: [`docs/sepolia-fee.md`](docs/sepolia-fee.md).
 **[The project page](https://abrahampaulj.github.io/tensile/)** has all of these. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
 file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
 
@@ -23,8 +30,22 @@ in Fe: [a fee tier for an AMM pool](examples/amm-fee/README.md), predicted from 
 USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last
 four hours"), where the contract rebuilds the model's input from ticks it read itself; and
 [a scam-risk score for Ethereum accounts](examples/address-risk/README.md) (89.35% against a baseline of
-83.37%). Four models from 1,042 to 109,386 parameters show
+83.37%). **[Try the fee tier live](https://abrahampaulj.github.io/tensile/fee/)**: the `examples/amm-fee`
+contracts run in your browser on a year of real pool ticks, `FeeOracle` builds the model's input from the
+ticks it observes, a false claim is slashed by re-running one neuron, and a claim that is correct about
+another window is refused, which is why the consumer checks the input hash. Four models from 1,042 to 109,386 parameters show
 [where a dispute pays and where it does not](#use-it-with-your-own-network).
+
+**Not only neural networks.** [Tree ensembles](#tree-ensembles-the-same-dispute-for-the-models-people-use-on-tabular-data),
+the models people actually use for tabular risk scores, get the same one-transaction dispute: a false
+answer is slashed by re-walking one tree on-chain. On the scam-risk data a 300-tree forest beats the dense
+network (F1 0.7065 against 0.6422), costs 1,301,202 gas to run whole on-chain and 251,287 to claim and
+finalise (19.3%).
+
+**And not only inference.** The kernel is a fixed-point library other Fe projects can import: scales in
+the type, packed vectors, overflow proofs the compiler checks. [`docs/LIBRARY.md`](docs/LIBRARY.md) shows
+it running a price average, a scorecard and a lending rate curve
+([use the kernel as a library](#use-the-kernel-as-a-library)).
 
 **For a judge with five minutes**, from the repository root:
 
@@ -220,6 +241,16 @@ the shipped model, they show where a dispute pays and where it does not:
 | Dearest dispute (first slash), gas | 101,727 | 116,791 | 178,662 | 185,003 |
 | Dearest dispute against one whole run | 65.7% | 25.0% | 9.4% | 2.3% |
 
+The three-layer arbiters the generator writes are tested as hard as the hand-written one. They pass the
+same Foundry fuzz and invariant suite, 50 tests each, with tests added for what only a multi-layer arbiter
+can get wrong: the middle layer checked against another layer's hash or leaf, a lie carried forward that
+must be slashed only where it starts (`tools/gen_foundry.sh`, a CI job). The oracle is the network written
+again in plain Solidity, sharing no code with the Fe kernel or the generator. A mutation run of 81 faults
+planted in the generated fee-tier arbiter, 31 of them faults only a multi-layer arbiter can have, ends with
+78 killed by tests, 2 refused by the compiler and 1 survivor, which reads a value through another type of
+the same layout and is argued equivalent
+([`docs/mutation-results-generated.md`](docs/mutation-results-generated.md)).
+
 **Small models should simply be called; the dispute pays from a few thousand parameters up.** At 1,042
 parameters the whole network runs on-chain for 154,748 gas, less than a claim, so the generated `Network`
 contract is the right tool and the arbiter is not. At 5,219 a claim is cheaper than a run, but only just
@@ -232,6 +263,65 @@ a claim publishes every layer's output, so one transaction names the wrong neuro
 is the claim, with the sum of the layer widths (1.11x here), and a dispute is never much cheaper than
 about 66,000 gas however small the neuron. The largest model's whole run is already 49% of the
 per-transaction gas cap; its dispute is not.
+
+## Tree ensembles: the same dispute for the models people use on tabular data
+
+`ingots/trees` is a second kernel on the same types, for gradient-boosted trees and random forests:
+`Tree<DEPTH, IN, LF>` and `Forest<TREES, DEPTH, IN, CLASSES, LF>`, with the no-overflow proof of the score
+sum in a `where` clause. A claim commits to the input and to every tree's output. One challenge names a
+tree, and the contract re-walks it (6 comparisons at depth 6) against a Merkle proof of that tree, with the
+same `Tree::eval` the off-chain forest runs; the other re-adds the committed outputs and compares the
+class. If any tree's output is wrong the first succeeds; if all are right the class follows from them, so
+a wrong class falls to the second. `ingots/dispute`, the claim state machine, is reused unchanged. Spec:
+[`docs/spec-trees.md`](docs/spec-trees.md).
+
+On the address-risk data ([`examples/address-risk-trees`](examples/address-risk-trees/README.md)), a
+forest of 300 trees of depth 6, chosen on validation and scored once on the same 7,054 held-out accounts:
+
+| | Forest 300x6 | Dense 14-32-16-2 | Always "not flagged" |
+|---|---|---|---|
+| Accuracy | 91.22% | 89.35% | 83.37% |
+| Precision | 79.59% | 72.79% | |
+| Recall | 63.51% | 57.46% | |
+| F1 | 0.7065 | 0.6422 | |
+| Whole model on-chain, gas | 1,301,202 | 154,748 | |
+| Honest path (`claim` + `finalize`), gas | 251,287 | 281,361 | |
+| Honest path against one whole run | 19.3% | 181.8% | |
+| Dearest dispute, gas | 118,880 | 101,727 | |
+| Dearest dispute against one whole run | 9.1% | 65.7% | |
+
+So on this data the better model is also the one the dispute pays for: the forest is too dear to run on
+every call and cheap to claim, where the small dense network was the reverse. The unflattering rows: a
+tree dispute costs more gas than a small neuron's (1,316 bytes of calldata against 452), the native
+classifier is slow (20 to 25 s for 7,054 rows), and the tree arbiter has its generated Fe tests and anvil
+scripts but no fuzz suite or mutation run. Choosing a whole tree per Merkle leaf over one path rests on a
+calculation, not on having built both (spec section 10). One compiler limit was met and recorded
+(`tests/defects/where_after_substitution.fe`).
+
+## Use the kernel as a library
+
+Under the inference sits a small fixed-point library for Fe: values whose binary scale is part of the
+type (`Q<F>`), int8 vectors packed 32 to a word, a dot product whose overflow is ruled out by a `where`
+clause, and bounds the compiler checks. `ingots/tensile` has no dependencies and works as a path or git
+dependency:
+
+```toml
+tensile = { source = "https://github.com/AbrahamPaulJ/tensile", rev = "<commit>", path = "ingots/tensile" }
+```
+
+[`lib-examples/`](lib-examples/README.md) builds three contracts on it with no neural network in sight:
+`TickEma` (a moving average of a pool's tick), `Scorecard` (a weighted score over 16 features) and
+`RateCurve` (a kinked borrow rate). Six mistakes that compile in Solidity are compile errors there, with
+the compiler's message recorded for each (`lib-examples/compile_fail/`): a missing shift after a
+fixed-point multiply is "expected `Q<16>`, but `Q<28>` is given", and a rate curve that would overflow at
+100% utilisation fails a `static_assert`. Measured against plain-integer twins written in Fe, the types
+cost no gas where the code has the same shape (execution gas: `RateCurve` 472 against 472, `TickEma` 7,634
+against 7,751), and the kernel's packed dot product runs the scorecard for 1,559 against 4,691 for a
+byte-by-byte loop (`lib-examples/runs/gas.json`).
+The guide, [`docs/LIBRARY.md`](docs/LIBRARY.md), starts from an empty directory, and CI runs that
+walkthrough on Fe 26.5.1 and 26.7.0. API reference, generated by `fe doc`:
+[abrahampaulj.github.io/tensile/api](https://abrahampaulj.github.io/tensile/api/). The example parameters
+are made up; the library is not audited.
 
 ## Build and test
 
@@ -337,7 +427,7 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
 - **It proves a computation, not a good model.** The arbiter says a claim matches the committed integer
   network, nothing about whether the network is right about the digit: it is wrong on 2.56% of the test
   set, and hand-drawn digits are harder still.
-- **Dense networks only.** No convolution. Layer sizes are compile-time, so each model gets its own
+- **Dense networks and tree ensembles only.** No convolution. Layer sizes are compile-time, so each model gets its own
   generated arbiter. Layer 1's weights do not fit one contract, so `Network` reads them from others. One
   overflow proof can visit about 150,000 weights, which bounds a single layer. The native auditor and the
   WebAssembly module are built for the shipped model; the other models' off-chain side is their native
@@ -346,8 +436,13 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   one seed, beats a weak baseline, and nothing here measures whether such a fee earns liquidity providers
   anything; no Uniswap v4 hook is built. The risk model's features come from a published data set, and
   `RiskGate` does not check that the 14 bytes belong to the account. Each example's README lists its
-  limits. Only the shipped digit model is on Sepolia, in the browser demo and under the fuzz and mutation
-  runs.
+  limits. The generated arbiters of amm-fee and address-risk are under the full fuzz and invariant runs,
+  and amm-fee's is under a mutation run as well; the larger digit model's arbiter is fuzzed only at reduced
+  counts, and the tree arbiter not at all. The digit model and the fee model are on Sepolia
+  (`docs/sepolia.md`, `docs/sepolia-fee.md`); there the fee oracle reads a relay that the keeper fills with
+  mainnet's ticks, a trust assumption the watcher and the status page check against mainnet. The keeper is
+  a scheduled GitHub workflow with a throwaway key and a spending cap: it can run late, skip, or stop when
+  its test ETH runs out; the page shows how far the relay is behind mainnet.
 - **Not audited, and on a testnet only.** The contracts are on Sepolia (`docs/sepolia.md`), with test ETH,
   and nowhere else. Sepolia already runs the next fork, which charges more for new storage, so its
   receipts are higher than the figures here, which are measured under mainnet's current rules. The

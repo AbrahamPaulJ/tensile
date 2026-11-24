@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tensile live fee tier</title>
+<meta name="description" content="A fee tier for the mainnet USDC/WETH pool, decided on Sepolia by a neural network written in Fe: the relayed ticks checked against mainnet, the oracle's window and fee, and every claim re-run in this browser.">
+<style>
+:root {
+  --paper: #e9edf1; --panel: #f8fafb; --ink: #10171e; --soft: #4d5b68; --rule: #cdd5dd;
+  --accent: #17508f; --accent-ink: #ffffff; --slash: #bb2d12; --final: #0f6e4a; --warn: #8a5a00; --pad-bg: #0c1117;
+  --bar: #17508f;
+  --display: Bahnschrift, "DIN Alternate", "Roboto Condensed", "Segoe UI", ui-sans-serif, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f141a; --panel: #171e26; --ink: #e8edf2; --soft: #9aa8b5; --rule: #2d3844;
+    --accent: #79b0ee; --accent-ink: #0b1118; --slash: #f07f60; --final: #5bd0a0; --warn: #e0b050; --pad-bg: #070a0e;
+    --bar: #79b0ee; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f141a; --panel: #171e26; --ink: #e8edf2; --soft: #9aa8b5; --rule: #2d3844;
+  --accent: #79b0ee; --accent-ink: #0b1118; --slash: #f07f60; --final: #5bd0a0; --warn: #e0b050; --pad-bg: #070a0e;
+  --bar: #79b0ee; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+a { color: var(--accent); }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 48px; }
+header { padding: 22px 0 14px; border-bottom: 1px solid var(--rule); }
+.mark { font: 700 20px/1 var(--display); letter-spacing: .14em; text-transform: uppercase; }
+.mark a { color: inherit; text-decoration: none; }
+h1 { font: 700 clamp(26px, 4.2vw, 40px)/1.08 var(--display); margin: 14px 0 10px; text-wrap: balance; }
+.lede { color: var(--soft); max-width: 54em; margin: 0; }
+.lede b { color: var(--ink); font-weight: 600; }
+.trust { margin: 14px 0 0; padding: 10px 12px; border-left: 4px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); max-width: 60em; font-size: 15px; }
+.strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+.cell { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 10px 12px; min-width: 0; }
+.cell span { display: block; font: 11.5px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--soft); }
+.cell b { display: block; font: 600 15px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) { .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; margin-top: 16px; }
+@media (max-width: 900px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 14px; min-width: 0; }
+h2 { font: 700 19px/1.2 var(--display); margin: 0 0 10px; }
+.label { font: 11.5px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--soft); margin: 14px 0 6px; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font: 13px/1.4 var(--mono); }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font-weight: 600; color: var(--soft); text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+th:first-child, td:first-child { text-align: left; }
+.ok { color: var(--final); font-weight: 700; } .no { color: var(--slash); font-weight: 700; } .wait { color: var(--soft); }
+#moves { width: 100%; height: 120px; display: block; }
+#claims { list-style: none; margin: 0; padding: 0; max-height: 640px; overflow: auto; }
+#claims li { display: grid; grid-template-columns: 3.2em minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid transparent; border-bottom-color: var(--rule); cursor: pointer; }
+#claims li:hover, #claims li.on { border-color: var(--accent); border-radius: 3px; }
+#claims li b { font: 600 15px/1 var(--mono); }
+#claims li i { font-style: normal; font-size: 14px; color: var(--soft); }
+.tag { font: 600 12px/1 var(--mono); padding: 5px 7px; border-radius: 3px; border: 1px solid currentColor; white-space: nowrap; }
+.tag.false { color: var(--slash); } .tag.true { color: var(--final); } .tag.wait { color: var(--soft); }
+.grid { display: grid; gap: 2px; max-width: 520px; }
+.grid div { font: 11.5px/1 var(--mono); text-align: center; padding: 5px 0; background: color-mix(in srgb, var(--rule) 45%, transparent); border-radius: 2px; }
+.bad { background: var(--slash) !important; color: #fff; font-weight: 700; }
+.verdict { margin: 14px 0 0; padding: 12px; border-left: 4px solid var(--soft); background: color-mix(in srgb, var(--rule) 35%, transparent); }
+.verdict.false { border-color: var(--slash); } .verdict.true { border-color: var(--final); }
+.verdict b { font-family: var(--display); font-size: 18px; }
+pre { margin: 6px 0 0; padding: 10px; background: var(--pad-bg); color: #dfe7ee; border-radius: 3px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto; }
+button { font: 600 15px/1 var(--display); letter-spacing: .03em; padding: 11px 16px; border-radius: 3px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; }
+.row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.note { font-size: 14px; color: var(--soft); margin: 8px 0 0; }
+#error { color: var(--slash); font-weight: 600; }
+footer { margin-top: 28px; font-size: 14px; color: var(--soft); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="mark"><a href="../">Tensile</a></div>
+  <h1>A fee tier for a mainnet pool, decided on Sepolia and checked in your browser</h1>
+  <p class="lede">Every 10 minutes of mainnet (50 blocks) a keeper relays the tick of the Uniswap v3 USDC/WETH 0.05% pool to Sepolia. <code>FeeOracle</code>, a contract written in Fe, turns the ticks into the moves the model reads; every hour the keeper posts, with a bond, what a 144-32-16-3 integer network says the fee tier is for the four hours that start an hour after the window. <b>This page re-reads each relayed tick from mainnet, re-runs the network on each claim's committed input, and asks the arbiter on Sepolia whether a challenge would succeed.</b> A wrong claim loses its bond to whoever proves one neuron wrong.</p>
+  <p class="trust"><b>Trust assumption, stated plainly:</b> Sepolia has no pool with mainnet prices, so the oracle reads a relay contract that holds whatever tick the keeper wrote. The relay records the mainnet block of every tick, and the table below compares each one with the real pool at that block, live, from public mainnet nodes. On mainnet the oracle would read the pool itself and there would be no relay.</p>
+</header>
+
+<div class="strip">
+  <div class="cell"><span>Fee now</span><b id="s-fee">reading the chain</b></div>
+  <div class="cell"><span>Relay vs mainnet</span><b id="s-relay">checking</b></div>
+  <div class="cell"><span>Claims</span><b id="s-claims"></b></div>
+  <div class="cell"><span>Relay behind mainnet</span><b id="s-lag"></b></div>
+</div>
+<p id="error"></p>
+
+<div class="panel">
+  <h2>The relay against mainnet</h2>
+  <p class="note" id="relay-note">Reading the relay's events from Sepolia.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Tick</th><th>Mainnet block</th><th>Mainnet time (UTC)</th><th>Relayed</th><th>Mainnet now says</th><th></th><th>Relayed in Sepolia block</th></tr></thead>
+    <tbody id="ticks"></tbody>
+  </table></div>
+</div>
+
+<div class="cols">
+  <div class="panel">
+    <h2>The oracle's window</h2>
+    <p class="note" id="oracle-note"></p>
+    <p class="label">The newest 144 moves (the model's input), oldest left</p>
+    <svg id="moves" viewBox="0 0 576 120" preserveAspectRatio="none" role="img" aria-label="Bar chart of the newest 144 moves"></svg>
+    <p class="label">Fees applied</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Claim</th><th>Window end</th><th>Tier</th><th>Fee</th><th>Transaction</th></tr></thead>
+      <tbody id="fees"></tbody>
+    </table></div>
+    <p class="label">Claims</p>
+    <ul id="claims"></ul>
+    <p class="note">Each claim is re-run here as it loads. Green: what the network computes. Red: false.</p>
+  </div>
+  <div class="panel" id="detail">
+    <h2 id="d-title">Choose a claim</h2>
+    <div id="d-body" hidden>
+      <p class="note" id="d-meta"></p>
+      <p class="label">Layer 1, 32 neurons as claimed (red: differs from this browser's run)</p>
+      <div class="grid" id="d-h1" style="grid-template-columns: repeat(16, 1fr)"></div>
+      <p class="label">Layer 2, 16 neurons</p>
+      <div class="grid" id="d-h2" style="grid-template-columns: repeat(16, 1fr)"></div>
+      <p class="label">Logits (quiet, middle, active) and the tier</p>
+      <div class="grid" id="d-logits" style="grid-template-columns: repeat(4, 1fr); max-width: 360px"></div>
+      <div class="verdict" id="d-verdict"></div>
+      <p class="label">The challenge, as calldata for the arbiter</p>
+      <pre id="d-data"></pre>
+      <div class="row" style="margin-top:12px">
+        <button id="d-send" disabled>Send with a browser wallet</button>
+        <a id="d-tx" target="_blank" rel="noopener"></a>
+      </div>
+      <p class="note" id="d-sendnote">Needs a wallet on Sepolia with a little test ETH for gas. The page never asks for a key.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  Contracts: <code>fe build</code> output at Fe 26.5.1, deployed unchanged; addresses, transactions, the budget and how to check the bytecode are in <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/sepolia-fee.md">docs/sepolia-fee.md</a>. The same checks run from the command line with <code>node demo/test/tensile-fee-live.mjs</code>, and on a schedule in GitHub Actions. <a href="../">Tensile</a>, <a href="https://github.com/AbrahamPaulJ/tensile">source</a>.
+</footer>
+</div>
+<script>window.TENSILE_FEE = /*ASSETS*/null;</script>
+<script>/*SCRIPT*/</script>
+</body>
+</html>

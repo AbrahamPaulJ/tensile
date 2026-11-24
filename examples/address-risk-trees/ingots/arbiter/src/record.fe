@@ -1,0 +1,46 @@
+//! What the arbiter stores about a claim, and the commitments it stores.
+use core::abi::{AbiSize, Encode}
+use core::marker::Copy
+use core::ptr
+use std::abi::{DynArray, Sol}
+use std::evm::{Address, Timestamp, Wei}
+
+/// One claim in storage (`docs/spec-trees.md` section 8). The vectors
+/// themselves are only in the `Claimed` event and the calldata; a challenge
+/// must present vectors that hash to these commitments.
+///
+/// Fields narrower than a word share a slot, in declaration order: the class
+/// and status bytes do. `Address` is a whole word in Fe, so a record takes
+/// six slots: the claimant, the two bytes, the bond, the deadline and the two
+/// hashes.
+pub struct Record {
+    /// Who posted the claim and receives the bond back on `Final`.
+    pub claimant: Address,
+    /// The claimed class.
+    pub class: u8,
+    /// `dispute::Status::code()`: 1 open, 2 slashed, 3 final. 0 means no claim.
+    pub status: u8,
+    /// The ETH attached to the claim, credited exactly once when it ends.
+    pub bond: Wei,
+    /// From this time on the claim can be finalised and no longer challenged.
+    pub deadline: Timestamp,
+    /// `keccak256` of the packed input words.
+    pub x0_hash: u256,
+    /// `keccak256` of the packed words of the tree outputs.
+    pub outputs_hash: u256,
+}
+
+impl Copy for Record {}
+
+/// `values` as a dynamic ABI array, the form an event field takes.
+pub fn dynamic<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
+where T: Encode<Sol> + AbiSize + Copy
+{
+    var array = unsafe {
+        ptr::alloc_array<T>(N)
+    }
+    for i in 0 .. N {
+        array[i] = values[i]
+    }
+    DynArray::from_slice(array.as_slice())
+}

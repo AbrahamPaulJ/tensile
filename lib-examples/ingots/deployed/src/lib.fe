@@ -1,0 +1,331 @@
+//! The example contracts, deployed on the test EVM: each against its own
+//! pure functions, and each against its plain twin from the `plain` ingot,
+//! on the same calls. EVM backend only: a test that deploys a contract
+//! cannot run on the native backend.
+use curve::{RateCurve, RateMsg}
+use ema::{Average, EmaMsg, NotSeeded, Tick, TickEma, TickOutOfRange, seed, step, whole}
+use plain::{
+    PlainEmaMsg,
+    PlainRateCurve,
+    PlainRateMsg,
+    PlainScoreMsg,
+    PlainScorecard,
+    PlainTickEma,
+    WadRateCurve,
+    WadRateMsg,
+}
+use score::{Features, MalformedFeatures, ScoreMsg, Scorecard}
+use std::evm::{Address, Evm, Wei, is_error}
+
+const GAS: u256 = 1000000
+
+// The tick average.
+
+fn update(oracle: Address, tick: i32) -> i32 uses (evm: mut Evm) {
+    evm.call(
+        addr: oracle,
+        gas: GAS,
+        value: Wei::zero(),
+        message: EmaMsg::Update { tick },
+    )
+}
+
+fn plain_update(oracle: Address, tick: i32) -> i32 uses (evm: mut Evm) {
+    evm.call(
+        addr: oracle,
+        gas: GAS,
+        value: Wei::zero(),
+        message: PlainEmaMsg::Update { tick },
+    )
+}
+
+#[test]
+fn the_average_contract_follows_the_pure_step() uses (evm: mut Evm) {
+    let oracle = evm.create2<TickEma>(value: Wei::zero(), args: (), salt: 0)
+    assert!(update(oracle, tick: 1000) == 1000)
+    var average = seed(Tick::from_raw(1000))
+    let ticks: [i32; 5] = [2000, 2000, -50, 887272, -887272]
+    for i in 0 .. 5 {
+        average = step(average, tick: Tick::from_raw(ticks[i]))
+        assert!(update(oracle, tick: ticks[i]) == whole(average).raw())
+    }
+    let raw: i32 = evm.call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: EmaMsg::Raw {},
+        )
+    let value: i32 = evm.call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: EmaMsg::Value {},
+        )
+    assert!(raw == average.raw())
+    assert!(value == whole(average).raw())
+}
+
+#[test]
+fn the_average_contract_refuses_a_tick_out_of_range() uses (evm: mut Evm) {
+    let oracle = evm.create2<TickEma>(value: Wei::zero(), args: (), salt: 0)
+    let high = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: EmaMsg::Update { tick: 887273 },
+        )
+    assert!(is_error<TickOutOfRange>(high.returndata()))
+    let low = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: EmaMsg::Update { tick: -887273 },
+        )
+    assert!(is_error<TickOutOfRange>(low.returndata()))
+}
+
+#[test]
+fn the_average_contract_refuses_a_read_before_the_first_tick()
+uses (evm: mut Evm)
+{
+    let oracle = evm.create2<TickEma>(value: Wei::zero(), args: (), salt: 0)
+    let outcome = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: EmaMsg::Value {},
+        )
+    assert!(is_error<NotSeeded>(outcome.returndata()))
+}
+
+#[test]
+fn the_average_contract_and_its_plain_twin_agree() uses (evm: mut Evm) {
+    let typed = evm.create2<TickEma>(value: Wei::zero(), args: (), salt: 0)
+    let twin = evm.create2<PlainTickEma>(value: Wei::zero(), args: (), salt: 0)
+    let ticks: [i32; 10] = [-200, 13, 13, -887272, 887272, 0, -1, 500000, 194000, 194123]
+    for i in 0 .. 10 {
+        assert!(
+            update(oracle: typed, tick: ticks[i]) == plain_update(oracle: twin, tick: ticks[i]),
+        )
+    }
+    let a: i32 = evm.call(
+            addr: typed,
+            gas: GAS,
+            value: Wei::zero(),
+            message: EmaMsg::Raw {},
+        )
+    let b: i32 = evm.call(
+            addr: twin,
+            gas: GAS,
+            value: Wei::zero(),
+            message: PlainEmaMsg::Raw {},
+        )
+    assert!(a == b)
+    assert!(Average::from_raw(a).raw() == b)
+}
+
+// The scorecard.
+
+/// 16 features in 0..127 from a seed, and their packed word.
+fn features_from(_ seed: usize) -> [i8; 16] {
+    var values: [i8; 16] = [0; 16]
+    for i in 0 .. 16 {
+        values[i] = ((seed + i * 37) % 128).downcast_truncate()
+    }
+    values
+}
+
+#[test]
+fn the_scorecard_contract_returns_the_pure_score() uses (evm: mut Evm) {
+    let card = evm.create2<Scorecard>(value: Wei::zero(), args: (), salt: 0)
+    for seed in 0 .. 12 {
+        let x = Features::pack(features_from(seed * 29))
+        let word = x.words()[0]
+        let got: i32 = evm
+            .call(
+                addr: card,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ScoreMsg::Score { features: word },
+            )
+        let ok: bool = evm
+            .call(
+                addr: card,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ScoreMsg::Accepts { features: word },
+            )
+        assert!(got == score::score_of(x).raw())
+        assert!(ok == score::accepts(x))
+    }
+}
+
+#[test]
+fn the_scorecard_contract_refuses_a_malformed_word() uses (evm: mut Evm) {
+    let card = evm.create2<Scorecard>(value: Wei::zero(), args: (), salt: 0)
+    let twin = evm.create2<PlainScorecard>(value: Wei::zero(), args: (), salt: 0)
+    // A feature of 128 (a sign bit), and a non-zero byte past feature 16.
+    let bad: [u256; 2] = [0x80 << 248, 1]
+    for i in 0 .. 2 {
+        let typed = evm
+            .try_call(
+                addr: card,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ScoreMsg::Score { features: bad[i] },
+            )
+        assert!(is_error<MalformedFeatures>(typed.returndata()))
+        let twin = evm
+            .try_call(
+                addr: twin,
+                gas: GAS,
+                value: Wei::zero(),
+                message: PlainScoreMsg::Score { features: bad[i] },
+            )
+        assert!(is_error<plain::MalformedFeatures>(twin.returndata()))
+    }
+}
+
+#[test]
+fn the_scorecard_contract_and_its_plain_twin_agree() uses (evm: mut Evm) {
+    let card = evm.create2<Scorecard>(value: Wei::zero(), args: (), salt: 0)
+    let twin = evm.create2<PlainScorecard>(value: Wei::zero(), args: (), salt: 0)
+    for seed in 0 .. 12 {
+        let word = Features::pack(features_from(seed * 31 + 5)).words()[0]
+        let a: i32 = evm
+            .call(
+                addr: card,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ScoreMsg::Score { features: word },
+            )
+        let b: i32 = evm
+            .call(
+                addr: twin,
+                gas: GAS,
+                value: Wei::zero(),
+                message: PlainScoreMsg::Score { features: word },
+            )
+        assert!(a == b)
+        let p: bool = evm
+            .call(
+                addr: card,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ScoreMsg::Accepts { features: word },
+            )
+        let q: bool = evm
+            .call(
+                addr: twin,
+                gas: GAS,
+                value: Wei::zero(),
+                message: PlainScoreMsg::Accepts { features: word },
+            )
+        assert!(p == q)
+    }
+}
+
+// The rate curve.
+
+/// Pools: cash and borrows, from empty to fully borrowed, with 18-decimal
+/// amounts. The first eight have a utilisation that is a whole number of
+/// 1/4096, so the `Wad` curve gives the same rate exactly.
+const CASH: [u256; 10] = [
+    0,
+    1,
+    1000000000000000000,
+    3,
+    1,
+    1,
+    0,
+    250000000000000000000,
+    2,
+    123456789,
+]
+const BORROWS: [u256; 10] = [
+    0,
+    0,
+    1000000000000000000,
+    1,
+    3,
+    7,
+    5,
+    750000000000000000000,
+    1,
+    987654321,
+]
+
+#[test]
+fn the_rate_contract_returns_the_pure_rate() uses (evm: mut Evm) {
+    let model = evm.create2<RateCurve>(value: Wei::zero(), args: (), salt: 0)
+    for i in 0 .. 10 {
+        let got: i32 = evm
+            .call(
+                addr: model,
+                gas: GAS,
+                value: Wei::zero(),
+                message: RateMsg::BorrowRate { cash: CASH[i], borrows: BORROWS[i] },
+            )
+        assert!(
+            got == curve::rate(curve::utilisation(cash: CASH[i], borrows: BORROWS[i])).raw(),
+        )
+    }
+}
+
+#[test]
+fn the_rate_contract_and_its_twins_agree() uses (evm: mut Evm) {
+    let model = evm.create2<RateCurve>(value: Wei::zero(), args: (), salt: 0)
+    let twin = evm.create2<PlainRateCurve>(value: Wei::zero(), args: (), salt: 0)
+    let wadc = evm.create2<WadRateCurve>(value: Wei::zero(), args: (), salt: 0)
+    for i in 0 .. 10 {
+        let a: i32 = evm
+            .call(
+                addr: model,
+                gas: GAS,
+                value: Wei::zero(),
+                message: RateMsg::BorrowRate { cash: CASH[i], borrows: BORROWS[i] },
+            )
+        let b: i32 = evm
+            .call(
+                addr: twin,
+                gas: GAS,
+                value: Wei::zero(),
+                message: PlainRateMsg::BorrowRate { cash: CASH[i], borrows: BORROWS[i] },
+            )
+        assert!(a == b)
+        let u: i32 = evm
+            .call(
+                addr: model,
+                gas: GAS,
+                value: Wei::zero(),
+                message: RateMsg::Utilisation { cash: CASH[i], borrows: BORROWS[i] },
+            )
+        let v: i32 = evm
+            .call(
+                addr: twin,
+                gas: GAS,
+                value: Wei::zero(),
+                message: PlainRateMsg::Utilisation { cash: CASH[i], borrows: BORROWS[i] },
+            )
+        assert!(u == v)
+        // The Wad rate in 1/65536 a year, rounded down.
+        let w: u256 = evm
+            .call(
+                addr: wadc,
+                gas: GAS,
+                value: Wei::zero(),
+                message: WadRateMsg::BorrowRate { cash: CASH[i], borrows: BORROWS[i] },
+            )
+        let in_q16: i32 = (w * 65536 / 1000000000000000000).downcast_truncate()
+        if i < 8 {
+            assert!(in_q16 == a)
+        } else {
+            // Utilisation rounded down to 1/4096 costs at most one step of
+            // the jump slope, 131072 / 4096 = 32, plus the two floors.
+            assert!(in_q16 >= a && in_q16 - a <= 34)
+        }
+    }
+}

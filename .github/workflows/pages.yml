@@ -6,7 +6,7 @@ name: Demo page
 on:
   push:
     branches: [main]
-    paths: [demo/dist/**, site/**, demo/video/tensile-demo.mp4, .github/workflows/pages.yml]
+    paths: [demo/dist/**, site/**, demo/video/tensile-demo.mp4, .github/workflows/pages.yml, ingots/tensile/**, tools/api_docs.sh]
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,22 @@ jobs:
           cp demo/dist/tensile-demo.html _site/demo/index.html
           cp demo/dist/tensile-sepolia.html _site/sepolia/index.html
           cp demo/video/tensile-demo.mp4 _site/
+      - name: The fee-tier demo (demo/dist/tensile-fee.html), at /fee/
+        run: |
+          mkdir -p _site/fee
+          cp demo/dist/tensile-fee.html _site/fee/index.html
+      # The kernel's API documentation at /api/, generated here by `fe doc` (the entry's Fe release)
+      # rather than committed: the site is about 2 MB, most of it the viewer's script.
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version v26.5.1 --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - run: bash tools/api_docs.sh _site/api
+      # The live status page of the fee-tier system on Sepolia (tools/build_fee_live.mjs).
+      - name: The live status page of the fee-tier system on Sepolia, at /fee-live/
+        run: |
+          mkdir -p _site/fee-live
+          cp demo/dist/tensile-fee-live.html _site/fee-live/index.html
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site

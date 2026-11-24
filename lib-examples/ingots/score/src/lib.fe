@@ -1,0 +1,102 @@
+//! `Scorecard`: a linear score, points times features, with the points
+//! packed into the contract's code.
+//!
+//! A scorecard is the oldest credit model there is: each feature of an
+//! applicant (here 16 of them, each a reading in [0, 1), such as a repayment
+//! record or a collateral ratio already normalised by whoever supplies it)
+//! earns a number of points per unit, and the score is a base plus the sum.
+//! It is a dot product and nothing more, so it is the kernel's `neuron`
+//! with no network around it:
+//!
+//! | Value | Type | Real value |
+//! |---|---|---|
+//! | features | `Activations<16, 7>` | 16 bytes in 0..127, each `/ 128` |
+//! | points | `Row<16, 4>` | 16 int8, each `/ 16`: -8.0 to 7.9375 per unit |
+//! | base, score, threshold | `Q<11>` | int32 `/ 2048`, the scale of points times a feature |
+//!
+//! The points below are made up for the example; nothing was fitted.
+//!
+//! What the compiler checks (`lib-examples/compile_fail/`):
+//!
+//! - the base must be at the scale of points times a feature, 7 + 4 = 11
+//!   bits; a base written in points (`Q<4>`) does not compile
+//!   (`score_base_wrong_scale.fe`). In Solidity it is a silent constant
+//!   offset: every score moves and nothing fails;
+//! - the threshold must be at the scale of the score; a threshold in points
+//!   does not compile (`score_threshold_wrong_scale.fe`);
+//! - 16 features for 16 points: a vector of another length is another type;
+//! - `static_assert(neuron_bound(..) <= I32_MAX)` proves that no
+//!   feature vector can overflow the score, and `dot_fits_i32(16)` (the
+//!   `where` clause of `neuron`) that the dot product itself cannot.
+use qmath::ge
+use tensile::{Activations, I32_MAX, Q, Row, neuron, neuron_bound}
+
+/// The number of features.
+pub const FEATURES: usize = 16
+
+/// A feature vector: 16 readings in [0, 1), 7 fractional bits each.
+pub type Features = Activations<FEATURES, 7>
+
+/// The points per unit of each feature, 4 fractional bits each.
+pub type Points = Row<FEATURES, 4>
+
+/// A score: points times a feature, 7 + 4 = 11 fractional bits.
+pub type Score = Q<11>
+
+/// The points: one byte each in the contract's code, 16 bytes in all.
+pub const POINTS: Points = Row::pack(
+    [48, 32, 24, -40, 16, -64, 20, 12, -24, 8, 36, -16, 28, -8, 4, 40],
+)
+
+/// The score of an applicant whose features are all zero: -1.25.
+pub const BASE: Score = Q::from_raw(-2560)
+
+/// The lowest score that is accepted: 1.5.
+pub const THRESHOLD: Score = Q::from_raw(3072)
+
+// No feature vector can overflow the score: |BASE| plus 127 times the larger
+// of the positive and the negative points.
+static_assert(neuron_bound(row: POINTS, bias: BASE) <= I32_MAX)
+static_assert(neuron_bound(row: POINTS, bias: BASE) == 2560 + 127 * 268)
+
+/// The score of `features`: `BASE + sum of POINTS[i] * features[i]`.
+pub fn score_of(_ features: Features) -> Score {
+    neuron(row: POINTS, x: features, bias: BASE)
+}
+
+/// Whether `features` reach `THRESHOLD`.
+pub fn accepts(_ features: Features) -> bool {
+    ge(score_of(features), THRESHOLD)
+}
+
+/// A feature word with a byte above 127, or a non-zero byte past feature 16.
+#[error]
+pub struct MalformedFeatures { pub word: u256 }
+
+pub msg ScoreMsg {
+    /// The score of the packed features, as the raw int32 of a `Q<11>`.
+    #[selector = sol("score(uint256)")]
+    Score { features: u256 } -> i32,
+    /// Whether the packed features reach the threshold.
+    #[selector = sol("accepts(uint256)")]
+    Accepts { features: u256 } -> bool,
+}
+
+/// No storage: the points and the threshold are constants in the code.
+pub contract Scorecard {
+    recv ScoreMsg {
+        Score { features } -> i32 {
+            if !Features::well_formed([features]) {
+                revert_error(MalformedFeatures { word: features })
+            }
+            score_of(Features::from_words([features])).raw()
+        }
+
+        Accepts { features } -> bool {
+            if !Features::well_formed([features]) {
+                revert_error(MalformedFeatures { word: features })
+            }
+            accepts(Features::from_words([features]))
+        }
+    }
+}

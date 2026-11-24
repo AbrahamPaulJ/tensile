@@ -1,0 +1,9 @@
+// expect: type mismatch
+// expect: expected `Base<_, 8>`, but `Base<2, 10>` is given
+// Leaf values with 8 fractional bits cannot be added to base scores with 10.
+use tensile::Accumulators
+use trees::{Base, Outputs}
+
+pub fn scores(outputs: Outputs<4, 8>, base: Base<2, 10>) -> Accumulators<2, 8> {
+    outputs.scores(base)
+}

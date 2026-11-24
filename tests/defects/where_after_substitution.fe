@@ -1,0 +1,32 @@
+// A `where` predicate with a literal argument is not matched after substitution (Fe 26.5.1).
+// `Box<N, M>::make` requires `fits(N, M)`. A generic caller `make_twenty<D>` that itself requires
+// `fits(D, 20)` calls `Box<D, 20>::make`, whose requirement after substitution is `fits(D, 20)`:
+// the same predicate, word for word. It is rejected:
+//
+//   fe check tests/defects/where_after_substitution.fe
+//   error[8-0093]: const requirement is not satisfied
+//   ... no matching const requirement in the caller after substitution
+//
+// Where it bit: `trees::Tree::build` and `from_words` were to require `where tree_fits(DEPTH, IN)`;
+// the generic unit test of trees of every depth over 20 features could not call them. The
+// requirement became an `assert!` in the function body: still a compile error for any constant
+// tree (`tests/compile_fail/trees/feature_out_of_range.fe`), a run-time check otherwise.
+const fn fits(_ n: usize, _ m: usize) -> bool {
+    n <= m
+}
+
+struct Box<const N: usize, const M: usize> {}
+
+impl<const N: usize, const M: usize> Box<N, M> {
+    fn make() -> Self where fits(N, M) {
+        Self {}
+    }
+}
+
+fn make_twenty<const D: usize>() -> Box<D, 20> where fits(D, 20) {
+    Box<D, 20>::make()
+}
+
+pub fn main() {
+    let _ = make_twenty<3>()
+}

@@ -1,0 +1,150 @@
+//! `RateCurve`: a lending pool's borrow rate as a function of utilisation,
+//! the kinked curve of Compound's `JumpRateModel` and Aave's interest rate
+//! strategy.
+//!
+//! ```text
+//! rate(u) = BASE + SLOPE * min(u, KINK) + JUMP * max(u - KINK, 0)
+//! ```
+//!
+//! | Value | Type | Real value |
+//! |---|---|---|
+//! | utilisation `u`, `KINK` | `Q<12>` | 0..4096 is 0% to 100% |
+//! | rates `BASE`, `SLOPE`, `JUMP` | `Q<16>` | per year, 65536 is 100% |
+//! | `SLOPE * u` | `Q<28>` | 12 + 16 bits, before the shift back to `Q<16>` |
+//!
+//! Every product carries its scale in its type, so each term must be
+//! brought back to `Q<16>` before it is added to the base, and the compiler
+//! checks that it was (`lib-examples/compile_fail/`):
+//!
+//! - `add(BASE, mul(SLOPE, u))` without the shift does not compile
+//!   (`curve_missing_shift.fe`). It is the classic fixed-point bug of
+//!   Solidity, a product of two scaled numbers that is never divided back,
+//!   and there it compiles and returns a rate 4096 times too large;
+//! - `static_assert(curve_fits(..))` proves that no utilisation in 0..100%
+//!   overflows an int32 anywhere in the formula. A jump slope of 800% per
+//!   year does not fit and does not compile (`curve_jump_overflow.fe`).
+use core::num::UnsignedAbs
+use qmath::{add, le, max, min, mul, product_fits_i32, sub}
+use tensile::{I32_MAX, Q}
+
+/// Utilisation: borrows over cash plus borrows, 12 fractional bits.
+pub type Utilisation = Q<12>
+
+/// A yearly rate, 16 fractional bits.
+pub type Rate = Q<16>
+
+/// 100% utilisation.
+pub const FULL: Utilisation = Q::from_raw(4096)
+
+/// The utilisation where the jump slope starts: 75%.
+pub const KINK: Utilisation = Q::from_raw(3072)
+
+/// The rate at 0% utilisation: 1.5625% a year (1/64).
+pub const BASE: Rate = Q::from_raw(1024)
+
+/// The slope below the kink: 12.5% a year per 100% of utilisation.
+pub const SLOPE: Rate = Q::from_raw(8192)
+
+/// The slope above the kink: 200% a year per 100% of utilisation.
+pub const JUMP: Rate = Q::from_raw(131072)
+
+/// Whether `rate` cannot overflow an int32 for any utilisation in 0..100%,
+/// for non-negative parameters: each product is at most `4096 * slope`, and
+/// the result is at most `base + slope * kink / 4096 + jump * (4096 - kink)
+/// / 4096`, the rate at 100%.
+pub const fn curve_fits(base: Rate, slope: Rate, jump: Rate, kink: Utilisation) -> bool {
+    let full = FULL.raw().unsigned_abs() as u256
+    let k = kink.raw().unsigned_abs() as u256
+    let b = base.raw().unsigned_abs() as u256
+    let s = slope.raw().unsigned_abs() as u256
+    let j = jump.raw().unsigned_abs() as u256
+    base.raw() >= 0
+        && slope.raw() >= 0
+        && jump.raw() >= 0
+        && kink.raw() >= 0
+        && k <= full
+        && product_fits_i32(full, s)
+        && product_fits_i32(full, j)
+        && b + s * k / full + j * (full - k) / full <= I32_MAX
+}
+
+static_assert(curve_fits(base: BASE, slope: SLOPE, jump: JUMP, kink: KINK))
+// The largest jump slope the proof accepts is just under 800% a year.
+static_assert(curve_fits(
+    base: BASE,
+    slope: SLOPE,
+    jump: Q::from_raw(524287),
+    kink: KINK,
+))
+static_assert(!curve_fits(
+    base: BASE,
+    slope: SLOPE,
+    jump: Q::from_raw(524288),
+    kink: KINK,
+))
+
+/// The rate at the kink, computed by the compiler.
+pub const AT_KINK: Rate = add(BASE, mul(SLOPE, KINK).shifted<12>())
+
+/// The borrow rate at utilisation `u`, which must be in 0..100%.
+///
+/// Each product is a `Q<28>`, and `shifted<12>` brings it back to a
+/// `Q<16>`. The same as `BASE + SLOPE * min(u, KINK) + JUMP * max(u - KINK,
+/// 0)`, written as two branches so that only one product is computed.
+pub const fn rate(_ u: Utilisation) -> Rate {
+    if le(u, KINK) {
+        add(BASE, mul(SLOPE, u).shifted<12>())
+    } else {
+        add(AT_KINK, mul(JUMP, sub(u, KINK)).shifted<12>())
+    }
+}
+
+/// The same rate as `rate`, written as the one formula of the comment at
+/// the top: both products, every time.
+pub const fn rate_by_formula(_ u: Utilisation) -> Rate {
+    let below = min(u, KINK)
+    let above = sub(max(u, KINK), KINK)
+    add(
+        add(BASE, mul(SLOPE, below).shifted<12>()),
+        mul(JUMP, above).shifted<12>(),
+    )
+}
+
+/// `borrows / (cash + borrows)` as a `Utilisation`, rounded down; 0 for an
+/// empty pool.
+pub const fn utilisation(cash: u256, borrows: u256) -> Utilisation {
+    let total = cash + borrows
+    if total == 0 {
+        return Q::from_raw(0)
+    }
+    let raw: u256 = borrows * 4096 / total
+    Q::from_raw(raw.downcast_truncate())
+}
+
+static_assert(rate(Q::from_raw(0)).raw() == 1024)
+static_assert(rate(KINK).raw() == 1024 + 6144)
+static_assert(rate(FULL).raw() == 1024 + 6144 + 32768)
+static_assert(utilisation(cash: 0, borrows: 0).raw() == 0)
+static_assert(utilisation(cash: 1, borrows: 3).raw() == 3072)
+
+pub msg RateMsg {
+    /// The yearly borrow rate, as the raw int32 of a `Q<16>`.
+    #[selector = sol("borrowRate(uint256,uint256)")]
+    BorrowRate { cash: u256, borrows: u256 } -> i32,
+    /// The utilisation, as the raw int32 of a `Q<12>`.
+    #[selector = sol("utilisation(uint256,uint256)")]
+    Utilisation { cash: u256, borrows: u256 } -> i32,
+}
+
+/// No storage: the curve's parameters are constants in the code.
+pub contract RateCurve {
+    recv RateMsg {
+        BorrowRate { cash, borrows } -> i32 {
+            rate(utilisation(cash, borrows)).raw()
+        }
+
+        Utilisation { cash, borrows } -> i32 {
+            utilisation(cash, borrows).raw()
+        }
+    }
+}

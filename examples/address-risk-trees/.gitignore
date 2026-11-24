@@ -1,0 +1,2 @@
+# Build outputs (the commitment, fe build artifacts, the native binary, the reference run again).
+build/

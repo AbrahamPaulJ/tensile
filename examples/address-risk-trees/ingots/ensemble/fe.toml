@@ -1,0 +1,8 @@
+[ingot]
+name = "ensemble"
+version = "0.1.0"
+
+[dependencies]
+tensile = { path = "../../../../ingots/tensile" }
+trees = { path = "../../../../ingots/trees" }
+model = true

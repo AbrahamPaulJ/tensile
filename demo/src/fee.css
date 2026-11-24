@@ -1,0 +1,82 @@
+/* The fee-tier page: style.css as it is, plus the parts only this page has. Same tokens, same look. */
+.what { max-width: 1232px; margin: 0 auto 6px; padding: 0 24px; font-size: 13px; color: var(--soft); }
+.what b { color: var(--ink); font-weight: 600; }
+.what a { color: var(--accent); }
+#ledger.fee-ledger { grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(0, 1.5fr); }
+
+.window-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.observe-grid { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
+.apply-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+/* 1: the window */
+.chart-wrap { position: relative; }
+#overview { display: block; width: 100%; height: 150px; cursor: crosshair; background: rgba(var(--cell), .04); border-radius: 2px; }
+.ov-band { fill: rgba(var(--cell), .55); stroke: rgba(var(--cell), .9); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.ov-input { fill: var(--slash); opacity: .35; }
+.ov-target { fill: var(--ink); opacity: .45; }
+.axis { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--soft); margin-top: 3px; }
+input[type="range"] { flex: 1 1 140px; min-width: 0; accent-color: var(--accent); }
+#zoom { display: block; width: 100%; height: auto; }
+.z-input { fill: rgba(var(--cell), .07); }
+.z-gap { fill: var(--rule); opacity: .55; }
+.z-target { fill: var(--ink); opacity: .07; }
+.z-line { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; }
+.z-bar { fill: var(--accent); }
+.z-bar.gap { fill: var(--soft); }
+.z-bar.target { fill: var(--ink); }
+.z-axis { stroke: var(--rule); stroke-width: 1; }
+.key { white-space: nowrap; }
+.key::before { content: ""; display: inline-block; width: 9px; height: 9px; margin: 0 4px 0 2px; vertical-align: -1px; border-radius: 1px; }
+.k-input::before { background: var(--accent); }
+.k-gap::before { background: var(--soft); }
+.k-target::before { background: var(--ink); }
+.bytes { display: flex; flex-wrap: wrap; gap: 2px 0; font: 11px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--ink); }
+.bytes span { width: 2.4em; text-align: right; padding-right: .35em; }
+.bytes span:nth-child(24n + 1) { border-left: 0; }
+.bytes .clip { color: var(--slash); font-weight: 600; }
+#tiers th { width: 46%; }
+#tiers b { font-weight: 600; }
+.compare .okk { color: var(--final); font-weight: 600; }
+
+/* 2: observe */
+.progress { height: 6px; background: rgba(var(--cell), .1); border-radius: 1px; margin-top: 10px; overflow: hidden; }
+.progress span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+.hexw { overflow-wrap: anywhere; word-break: break-all; font-size: 12px; }
+.compare.words td.hexw { font-size: 11.5px; }
+
+/* 3: claim */
+.targets.tiers3 { grid-template-columns: repeat(3, 1fr); }
+.targets.tiers3 button { font-size: 18px; line-height: 1.15; }
+.targets.tiers3 button i { display: block; font: 11.5px ui-sans-serif, "Segoe UI", sans-serif; font-style: normal; opacity: .8; }
+.layers { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 12px; }
+.cells { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 3px; }
+.cells div {
+  height: 28px; border-radius: 2px; border: 1px solid var(--rule); position: relative;
+  font: 11px ui-monospace, Consolas, monospace; display: flex; align-items: center; justify-content: center;
+  transition: background-color .25s;
+}
+.cells div.forged { outline: 2px solid var(--slash); outline-offset: -2px; }
+.cells div.named { outline: 3px solid var(--slash); outline-offset: 0; z-index: 1; }
+.logit { grid-template-columns: 14px minmax(0, 1fr) 72px; }
+.logit.forged .v { color: var(--slash); font-weight: 700; }
+.logits { gap: 7px; }
+
+/* 4: dispute */
+.pick select { border: 1px solid var(--rule); border-left: 0; background: var(--panel); color: var(--ink); padding: 0 4px; font: 14px ui-monospace, Consolas, monospace; }
+.small-note { font-size: 12.5px; margin-top: 8px; }
+/* The stamp starts its animation at nearly twice its size; keep that inside the panel on a phone. */
+.verdict-panel { overflow: hidden; }
+
+/* 5: apply */
+.fee-now { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: center; margin-top: 12px; }
+.fee-now .digit { font-size: 54px; }
+#apply-code { transition: box-shadow .3s; }
+#apply-code.lit { box-shadow: 0 0 0 3px var(--slash); }
+
+@media (max-width: 1000px) {
+  .what { padding: 0 16px; }
+  #ledger.fee-ledger { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .window-grid, .observe-grid, .apply-grid { grid-template-columns: minmax(0, 1fr); }
+  #overview { height: 120px; }
+  .fee-now .digit { font-size: 44px; }
+}

@@ -124,7 +124,8 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   <div class="cta">
     <a class="btn primary" href="demo/">Open the live demo</a>
     <a class="btn" href="#video">Watch the video (2.5 min)</a>
-    <a class="btn" href="sepolia/">Catch a lie on Sepolia</a>
+    <a class="btn" href="fee/">Try the fee-tier model</a>
+<a class="btn" href="sepolia/">Catch a lie on Sepolia</a>
     <a class="btn" href="https://github.com/AbrahamPaulJ/tensile">Read the source</a>
   </div>
 
@@ -155,6 +156,25 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   </div>
 </section>
 
+<section id="fee-live">
+  <h2>Running on real data: a fee tier for a mainnet pool</h2>
+  <p>The fee-tier example runs on Sepolia. A keeper relays the mainnet USDC/WETH pool's tick at every 50th block, a Fe contract turns the ticks into the model's input, and about every hour the keeper posts the network's tier with a bond; after the dispute window the oracle's fee follows it. <a href="fee-live/">The status page</a> re-reads each relayed tick from mainnet, re-runs every claim in your browser, and shows one false claim that was slashed on purpose.</p>
+  <p class="honest">Sepolia has no pool with mainnet prices, so the oracle reads a relay the keeper fills. That relay is a trust assumption, checked against mainnet tick by tick. The keeper is a scheduled workflow and can run late.</p>
+  <p><a class="btn primary" href="fee-live/">Watch it live</a> <a class="btn" href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/sepolia-fee.md">Addresses and every transaction</a></p>
+</section>
+
+<section id="trees">
+  <h2>Tree ensembles get the same dispute</h2>
+  <p>Gradient-boosted trees are what people actually use for tabular risk scores. A second kernel, on the same types, verifies them: a claim commits to every tree's output, and a false answer is slashed by re-walking one tree on-chain. On the scam-risk data a forest of 300 trees beats the dense network on the same 7,054 held-out accounts (F1 0.7065 against 0.6422, accuracy 91.22% against 89.35%). Running it whole on-chain costs 1,301,202 gas; claiming and finalising costs 251,287, or 19.3%; the dearest dispute 118,880, or 9.1%.</p>
+  <p class="honest">A tree dispute costs more gas than a small neuron's, and the tree arbiter has generated tests but no fuzz or mutation run. <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/address-risk-trees/README.md">The example</a> and <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/spec-trees.md">the spec</a>.</p>
+</section>
+
+<section id="library">
+  <h2>Also a fixed-point library for Fe</h2>
+  <p>Under the inference sits a library other Fe projects can import: values whose binary scale is part of the type, int8 vectors packed 32 to a word, and overflow bounds the compiler checks. Three contracts are built on it with no neural network in sight: a moving average of a pool's tick, a weighted scorecard and a kinked lending rate curve. A missing shift after a fixed-point multiply does not compile; a curve that would overflow at 100% utilisation fails a <code>static_assert</code>. Against plain-integer twins the types cost no gas.</p>
+  <p><a class="btn" href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/LIBRARY.md">Library guide</a> <a class="btn" href="api/">API reference</a></p>
+</section>
+
 <section id="scale">
   <h2>A dispute is priced by one neuron, not by the network</h2>
   <p>A generator writes the arbiter for any dense network, and for the shipped model its output equals the hand-written contract byte for byte. Three more models went through the whole pipeline, two of them not about digits: <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/amm-fee/README.md">a fee tier for an AMM pool</a>, predicted from a year of the mainnet USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last four hours"), with a contract that rebuilds the model's input from ticks it read itself; and <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/address-risk/README.md">a scam-risk score for Ethereum accounts</a> (89.35% against a baseline of 83.37%). Measured the same way:</p>
@@ -171,6 +191,7 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
     </tbody>
   </table>
   </div>
+  <p><a class="btn primary" href="fee/">Try the fee tier in your browser</a> A real pool's ticks, a contract written in Fe that builds the model's input from them, a false claim slashed by one neuron, and a fee set only from a claim about the pool's own ticks. No wallet.</p>
   <p class="honest">Small models should simply be called: at 1,042 parameters the whole network runs on-chain for less than a claim costs. The dispute pays from a few thousand parameters up, and across these four models running grows 53 times while an honest claim grows 1.16 times. A dispute is never much cheaper than about 66,000 gas. <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/USAGE.md">Bring your own model</a> in five commands; the <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/mnist-784-128-64-10/RESULTS.md">full results</a> include the unflattering rows.</p>
 </section>
 
