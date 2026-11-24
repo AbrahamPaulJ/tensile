@@ -9,6 +9,7 @@
 //! dispute about one output value re-runs one `neuron` on one window.
 use ingot::accumulators::{Accumulators, Bias, Q}
 use ingot::activations::Activations
+use ingot::bound::{I32_MAX, worst_case}
 use ingot::dense::{dot_fits_i32, neuron}
 use ingot::packed::{Packed, word_count}
 use ingot::testing::sequence
@@ -72,8 +73,10 @@ pub struct Sequence<const N: usize, const C: usize, const F: usize> {
 impl<const N: usize, const C: usize, const F: usize> Sequence<N, C, F> {
     /// Reads a flat vector as positions of `C` channels. It must hold a whole
     /// number of positions.
-    pub fn from_flat(_ flat: own Activations<N, F>) -> Self where N % C == 0 {
-        Self { flat }
+    pub fn from_flat(_ flat: Activations<N, F>) -> Self where N % C == 0 {
+        // `Packed` is `Copy`, so this copies the words and leaves `flat` to
+        // the caller.
+        Self { flat: Activations { values: flat.values } }
     }
 
     /// The flat vector.
@@ -110,6 +113,27 @@ impl<const OUT: usize, const IN: usize, const C: usize, const S: usize, const FW
     pub const fn row(self, _ j: usize) -> Row<IN, FW> {
         self.weights.rows[j]
     }
+
+    /// The filters as the weights of a dense layer, one row per filter: what
+    /// `worst_case` takes, so a convolution's overflow proof is a dense one.
+    pub const fn weights(own self) -> Weights<OUT, IN, FW> {
+        self.weights
+    }
+}
+
+/// One output value of a convolution: filter `row` on the `IN` values of `x`
+/// that start at value `start` (`docs/spec.md` section 8). It is `neuron` on
+/// `window`, the two functions `conv1d` runs for every position and filter,
+/// so a dispute that re-runs one output runs the code of the whole layer.
+pub fn filter_at<const IN: usize, const FW: usize, const N: usize, const F: usize>(
+    row: Row<IN, FW>,
+    x: Activations<N, F>,
+    start: usize,
+    bias: Q<{ F + FW }>,
+) -> Q<{ F + FW }>
+where dot_fits_i32(IN)
+{
+    neuron(row, x: window(x, start), bias)
 }
 
 /// The accumulators of a convolution without padding: for every position `p`
@@ -212,6 +236,41 @@ fn conv1d_equals_the_plain_loops() {
     )
     let expected = plain_conv(weights: [first, second], x, bias: [1000, -2000])
     assert!(acc == Accumulators<6, 13>::from_raw(expected))
+}
+
+/// The filters of `conv1d_equals_the_plain_loops`.
+const TWO: Filters<2, 12, 3, 2, 6> = Filters::new(
+    Weights::new(
+        [
+            Row::pack(sequence(start: 1, step: 3, modulus: 256)),
+            Row::pack(sequence(start: 130, step: 7, modulus: 256)),
+        ],
+    ),
+)
+const TWO_BIAS: Bias<2, 13> = Bias::from_raw([1000, -2000])
+
+static_assert(worst_case(weights: TWO.weights(), bias: TWO_BIAS) <= I32_MAX)
+
+#[test]
+fn filter_at_is_every_output_of_conv1d() {
+    let x: [i8; 27] = sequence(start: 9, step: 5, modulus: 128)
+    let flat = Activations<27, 7>::pack(x)
+    let acc: Accumulators<6, 13> = conv1d(
+        filters: TWO,
+        x: Sequence<27, 3, 7>::from_flat(Activations::pack(x)),
+        bias: TWO_BIAS,
+    )
+    for p in 0 .. 3 {
+        for j in 0 .. 2 {
+            let one = filter_at(
+                row: TWO.row(j),
+                x: flat,
+                start: p * 2 * 3,
+                bias: TWO_BIAS.at(j),
+            )
+            assert!(one.raw() == acc.at(p * 2 + j).raw())
+        }
+    }
 }
 
 #[test]

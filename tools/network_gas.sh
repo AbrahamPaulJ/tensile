@@ -7,9 +7,16 @@
 #   - `trace` of sample 0 (eth_call) must equal trace.jsonl: every hidden vector and every logit;
 #   - `classify` of sample 0 is then estimated and mined, and its gas recorded.
 #
+# If Osaka cannot run the forward pass in one transaction (the estimate fails: it needs more than
+# the 16,777,216 gas a transaction may have since EIP-7825), the Osaka answers are recorded, a
+# transaction with a 30,000,000 gas limit is sent to show Osaka refuse it, and all of the above is
+# repeated on a fresh anvil at Prague, which has no per-transaction cap, with a block gas limit of
+# 1,000,000,000: the gas of the forward pass measured where it can run.
+#
 # usage: network_gas.sh <fe-out-dir> <ref-dir> [record.json] [port] [samples]
 #   <fe-out-dir>  a directory with Network.bin and Rows0.bin, Rows1.bin, ... from `fe build`
-#                 (or RowsLow.bin and RowsHigh.bin: the hand-written network of ingots/onchain)
+#                 (or RowsLow.bin and RowsHigh.bin: the hand-written network of ingots/onchain;
+#                 or no weight contract at all: a network with a convolution)
 #   <ref-dir>     model.json, inputs.bin, pred.bin, trace.jsonl of the model
 export PATH="$HOME/.fe/bin:$HOME/.foundry/bin:$PATH"
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,11 +32,18 @@ samples="${5:-20}"
 rpc="http://127.0.0.1:$port"
 key=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 me=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-anvil --hardfork osaka --port $port > /dev/null 2>&1 &
-anvil_pid=$!
+cap=16777216
+anvil_pid=""
 trap 'kill $anvil_pid 2> /dev/null' EXIT
-sleep 2
 failures=0
+
+# start_chain <hardfork> [anvil arguments...]: a fresh anvil on the port.
+start_chain() {
+  [ -n "$anvil_pid" ] && kill $anvil_pid 2> /dev/null && wait $anvil_pid 2> /dev/null
+  anvil --hardfork "$@" --port $port > /dev/null 2>&1 &
+  anvil_pid=$!
+  sleep 2
+}
 
 deploy() {
   cast send --rpc-url $rpc --private-key $key --create "$1" --json \
@@ -39,30 +53,34 @@ size_of() {
   echo $(( ($(cast code --rpc-url $rpc "$1" | wc -c) - 3) / 2 ))
 }
 
-holders=()
-types=()
-sizes=""
-i=0
-while [ -f "$out/Rows$i.bin" ]; do
-  address=$(deploy "0x$(cat "$out/Rows$i.bin")")
-  holders+=("$address")
-  types+=("address")
-  sizes="$sizes $(size_of "$address")"
-  i=$((i + 1))
-done
-if [ ${#holders[@]} -eq 0 ]; then
-  # The hand-written `Network` of ingots/onchain: two weight contracts with their own names.
-  for name in RowsLow RowsHigh; do
-    address=$(deploy "0x$(cat "$out/$name.bin")")
+# deploy_all: the weight contracts, then the network; sets network, network_size and sizes.
+deploy_all() {
+  local holders=() types=() address i=0
+  sizes=""
+  while [ -f "$out/Rows$i.bin" ]; do
+    address=$(deploy "0x$(cat "$out/Rows$i.bin")")
     holders+=("$address")
     types+=("address")
     sizes="$sizes $(size_of "$address")"
+    i=$((i + 1))
   done
-fi
-ctor=$(cast abi-encode "constructor($(IFS=,; echo "${types[*]}"))" "${holders[@]}")
-network=$(deploy "0x$(cat "$out/Network.bin")${ctor#0x}")
-network_size=$(size_of "$network")
-echo "Network at $network ($network_size bytes deployed), ${#holders[@]} weight contracts ($sizes bytes)"
+  if [ ${#holders[@]} -eq 0 ] && [ -f "$out/RowsLow.bin" ]; then
+    # The hand-written `Network` of ingots/onchain: two weight contracts with their own names.
+    for name in RowsLow RowsHigh; do
+      address=$(deploy "0x$(cat "$out/$name.bin")")
+      holders+=("$address")
+      types+=("address")
+      sizes="$sizes $(size_of "$address")"
+    done
+  fi
+  local ctor=""
+  if [ ${#holders[@]} -gt 0 ]; then
+    ctor=$(cast abi-encode "constructor($(IFS=,; echo "${types[*]}"))" "${holders[@]}")
+  fi
+  network=$(deploy "0x$(cat "$out/Network.bin")${ctor#0x}")
+  network_size=$(size_of "$network")
+  echo "Network at $network ($network_size bytes deployed), ${#holders[@]} weight contracts ($sizes bytes)"
+}
 
 n_in=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["layers"][0]["in"])' "$ref/model.json")
 words=$(( (n_in + 31) / 32 ))
@@ -71,21 +89,26 @@ classify_sig="classify(uint256[$words])"
 input_words() {
   python3 "$root/tools/model_args.py" --ref "$ref" claim --sample "$1" | head -1
 }
+x0="$(input_words 0)"
+calldata=$(cast calldata "$classify_sig" "$x0")
+bytes=$(( (${#calldata} - 2) / 2 ))
 
-wrong=0
-for n in $(seq 0 $((samples - 1))); do
-  got=$(cast call --rpc-url $rpc "$network" "$classify_sig(uint256)" "$(input_words $n)" | cut -d' ' -f1)
-  want=$(python3 -c 'import sys; print(open(sys.argv[1], "rb").read()[int(sys.argv[2])])' "$ref/pred.bin" $n)
-  if [ "$got" != "$want" ]; then
-    echo "WRONG: classify of sample $n is $got, the reference says $want"
-    wrong=$((wrong + 1))
-  fi
-done
-echo "classify: $samples samples against pred.bin, $wrong mismatches"
-failures=$((failures + wrong))
+# check_answers: classify against pred.bin and trace against trace.jsonl; adds to failures.
+check_answers() {
+  local wrong=0 n got want raw
+  for n in $(seq 0 $((samples - 1))); do
+    got=$(cast call --rpc-url $rpc "$network" "$classify_sig(uint256)" "$(input_words $n)" | cut -d' ' -f1)
+    want=$(python3 -c 'import sys; print(open(sys.argv[1], "rb").read()[int(sys.argv[2])])' "$ref/pred.bin" $n)
+    if [ "$got" != "$want" ]; then
+      echo "WRONG: classify of sample $n is $got, the reference says $want"
+      wrong=$((wrong + 1))
+    fi
+  done
+  echo "classify: $samples samples against pred.bin, $wrong mismatches"
+  failures=$((failures + wrong))
 
-raw=$(cast call --rpc-url $rpc "$network" "trace(uint256[$words])" "$(input_words 0)")
-if python3 - "$ref" "$raw" <<'EOF'
+  raw=$(cast call --rpc-url $rpc "$network" "trace(uint256[$words])" "$(input_words 0)")
+  if python3 - "$ref" "$raw" <<'EOF'
 import json, sys
 ref, raw = sys.argv[1], sys.argv[2]
 trace = json.loads(open(ref + "/trace.jsonl", encoding="utf-8").readline())
@@ -102,28 +125,67 @@ if got != expected:
 print("trace: sample 0 equals trace.jsonl (%d hidden values, %d logits)"
       % (sum(len(h) for h in trace["hidden"]), len(trace["logits"])))
 EOF
-then :; else failures=$((failures + 1)); fi
+  then :; else failures=$((failures + 1)); fi
+}
 
-x0="$(input_words 0)"
+# send_classify <label>: mines classify of sample 0 and prints its row; sets used and execution.
+send_classify() {
+  used=$(cast send --rpc-url $rpc --private-key $key "$network" "$classify_sig" "$x0" --json \
+    | python3 -c 'import json, sys; print(int(json.load(sys.stdin)["gasUsed"], 16))')
+  execution=$(python3 "$root/tools/execution_gas.py" "$calldata" "$used")
+  printf '%-28s %9s %9s %9s %6d bytes of calldata\n' "$1" "$estimate" "$used" "$execution" $bytes
+}
+
+chain="anvil, Osaka"
+osaka_estimate=""
+osaka_send=""
+start_chain osaka
+deploy_all
 estimate=$(cast estimate --rpc-url $rpc --from $me "$network" "$classify_sig" "$x0" 2>&1 | head -1)
-calldata=$(cast calldata "$classify_sig" "$x0")
-used=$(cast send --rpc-url $rpc --private-key $key "$network" "$classify_sig" "$x0" --json \
-  | python3 -c 'import json, sys; print(int(json.load(sys.stdin)["gasUsed"], 16))')
-execution=$(python3 "$root/tools/execution_gas.py" "$calldata" "$used")
-bytes=$(( (${#calldata} - 2) / 2 ))
-printf '%-28s %9s %9s %9s %6d bytes of calldata\n' "Network.classify (sample 0)" "$estimate" "$used" "$execution" $bytes
+if [[ "$estimate" =~ ^[0-9]+$ ]] && [ "$estimate" -le $cap ]; then
+  check_answers
+  send_classify "Network.classify (sample 0)"
+else
+  # Over the cap: record what Osaka says, then measure where the transaction can run.
+  osaka_estimate="$estimate"
+  echo "Osaka, cast estimate of classify (sample 0): $osaka_estimate"
+  osaka_send=$(cast send --rpc-url $rpc --private-key $key --gas-limit 30000000 "$network" "$classify_sig" "$x0" \
+    --json 2>&1 | grep -v '^\s*$' | head -1)
+  echo "Osaka, cast send of classify (sample 0) with a 30,000,000 gas limit: $osaka_send"
+  if cast send --rpc-url $rpc --private-key $key --gas-limit 30000000 "$network" "$classify_sig" "$x0" \
+    --json > /dev/null 2>&1; then
+    echo "WRONG: Osaka mined a transaction with a gas limit above $cap"
+    failures=$((failures + 1))
+  fi
+  chain="anvil, Prague, block gas limit 1,000,000,000"
+  echo "=== on $chain"
+  start_chain prague --gas-limit 1000000000
+  deploy_all
+  estimate=$(cast estimate --rpc-url $rpc --from $me "$network" "$classify_sig" "$x0" 2>&1 | head -1)
+  check_answers
+  send_classify "Network.classify (sample 0)"
+  if [ "$used" -le $cap ]; then
+    echo "WRONG: the forward pass used $used gas on Prague, within the Osaka cap, but Osaka refused it"
+    failures=$((failures + 1))
+  else
+    python3 -c 'import sys; u, c = int(sys.argv[1]), int(sys.argv[2]); print("the forward pass needs %d gas, %.2f times the %d a transaction may use on Osaka" % (u, u / c, c))' "$used" $cap
+  fi
+fi
 echo "network_gas: $failures wrong result(s)"
 if [ -n "$record" ] && [ $failures -eq 0 ]; then
-  python3 - "$record" "$ref/model.json" "$estimate" "$used" "$execution" "$bytes" "$network_size" "$samples" "$(fe --version)" $sizes <<'EOF'
+  python3 - "$record" "$ref/model.json" "$estimate" "$used" "$execution" "$bytes" "$network_size" "$samples" "$(fe --version)" "$chain" "$osaka_estimate" "$osaka_send" $sizes <<'EOF'
 import json, sys
 record_path, model_path, estimate, used, execution, size, network_size, samples, fe_version = sys.argv[1:10]
+chain, osaka_estimate, osaka_send = sys.argv[10:13]
 model = json.load(open(model_path, encoding="utf-8"))
-record = {"model": model["name"], "fe": fe_version, "chain": "anvil, Osaka", "sample": 0,
+record = {"model": model["name"], "fe": fe_version, "chain": chain, "sample": 0,
           "classify": {"estimate": int(estimate), "gas_used": int(used), "execution": int(execution),
                        "calldata_bytes": int(size)},
           "classify_samples_checked": int(samples),
           "network_deployed_bytes": int(network_size),
-          "weight_contract_bytes": [int(v) for v in sys.argv[10:]]}
+          "weight_contract_bytes": [int(v) for v in sys.argv[13:]]}
+if osaka_estimate:
+    record["osaka"] = {"tx_gas_cap": 16777216, "estimate": osaka_estimate, "send_30m_gas_limit": osaka_send}
 with open(record_path, "w", encoding="utf-8", newline="\n") as f:
     json.dump(record, f, indent=1)
     f.write("\n")

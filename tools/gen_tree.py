@@ -73,6 +73,69 @@ def build_tree(leaves):
     return level[0], proofs
 
 
+# ---------------------------------------------------------------- word trees
+# The commitment to one packed vector of a claim under the word-tree binding (docs/spec-dispute.md
+# section 11): a leaf per 32-byte word, bound to its index, padded with zero nodes to a power of two.
+
+WORD_TAG = b"tensile.word.v0".ljust(32, b"\0")
+ZERO = bytes(32)
+
+
+def word_leaf(index, word):
+    """keccak256(WORD_TAG || u256(index) || word), `word` as 32 bytes."""
+    return keccak256(WORD_TAG + index.to_bytes(32, "big") + word)
+
+
+def word_width(count):
+    """The number of leaves of the tree of `count` words: the least power of two >= count."""
+    width = 1
+    while width < count:
+        width *= 2
+    return width
+
+
+def word_depth(count):
+    return word_width(count).bit_length() - 1
+
+
+def word_parent(a, b):
+    """A node of a word tree: zero over two zero nodes, else the sorted-pair hash."""
+    if a == ZERO and b == ZERO:
+        return ZERO
+    return hash_pair(a, b)
+
+
+def word_levels(words):
+    """Every level of the tree of `words` (a list of 32-byte values), leaves first, root last."""
+    level = [word_leaf(i, w) for i, w in enumerate(words)]
+    level += [ZERO] * (word_width(len(words)) - len(words))
+    levels = [level]
+    while len(level) > 1:
+        level = [word_parent(level[k], level[k + 1]) for k in range(0, len(level), 2)]
+        levels.append(level)
+    return levels
+
+
+def word_root(words):
+    return word_levels(words)[-1][0]
+
+
+def word_proof(words, index):
+    """The siblings of word `index` from its leaf up to the child of the root: word_depth nodes."""
+    proof = []
+    for level in word_levels(words)[:-1]:
+        proof.append(level[index ^ 1])
+        index //= 2
+    return proof
+
+
+def word_verify(root, index, word, proof):
+    node = word_leaf(index, word)
+    for sibling in proof:
+        node = hash_pair(node, sibling)
+    return node == root
+
+
 def commitment(model):
     """The tree of a model file: {"root", "leaf_count", "leaves": [{layer, neuron, leaf, proof}]}."""
     positions, hashes = [], []
