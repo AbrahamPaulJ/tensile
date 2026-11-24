@@ -32,7 +32,8 @@ each run reads the relay, the oracle and the arbiter, and does what is due:
 - **overlapping**: the workflow's concurrency group runs one keeper job at a time, and a run that sees a
   pending transaction of its account sends nothing;
 - **never ahead of mainnet**: the relay accepts only the next block of its grid, and the keeper relays
-  only blocks at or below the head two public mainnet nodes call `safe`, read from both, which must agree.
+  only blocks at or below the smallest `safe` head the public mainnet nodes report (at least two must
+  answer), each tick read from two nodes that must agree.
 
 The relay's grid is its clock, not Sepolia's blocks, so a catch-up cannot invent an observation: the tick
 of every grid block is mainnet's, and anyone can re-read it (below).
@@ -92,7 +93,7 @@ Read before deploying (2026-11-23T18:12:01Z, Sepolia block 12,197,331): balance 
 | `FeeOracle` | 3,734,872 | 3,704,305 |
 | total | 47,134,631 | 46,757,701 |
 
-Spent so far, measured at Sepolia block 12,200,173 (2026-11-24T04:03:12Z): the keeper `0xCe7966f666C1b1CABd8b1C56a57EF242E02e4e1f` holds 0.039250 ETH, nonce 50, and is owed 0 ETH
+Spent so far, measured at Sepolia block 12,200,380 (2026-11-24T04:46:48Z): the keeper `0xCe7966f666C1b1CABd8b1C56a57EF242E02e4e1f` holds 0.039250 ETH, nonce 56, and is owed 0 ETH
 by the arbiter; one bond of 0.000500 ETH is locked in the open claim, if any, and comes back when it is final.
 The base fee was 15 wei and the node's gas price 17 wei. The deployment's five creations used 46,757,701 gas.
 
@@ -100,13 +101,13 @@ Running cost, a **projection** from the transactions recorded below (Glamsterdam
 makes 144 ticks of the grid a day (7,200 blocks / 50). The keeper runs at most every 10 minutes, so at
 most 144 relay transactions a day, each counted at 122,776 gas (the largest relay of one or two ticks
 recorded; a batch of 24 costs about 414,000). One claim every 6 moves is 24 claims a day, each with
-its finalize, apply and withdraw (981,946, 59,451, 426,259 and 30,562 gas, means of the recorded ones):
-**53,636,976 gas a day**.
+its finalize, apply and withdraw (965,628, 108,417, 270,538 and 30,562 gas, means of the recorded ones):
+**50,683,224 gas a day**.
 
 | Gas price | Cost a day | Days the balance covers (balance and credit, less the keeper's 0.003000 ETH floor) |
 |---|---|---|
 | 17 wei (the gas price measured above) | 0.0000000009 ETH | more than ten years |
-| 0.05 gwei (the keeper's cap, MAX_FEE_WEI) | 0.002682 ETH | 14 |
+| 0.05 gwei (the keeper's cap, MAX_FEE_WEI) | 0.002534 ETH | 14 |
 
 Bonds are not spent: each comes back as a credit when its claim is final, and the keeper withdraws it.
 The keeper sends nothing while the base fee is above the cap or the balance under the floor, and the
@@ -143,6 +144,12 @@ Every transaction of the hand runs:
 | relay ticks 194..201 (mainnet blocks 26482050..26482400) | [`0xaad07301ea5e...`](https://sepolia.etherscan.io/tx/0xaad07301ea5e9a4085491d739d8d1ba063339f780b0976bb6b680f66dbcd4003) | 172,297 |
 | claim window 198: tier 2 (10000) | [`0x09a8efe0b3f1...`](https://sepolia.etherscan.io/tx/0x09a8efe0b3f1fcef0da62010e2d7b57a6075b9c12649dfa491c31cf338965e78) | 933,004 |
 | withdraw 750000000000000 wei | [`0xa9afa797ae98...`](https://sepolia.etherscan.io/tx/0xa9afa797ae98afc345a4f06431f91762d978923ce9fbe63a7b8d75fc69ba073f) | 30,562 |
+| relay ticks 202..202 (mainnet blocks 26482450..26482450) | [`0xecab76a03a7b...`](https://sepolia.etherscan.io/tx/0xecab76a03a7b0ca32a86f35732d66cf6f95549d5cbe78b5cd8b8574c00cdc52b) | 114,533 |
+| finalize claim 2 | [`0x7efac35e72aa...`](https://sepolia.etherscan.io/tx/0x7efac35e72aad52837e8d0e30add2d9160e02949ec20b37a2b2c6e374ad8c374) | 157,383 |
+| apply claim 2 (window ending at move 198) | [`0x9bf303e51509...`](https://sepolia.etherscan.io/tx/0x9bf303e51509f2d18e5874e94e9484b60dfd6be421665237ec044eb71c3fc944) | 114,817 |
+| relay ticks 203..206 (mainnet blocks 26482500..26482650) | [`0x95551b304d54...`](https://sepolia.etherscan.io/tx/0x95551b304d5482f4e0563118a0757c429cf6e4f2524340dd8be12b5dce3a77de) | 139,325 |
+| claim window 204: tier 2 (10000) | [`0xd6b117d10b4e...`](https://sepolia.etherscan.io/tx/0xd6b117d10b4e706f7375be532193f27b983f607fa81cfc3b418e661faabd5ff6) | 932,992 |
+| withdraw 500000000000000 wei | [`0x42ac5c842de5...`](https://sepolia.etherscan.io/tx/0x42ac5c842de5843c0482a763ed16cdd8f07f6446bbd3d9632bd2707e41e436d0) | 30,562 |
 
 The grid starts at mainnet block [26,472,350](https://etherscan.io/block/26472350): before the first claim the keeper relayed the 146
 ticks of the 24 hours before it, so the first window was complete at once. Those ticks were read
@@ -160,3 +167,17 @@ cast call --rpc-url https://eth.drpc.org --block <that block> 0x88e6A0c2dDD26FEE
 
 The last two print the relay's newest tick with its mainnet block, and the pool's tick at that block on
 mainnet: they must be equal.
+
+## Run the keeper by hand
+
+```
+cd demo && npm ci && cd ..
+SEPOLIA_KEY_FILE=<a file with a line private_key=0x...> node tools/fee_keeper.mjs --dry-run   # estimates, sends nothing
+SEPOLIA_KEY_FILE=<a file with a line private_key=0x...> node tools/fee_keeper.mjs --record    # one run, appended to the record
+node tools/fee_budget.mjs && python3 tools/sepolia_fee_page.py                                 # this page
+bash tools/fee_live_anvil.sh                                                                    # the whole system on anvil
+```
+
+Only the relay's keeper (the deployer) can relay; anyone can claim, challenge and finalise. The
+scheduled workflow (`.github/workflows/fee-keeper.yml`) runs the same script with the key in the
+repository secret `SEPOLIA_KEEPER_KEY`, without `--record`.

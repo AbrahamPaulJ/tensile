@@ -23,3 +23,8 @@
 {"label":"claim window 198: tier 2 (10000)","hash":"0x09a8efe0b3f1fcef0da62010e2d7b57a6075b9c12649dfa491c31cf338965e78","block":12200157,"gasUsed":933004,"status":1,"end":"198","tier":"2"}
 {"label":"withdraw 750000000000000 wei","hash":"0xa9afa797ae98afc345a4f06431f91762d978923ce9fbe63a7b8d75fc69ba073f","block":12200159,"gasUsed":30562,"status":1}
 {"label":"relay ticks 202..202 (mainnet blocks 26482450..26482450)","hash":"0xecab76a03a7b0ca32a86f35732d66cf6f95549d5cbe78b5cd8b8574c00cdc52b","block":12200192,"gasUsed":114533,"status":1,"first":"26482450","count":"1","nodes":"eth.drpc.org rpc.mevblocker.io"}
+{"label":"finalize claim 2","hash":"0x7efac35e72aad52837e8d0e30add2d9160e02949ec20b37a2b2c6e374ad8c374","block":12200375,"gasUsed":157383,"status":1,"id":"2"}
+{"label":"apply claim 2 (window ending at move 198)","hash":"0x9bf303e51509f2d18e5874e94e9484b60dfd6be421665237ec044eb71c3fc944","block":12200376,"gasUsed":114817,"status":1,"id":"2","end":"198"}
+{"label":"relay ticks 203..206 (mainnet blocks 26482500..26482650)","hash":"0x95551b304d5482f4e0563118a0757c429cf6e4f2524340dd8be12b5dce3a77de","block":12200377,"gasUsed":139325,"status":1,"first":"26482500","count":"4","nodes":"rpc.mevblocker.io eth-mainnet.public.blastapi.io"}
+{"label":"claim window 204: tier 2 (10000)","hash":"0xd6b117d10b4e706f7375be532193f27b983f607fa81cfc3b418e661faabd5ff6","block":12200378,"gasUsed":932992,"status":1,"end":"204","tier":"2"}
+{"label":"withdraw 500000000000000 wei","hash":"0x42ac5c842de5843c0482a763ed16cdd8f07f6446bbd3d9632bd2707e41e436d0","block":12200379,"gasUsed":30562,"status":1}
