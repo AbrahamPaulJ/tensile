@@ -37,7 +37,7 @@ file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo
 |---|---|---|---|
 | open [the live demo](https://abrahampaulj.github.io/tensile/demo/) | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
 | open [the fee tier on Sepolia](https://abrahampaulj.github.io/tensile/fee-live/) | a browser | a model's answers posted hourly on real pool data, each re-run in your browser, one false claim slashed | 1 min |
-| `fe test` | Fe 26.5.1 or 26.7.0 | 67 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
+| `fe test` | Fe 26.5.1 or 26.7.0 | 75 tests: kernel, tree kernel, model against the reference, dispute rule, contracts | 50 s |
 | `node wasm/diff.mjs` | Node 20+ | the committed WebAssembly module against the NumPy reference: 10,000 images, 0 mismatches | 4 s |
 | `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 13 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message, and one correct control that must | 17 s |
 
@@ -272,7 +272,7 @@ curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | b
 fe --version          # fe 26.5.1 (149c758)
 sha256sum "$(command -v fe)"   # 2d48fd56e45f56a775bea73a3180ffcab73ad440887d0a985be2050fb5993916 (Linux x86-64)
 fe fmt --check ingots
-fe test               # 67 tests on the EVM backend, about 25 s (26.5.1 or 26.7.0)
+fe test               # 75 tests on the EVM backend, about 50 s (26.5.1 or 26.7.0)
 fe test ingots/cli     # 10 more: the native classifier and auditor, which need 26.5.1
 fe build              # the contracts, into ./out
 ```
@@ -398,6 +398,7 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   them on values that provably fit, and 27.4% is decoding array arguments into memory. The page lists
   what the compiler could do about each and reproduces with `python3 tools/gas_gap.py`. Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
   0.03%, and solc without via-IR cannot compile the arbiter's twin at all, "Stack too deep" (section 6).
+- **The arbiter does not validate its own configuration.** `init` accepts a bond of 0 or a dispute window of 0, either of which removes the protection; a deployer must set both. The deployed contracts are byte for byte the tested build, so this is recorded here and not patched.
 - **Measured on Fe 26.5.1; the native CLI needs that version.** Plain `fe test` at the root passes on 26.5.1 and 26.7.0 (a CI step each); the CLI is its own ingot outside the workspace for that reason. Every figure here comes from 26.5.1, and
   the Sepolia contracts are its output. The kernel, the generated model, the dispute rule and the
   contracts also pass `fe check` and `fe test` unchanged on the 26.7.0 release (`tools/check_fe267.sh`,

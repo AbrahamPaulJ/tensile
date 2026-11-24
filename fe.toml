@@ -1,4 +1,4 @@
 [workspace]
 name = "tensile-workspace"
 version = "0.1.0"
-members = [{ path = "ingots/tensile", name = "tensile" }, { path = "ingots/model", name = "model" }, { path = "ingots/dispute", name = "dispute" }, { path = "ingots/onchain", name = "onchain" }]
+members = [{ path = "ingots/tensile", name = "tensile" }, { path = "ingots/model", name = "model" }, { path = "ingots/dispute", name = "dispute" }, { path = "ingots/onchain", name = "onchain" }, { path = "ingots/trees", name = "trees" }]
