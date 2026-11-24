@@ -1,0 +1,128 @@
+//! The events the arbiter emits and the errors it reverts with.
+//!
+//! Every error is a Solidity custom error (`revert_error`), so a caller can
+//! tell a rejected challenge (`NoFraud`) from a malformed one (`InputMismatch`,
+//! `NotCommitted`) and a client can decode the reason.
+use std::abi::DynArray
+use std::evm::{Address, Timestamp, Wei}
+
+/// A claim was posted. Carries the full vectors, so a watcher needs nothing
+/// but the log to audit it. The vectors are dynamic arrays (`uint256[]`) of
+/// the lengths the `claim` message fixes (1 and 19), because an event
+/// field cannot be a fixed-size array (`tests/defects/event_fixed_array.fe`).
+#[event]
+pub struct Claimed {
+    #[indexed]
+    pub id: u256,
+    #[indexed]
+    pub claimant: Address,
+    pub x0: DynArray<u256>,
+    pub outputs: DynArray<u256>,
+    pub class: u8,
+    pub bond: Wei,
+    pub deadline: Timestamp,
+}
+
+/// A tree challenge proved a claim wrong: tree `tree`, walked on the input,
+/// ends at another value. Half the bond is credited to `challenger`; the rest
+/// is burned (`dispute::shares`).
+#[event]
+pub struct TreeSlashed {
+    #[indexed]
+    pub id: u256,
+    #[indexed]
+    pub challenger: Address,
+    pub tree: u256,
+}
+
+/// A class challenge proved a claim wrong: the committed outputs add up to
+/// another class. Half the bond is credited to `challenger`; the rest is
+/// burned (`dispute::shares`).
+#[event]
+pub struct ClassSlashed {
+    #[indexed]
+    pub id: u256,
+    #[indexed]
+    pub challenger: Address,
+}
+
+/// A claim passed its deadline unchallenged. The bond is credited back to the
+/// claimant and `result(id)` now answers.
+#[event]
+pub struct Finalized {
+    #[indexed]
+    pub id: u256,
+    pub class: u8,
+}
+
+/// `account` withdrew its credits.
+#[event]
+pub struct Withdrawn {
+    #[indexed]
+    pub account: Address,
+    pub amount: Wei,
+}
+
+/// Less ETH was attached to a claim than the bond.
+#[error]
+pub struct BondTooSmall { pub sent: Wei, pub required: Wei }
+
+/// The input vector of a claim has a byte above 127 or non-zero padding.
+#[error]
+pub struct MalformedInput {}
+
+/// The output vector of a claim has a non-zero padding lane.
+#[error]
+pub struct MalformedOutputs {}
+
+/// The claimed class is not a class of the forest.
+#[error]
+pub struct ClassOutOfRange { pub class: u8 }
+
+/// No claim has this number.
+#[error]
+pub struct UnknownClaim { pub id: u256 }
+
+/// The claim is already `Slashed` or `Final`.
+#[error]
+pub struct ClaimNotOpen { pub id: u256 }
+
+/// A challenge at or after the deadline.
+#[error]
+pub struct TooLate { pub deadline: Timestamp }
+
+/// A finalisation before the deadline.
+#[error]
+pub struct TooEarly { pub deadline: Timestamp }
+
+/// The challenge recomputed exactly the committed value: the claim stands.
+#[error]
+pub struct NoFraud {}
+
+/// The tree index is not a tree of the forest.
+#[error]
+pub struct TreeOutOfRange { pub tree: u256 }
+
+/// The input presented does not hash to the committed one.
+#[error]
+pub struct InputMismatch {}
+
+/// The outputs presented do not hash to the committed ones.
+#[error]
+pub struct OutputMismatch {}
+
+/// The tree does not verify against the model root at this position.
+#[error]
+pub struct NotCommitted {}
+
+/// `result` was asked for a claim that is not `Final`.
+#[error]
+pub struct NotFinal { pub id: u256 }
+
+/// `withdraw` with no credit.
+#[error]
+pub struct NothingToWithdraw {}
+
+/// The ETH transfer of a withdrawal failed; the credit is left in place.
+#[error]
+pub struct TransferFailed {}

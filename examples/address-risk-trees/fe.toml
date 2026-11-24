@@ -1,0 +1,4 @@
+[workspace]
+name = "address-risk-trees-300x6"
+version = "0.1.0"
+members = [{ path = "ingots/model", name = "model" }, { path = "ingots/arbiter", name = "arbiter" }, { path = "ingots/ensemble", name = "ensemble" }, { path = "ingots/cli", name = "cli" }, { path = "ingots/consumer", name = "consumer" }]

@@ -1,0 +1,161 @@
+//! `RiskGate`: an example of a contract that acts on the arbiter's results.
+//!
+//! Hand-written, not generated. The gate of `examples/address-risk`, reading
+//! the tree-ensemble arbiter instead of the dense one: the only difference is
+//! the arbiter's `claimHashes`, which here returns two commitments (input and
+//! tree outputs) instead of four. It keeps a standing per account (unscored,
+//! cleared or flagged) and lets only cleared accounts through `enter`. A
+//! standing comes from a finalised claim of the arbiter and from nothing
+//! else: the gate never sees a tree or a score and never runs the model.
+//!
+//! `score(account, id, x0)` does three checks:
+//!
+//! 1. `result(id)` answers, which the arbiter allows only for a `Final`
+//!    claim, so an open or slashed claim cannot set a standing;
+//! 2. the claim is about the features `x0` and no others: their hash must be
+//!    the input commitment the arbiter stored for claim `id`;
+//! 3. the caller is the operator named at deployment.
+//!
+//! What the gate does not check, and cannot: that `x0` really are the
+//! features of `account`. Deriving 14 activations from an account's
+//! transaction history happens off-chain. The operator states it, and the
+//! `Scored` event publishes the account and its features together, so anyone
+//! can recompute them from the chain and see a false statement. Nothing here
+//! punishes one. Making that step disputable too is the work this example
+//! leaves open (README.md, "Limits").
+use arbiter::ArbiterMsg
+use std::evm::{Address, Call, Ctx, Log, StorageMap, keccak_words}
+
+/// The model's class for an account it does not flag.
+const CLASS_CLEAR: u8 = 0
+
+/// Standings. An account nobody scored is `UNSCORED` and cannot enter.
+pub const UNSCORED: u8 = 0
+pub const CLEARED: u8 = 1
+pub const FLAGGED: u8 = 2
+
+/// `account` was scored by finalised claim `id`, whose input was `x0` (the 14
+/// activations, packed in one word) and whose result was `class`.
+#[event]
+pub struct Scored {
+    #[indexed]
+    pub account: Address,
+    #[indexed]
+    pub id: u256,
+    pub class: u8,
+    pub x0: u256,
+}
+
+/// A cleared account went through the gate; `count` is the total so far.
+#[event]
+pub struct Entered {
+    #[indexed]
+    pub account: Address,
+    pub count: u256,
+}
+
+/// Only the operator may score an account.
+#[error]
+pub struct NotOperator { pub caller: Address }
+
+/// Claim `id` is about other features than the ones presented.
+#[error]
+pub struct WrongInput { pub id: u256 }
+
+/// The caller is not cleared: `standing` is `UNSCORED` or `FLAGGED`.
+#[error]
+pub struct NotCleared { pub account: Address, pub standing: u8 }
+
+pub msg GateMsg {
+    /// Sets the standing of `account` from finalised claim `id` about the
+    /// features `x0`. Returns the claim's class. A later call replaces an
+    /// earlier standing: features change as an account transacts.
+    #[selector = sol("score(address,uint256,uint256[1])")]
+    Score { account: Address, id: u256, x0: [u256; 1] } -> u8,
+    /// The gated action: counts the caller in, or reverts with `NotCleared`.
+    #[selector = sol("enter()")]
+    Enter -> u256,
+    /// The standing of `account`: 0 unscored, 1 cleared, 2 flagged.
+    #[selector = sol("standingOf(address)")]
+    StandingOf { account: Address } -> u8,
+    /// The features `account` was last scored on, as one packed word.
+    #[selector = sol("featuresOf(address)")]
+    FeaturesOf { account: Address } -> u256,
+    /// How many times `enter` succeeded.
+    #[selector = sol("entries()")]
+    Entries -> u256,
+}
+
+/// Deployed with the arbiter whose results it accepts and the operator who
+/// may score accounts. Its effects say what it can do: read the caller, read
+/// another contract (`call`, not `mut call`, so it cannot send ETH or change
+/// the arbiter), write its own storage and emit events.
+pub contract RiskGate uses (ctx: Ctx, call: Call, log: mut Log) {
+    source: Address,
+    operator: Address,
+    mut standing: StorageMap<Address, u8>,
+    mut features: StorageMap<Address, u256>,
+    mut entries: u256,
+
+    init(arbiter_address: Address, operator_address: Address)
+    uses (mut source, mut operator)
+    {
+        source = arbiter_address
+        operator = operator_address
+    }
+
+    recv GateMsg {
+        Score { account, id, x0 } -> u8 uses (
+            ctx,
+            call,
+            source,
+            operator,
+            mut standing,
+            mut features,
+            mut log,
+        ) {
+            let caller = ctx.caller()
+            if caller != operator {
+                revert_error(NotOperator { caller })
+            }
+            // Reverts with the arbiter's `NotFinal` unless claim `id` is final.
+            let class: u8 = source.static(ArbiterMsg::ResultOf { id })
+            let hashes: (u256, u256) = source.static(ArbiterMsg::ClaimHashes { id })
+            if keccak_words(x0) != hashes.0 {
+                revert_error(WrongInput { id })
+            }
+            standing[account] = if class == CLASS_CLEAR {
+                CLEARED
+            } else {
+                FLAGGED
+            }
+            features[account] = x0[0]
+            log.emit(Scored { account, id, class, x0: x0[0] })
+            class
+        }
+
+        Enter -> u256 uses (ctx, standing, mut entries, mut log) {
+            let account = ctx.caller()
+            let current = standing[account]
+            if current != CLEARED {
+                revert_error(NotCleared { account, standing: current })
+            }
+            let count = entries + 1
+            entries = count
+            log.emit(Entered { account, count })
+            count
+        }
+
+        StandingOf { account } -> u8 uses (standing) {
+            standing[account]
+        }
+
+        FeaturesOf { account } -> u256 uses (features) {
+            features[account]
+        }
+
+        Entries -> u256 uses (entries) {
+            entries
+        }
+    }
+}
