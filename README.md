@@ -15,6 +15,13 @@ is 14 seconds of it). **[Catch a lie on Sepolia](https://abrahampaulj.github.io/
 dozen claims were posted on a public chain, some false, and the page re-runs the network in your browser,
 names the wrong neuron and asks the chain whether the challenge would win; with a wallet you can send it
 and keep half the bond. Addresses and every transaction: [`docs/sepolia.md`](docs/sepolia.md).
+**[Watch the fee tier live](https://abrahampaulj.github.io/tensile/fee-live/)**: the fee-tier example runs on
+Sepolia on real mainnet data. A keeper relays the mainnet USDC/WETH pool's tick at every 50th block,
+`FeeOracle` (Fe) builds the model's input from those ticks, and about every hour the keeper posts the
+network's tier with a bond; one deliberately false claim from a second account was slashed. The page
+re-reads every relayed tick from mainnet and re-runs every claim in your browser. The relay is a trust
+assumption a mainnet deployment would not have (the oracle would read the pool itself), and it is checked
+tick by tick. Addresses and every transaction: [`docs/sepolia-fee.md`](docs/sepolia-fee.md).
 **[The project page](https://abrahampaulj.github.io/tensile/)** has all of these. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
 file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
 
@@ -431,7 +438,11 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   `RiskGate` does not check that the 14 bytes belong to the account. Each example's README lists its
   limits. The generated arbiters of amm-fee and address-risk are under the full fuzz and invariant runs,
   and amm-fee's is under a mutation run as well; the larger digit model's arbiter is fuzzed only at reduced
-  counts, and the tree arbiter not at all.
+  counts, and the tree arbiter not at all. The digit model and the fee model are on Sepolia
+  (`docs/sepolia.md`, `docs/sepolia-fee.md`); there the fee oracle reads a relay that the keeper fills with
+  mainnet's ticks, a trust assumption the watcher and the status page check against mainnet. The keeper is
+  a scheduled GitHub workflow with a throwaway key and a spending cap: it can run late, skip, or stop when
+  its test ETH runs out; the page shows how far the relay is behind mainnet.
 - **Not audited, and on a testnet only.** The contracts are on Sepolia (`docs/sepolia.md`), with test ETH,
   and nowhere else. Sepolia already runs the next fork, which charges more for new storage, so its
   receipts are higher than the figures here, which are measured under mainnet's current rules. The

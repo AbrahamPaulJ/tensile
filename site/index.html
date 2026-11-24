@@ -156,6 +156,13 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   </div>
 </section>
 
+<section id="fee-live">
+  <h2>Running on real data: a fee tier for a mainnet pool</h2>
+  <p>The fee-tier example runs on Sepolia. A keeper relays the mainnet USDC/WETH pool's tick at every 50th block, a Fe contract turns the ticks into the model's input, and about every hour the keeper posts the network's tier with a bond; after the dispute window the oracle's fee follows it. <a href="fee-live/">The status page</a> re-reads each relayed tick from mainnet, re-runs every claim in your browser, and shows one false claim that was slashed on purpose.</p>
+  <p class="honest">Sepolia has no pool with mainnet prices, so the oracle reads a relay the keeper fills. That relay is a trust assumption, checked against mainnet tick by tick. The keeper is a scheduled workflow and can run late.</p>
+  <p><a class="btn primary" href="fee-live/">Watch it live</a> <a class="btn" href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/sepolia-fee.md">Addresses and every transaction</a></p>
+</section>
+
 <section id="trees">
   <h2>Tree ensembles get the same dispute</h2>
   <p>Gradient-boosted trees are what people actually use for tabular risk scores. A second kernel, on the same types, verifies them: a claim commits to every tree's output, and a false answer is slashed by re-walking one tree on-chain. On the scam-risk data a forest of 300 trees beats the dense network on the same 7,054 held-out accounts (F1 0.7065 against 0.6422, accuracy 91.22% against 89.35%). Running it whole on-chain costs 1,301,202 gas; claiming and finalising costs 251,287, or 19.3%; the dearest dispute 118,880, or 9.1%.</p>
