@@ -1,0 +1,13 @@
+{
+ "measured": "2026-11-24T04:03:12Z",
+ "block": 12200173,
+ "keeper": "0xCe7966f666C1b1CABd8b1C56a57EF242E02e4e1f",
+ "keeper_balance_wei": "39249990711320908",
+ "keeper_nonce": 50,
+ "keeper_credit_wei": "0",
+ "adversary": "0xacE41Ee7A2E33750Ee74B5aac8528aF6F463CCC6",
+ "adversary_balance_wei": "2499999982273608",
+ "bond_wei": "500000000000000",
+ "base_fee_wei": 15,
+ "gas_price_wei": 17
+}
