@@ -49,5 +49,13 @@ jobs:
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
+      # The artifact is sometimes not listed yet when the deploy step asks for it in the same job:
+      # wait, and try once more if the first attempt fails.
+      - run: sleep 30
       - id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 90
+      - if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
