@@ -7,8 +7,9 @@
 #   - `trace` of sample 0 (eth_call) must equal trace.jsonl: every hidden vector and every logit;
 #   - `classify` of sample 0 is then estimated and mined, and its gas recorded.
 #
-# If Osaka cannot run the forward pass in one transaction (the estimate fails: it needs more than
-# the 16,777,216 gas a transaction may have since EIP-7825), the Osaka answers are recorded, a
+# If Osaka cannot run the forward pass in one transaction (the estimate is above the 16,777,216 gas a
+# transaction may have since EIP-7825), a fresh Osaka anvil with --enable-tx-gas-limit (anvil does
+# not enforce the cap by default) is asked again, its answers are recorded, a
 # transaction with a 30,000,000 gas limit is sent to show Osaka refuse it, and all of the above is
 # repeated on a fresh anvil at Prague, which has no per-transaction cap, with a block gas limit of
 # 1,000,000,000: the gas of the forward pass measured where it can run.
@@ -75,7 +76,7 @@ deploy_raw() {
 import json, sys
 code = open(sys.argv[1]).read().strip() + sys.argv[2]
 print(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_sendTransaction",
-                  "params": [{"from": sys.argv[3], "data": "0x" + code, "gas": hex(30000000)}]}))
+                  "params": [{"from": sys.argv[3], "data": "0x" + code, "gas": hex(16000000)}]}))
 ' "$1" "$2" "$me" > "$body"
   hash=$(curl -s -H 'content-type: application/json' --data @"$body" $rpc \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["result"])')
@@ -124,7 +125,7 @@ words=$(( (n_in + 31) / 32 ))
 classify_sig="classify(uint256[$words])"
 # input_words <sample>: the input as packed words, in cast syntax.
 input_words() {
-  python3 "$root/tools/model_args.py" --ref "$ref" claim --sample "$1" | head -1
+  python3 "$root/tools/model_args.py" --ref "$ref" claim --sample "$1" 2> /dev/null | head -1
 }
 x0="$(input_words 0)"
 calldata=$(cast calldata "$classify_sig" "$x0")
@@ -183,8 +184,12 @@ if [[ "$estimate" =~ ^[0-9]+$ ]] && [ "$estimate" -le $cap ]; then
   check_answers
   send_classify "Network.classify (sample 0)"
 else
-  # Over the cap: record what Osaka says, then measure where the transaction can run.
-  osaka_estimate="$estimate"
+  # Over the cap. anvil (Foundry 1.9.0) does not enforce EIP-7825 unless asked, so Osaka is started
+  # again with --enable-tx-gas-limit; record what it says, then measure where the transaction can run.
+  echo "Osaka without --enable-tx-gas-limit, cast estimate of classify (sample 0): $estimate"
+  start_chain osaka --enable-tx-gas-limit
+  deploy_all
+  osaka_estimate=$(cast estimate --rpc-url $rpc --from $me "$network" "$classify_sig" "$x0" 2>&1 | grep -v '^\s*$' | head -1)
   echo "Osaka, cast estimate of classify (sample 0): $osaka_estimate"
   osaka_send=$(cast send --rpc-url $rpc --private-key $key --gas-limit 30000000 "$network" "$classify_sig" "$x0" \
     --json 2>&1 | grep -v '^\s*$' | head -1)

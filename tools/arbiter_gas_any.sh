@@ -11,6 +11,9 @@
 # 0 (output 0) instead, under the binding the arbiter was generated with: BINDING=flat or tree,
 # default tree for a model with a convolution (tools/gen_arbiter.py --binding).
 #
+# ANVIL_ARGS, if set, is added to the anvil command line (examples/amm-fee-conv measures an arbiter
+# over the EIP-170 size limit with ANVIL_ARGS=--disable-code-size-limit).
+#
 # The first slash of a run also pays for two storage slots that go from zero to non-zero: the
 # challenger's credit and the contract's `burned` total (17,100 gas more each than a later write).
 # In the sequence above that falls on challengeNeuron1 alone, which is how docs/numbers.md reports
@@ -43,7 +46,7 @@ me=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 bond=1000000000000000000
 window=3600
 rows="$(mktemp)"
-anvil --hardfork osaka --port $port > /dev/null 2>&1 &
+anvil --hardfork osaka $ANVIL_ARGS --port $port > /dev/null 2>&1 &
 anvil_pid=$!
 trap 'kill $anvil_pid 2> /dev/null; rm -f "$rows"' EXIT
 sleep 2

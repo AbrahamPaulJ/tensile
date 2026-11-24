@@ -16,22 +16,26 @@
 #  2. the workspace is regenerated from out/model.json and must come out as committed;
 #  3. `fe test`: the kernel against SAMPLES reference vectors (EVM and native backends), the
 #     generated arbiter's contract tests (word-tree binding), the native classifier;
-#  4. `fe build` and the 24,576-byte limit for every contract;
+#  4. `fe build` and the 24,576-byte limit for every contract but `Network` (which does not fit:
+#     a finding, recorded);
 #  5. a native build of the classifier against the reference on every test sample (classes) and
 #     100 traces (every hidden activation and logit);
 #  6. real transactions on anvil: the arbiter's calls (word-tree binding); the same calls on an
 #     arbiter generated with the flat binding, the alternative the binding was chosen against
-#     (its contract tests run too); the whole forward pass on-chain, which Osaka refuses (over the
+#     (its contract tests run too; it is over the EIP-170 size limit, so its anvil runs with
+#     --disable-code-size-limit); the whole forward pass on-chain (`Network`, deployed on anvil
+#     with the code size limit disabled, since it is over it), which Osaka refuses (over the
 #     per-transaction gas cap) and which is then measured on Prague;
 #  7. RESULTS.md is rewritten from the records in runs/.
 #
 # Ports 18631 to 18633. Set SAMPLES to change the number of reference vectors compiled into the
-# model ingot's tests (the committed sources use 16).
+# model ingot's tests (the committed sources use 4: each sample is 5,888 hidden values, and 16 made
+# a 1.1 MB test module and 270 s of model tests).
 export PATH="$HOME/.fe/bin:$HOME/.foundry/bin:$PATH"
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 cd "$here"
-SAMPLES="${SAMPLES:-16}"
+SAMPLES="${SAMPLES:-4}"
 log="$(mktemp)"
 work="$(mktemp -d)"
 trap 'rm -rf "$log" "$work"' EXIT
@@ -78,8 +82,8 @@ regenerate() {
   cp -r ingots "$work/before"
   cp fe.toml "$work/before.toml"
   bash "$root/tools/gen_workspace.sh" out/model.json out . "$SAMPLES" network | grep -v '^wrote' || return 1
-  if [ "$SAMPLES" != 16 ]; then
-    echo "generated with SAMPLES=$SAMPLES: not compared with the committed sources (16)"
+  if [ "$SAMPLES" != 4 ]; then
+    echo "generated with SAMPLES=$SAMPLES: not compared with the committed sources (4)"
   elif diff -r "$work/before" ingots > /dev/null && cmp -s "$work/before.toml" fe.toml; then
     echo "the regenerated workspace equals the committed one ($(find ingots -name '*.fe' | wc -l) Fe files)"
   else
@@ -112,8 +116,14 @@ build_contracts() {
   echo "built $(ls build/out/*.runtime.bin | wc -l) contracts"
 }
 
+# Every contract must fit EIP-170 except `Network`, the whole forward pass in one contract: that it
+# does not fit is one of this example's findings, recorded in runs/sizes.json and RESULTS.md.
 sizes() {
-  bash "$root/tools/check_size.sh" build/out || return 1
+  bash "$root/tools/check_size.sh" build/out | tee "$work/sizes.txt"
+  if grep '^FAIL' "$work/sizes.txt" | grep -qv ' Network '; then
+    echo "a contract other than Network is over the limit"
+    return 1
+  fi
   python3 - <<'EOF'
 import glob, json, os
 sizes = {os.path.basename(p)[:-len(".runtime.bin")]: len(open(p).read().strip()) // 2
@@ -159,7 +169,7 @@ step "runtime sizes" sizes
 step "native classifier vs reference" native
 step "anvil: arbiter transactions" bash "$root/tools/arbiter_gas_any.sh" build/out out build/tree.json runs/arbiter-gas.json 18631
 step "flat binding: tests and build" flat_workspace
-step "anvil: arbiter, flat binding" env BINDING=flat bash "$root/tools/arbiter_gas_any.sh" "$work/flat/build/out" out "$work/flat/build/tree.json" runs/arbiter-gas-flat.json 18632
+step "anvil: arbiter, flat binding" env BINDING=flat ANVIL_ARGS=--disable-code-size-limit bash "$root/tools/arbiter_gas_any.sh" "$work/flat/build/out" out "$work/flat/build/tree.json" runs/arbiter-gas-flat.json 18632
 step "anvil: whole network on-chain" bash "$root/tools/network_gas.sh" build/out out runs/network-gas.json 18633
 total=$(python3 -c 'import sys, time; print("%.1f" % (time.time() - float(sys.argv[1])))' "$total_start")
 printf 'total\t%s\t%s\t%s\n' "$total" "$(fe --version)" "$SAMPLES" >> "$steps"

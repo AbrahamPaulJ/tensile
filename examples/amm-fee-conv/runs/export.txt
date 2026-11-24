@@ -1,0 +1,9 @@
+52561 ticks, 52560 moves, test split moves 44676 to 52560: 7711 samples of 288 bytes (the first reaches back to move 44532), thresholds [261, 418] (the dense example's)
+test split, 7711 samples: model 4374 correct (56.72%), persistence 3779 (49.01%), majority tier 2802 (36.34%); recall per tier, model ['1776/2758', '1427/2802', '1171/2151'], persistence ['1697/2758', '1155/2802', '927/2151']; the dense 144-32-16-3 model on the same windows 4399
+4d2a2087f1b9f165b0f798d31c6f3b88eb94b227959beaa3703cdedc96191e77      49031 bytes  model.json
+8c6d447188e81a5a471344a2614cc4d41d437dfe4e56e0eb82e2d3af1a69ca36    2220768 bytes  inputs.bin
+093eed0d8d5d89091bcb3be480c9893618b1005ebe0679c7ce50632534dba10b       7711 bytes  labels.bin
+3bc1db9d7e892d4bca73f05cb799d44dd0c24375ee8a89d568e211e8ef20ee77       7711 bytes  past.bin
+cc035f882e2b134c33ceab8d0fa142f91743779e4289b58fc096c5e2cd8e9cd6       7711 bytes  pred.bin
+243c2f5c2daddad034dead2775a706eeedced6fe59f31f712f30f800d64c47f1    1935731 bytes  trace.jsonl
+export time 23.9 s

@@ -1,0 +1,15 @@
+ok	0.7	data set and scores	test split, 7711 samples: model 4374 correct (56.72%), persistence 3779 (49.01%), majority tier 2802 (36.34%); recall per tier, model ['1776/2758', '1427/2802', '1171/2151'], persistence ['1697/2758', '1155/2802', '927/2151']; the dense 144-32-16-3 model on the same windows 4399 (57.05%)
+FAIL	4.8	regenerate the workspace	the regenerated workspace differs from the committed one
+ok	0.3	fe fmt --check	fe fmt --check: clean
+ok	38.6	fe test model (sonatina)	model on sonatina: test result: ok. 8 passed; 0 failed
+ok	21.8	fe test model (native)	model on native: test result: ok. 8 passed; 0 failed
+ok	76.9	fe test arbiter (sonatina)	arbiter on sonatina: test result: ok. 22 passed; 0 failed
+ok	19.2	fe test cli (native)	cli on native: test result: ok. 5 passed; 0 failed
+ok	80.1	fe build (all contracts)	built 3 contracts
+ok	0.3	runtime sizes	largest: Network, 70261 of 24576 bytes
+ok	58.4	native classifier vs reference	diff_native: PASS, zero mismatches
+ok	41.7	anvil: arbiter transactions	arbiter_gas_any: 0 wrong result(s)
+ok	71.8	flat binding: tests and build	flat binding: arbiter tests pass, 27298 bytes of runtime code
+FAIL	44.1	anvil: arbiter, flat binding	arbiter_gas_any: 18 wrong result(s)
+FAIL	25.7	anvil: whole network on-chain	network_gas: 1 wrong result(s)
+total	484.9	fe 26.5.1 (149c758)	4

@@ -1,0 +1,44 @@
+seed 20261124, numpy 2.3.3, 52561 ticks, train 36475, validation 7711 (test not read here)
+  conv1d L 288 C 1 K 8 S 1 -> 281 positions x 16 filters = 4496 values
+  conv1d L 281 C 16 K 4 S 4 -> 70 positions x 16 filters = 1120 values
+  conv1d L 70 C 16 K 4 S 4 -> 17 positions x 16 filters = 272 values
+  dense 272 -> 32
+  dense 32 -> 3
+  11059 parameters
+thresholds (the dense example's, its training split's terciles): [261, 418]
+training labels per tier: [12153, 12190, 12132]; validation labels per tier: [3631, 2545, 1535]
+validation baselines: majority tier of training 2545 of 7711, persistence 4378 of 7711
+[1/3] float training (12 epochs, lr 0.001, the best validation epoch is kept)
+  float epoch  1  train loss 0.9328  val acc 0.5580  val loss 0.8953  23.8 s  (kept)
+  float epoch  2  train loss 0.8550  val acc 0.5676  val loss 0.8758  23.2 s  (kept)
+  float epoch  3  train loss 0.8260  val acc 0.5665  val loss 0.8608  23.4 s
+  float epoch  4  train loss 0.8139  val acc 0.5858  val loss 0.8588  22.4 s  (kept)
+  float epoch  5  train loss 0.8062  val acc 0.5797  val loss 0.8664  22.9 s
+  float epoch  6  train loss 0.7950  val acc 0.5907  val loss 0.8538  23.5 s  (kept)
+  float epoch  7  train loss 0.7855  val acc 0.5888  val loss 0.8542  23.2 s
+  float epoch  8  train loss 0.7794  val acc 0.5800  val loss 0.8561  22.7 s
+  float epoch  9  train loss 0.7731  val acc 0.5800  val loss 0.8585  22.7 s
+  float epoch 10  train loss 0.7691  val acc 0.5877  val loss 0.8584  23.1 s
+  float epoch 11  train loss 0.7663  val acc 0.5872  val loss 0.8611  24.4 s
+  float epoch 12  train loss 0.7652  val acc 0.5873  val loss 0.8608  24.1 s
+  float: epoch 6 kept, val acc 0.5907 (279.5 s)
+[2/3] post-training quantisation, scale search on validation
+    start [7, 6, 8, 4, 8, 4, 8, 4, 8]  val acc 0.5907  val loss 0.8534
+    [7, 6, 9, 4, 8, 4, 8, 4, 8]  val acc 0.5921  val loss 0.8540  (best so far)
+    [7, 6, 9, 6, 8, 4, 8, 4, 8]  val acc 0.5921  val loss 0.8527  (best so far)
+    [7, 6, 9, 6, 9, 4, 8, 4, 8]  val acc 0.5923  val loss 0.8540  (best so far)
+    [7, 6, 9, 6, 9, 6, 8, 4, 8]  val acc 0.5927  val loss 0.8529  (best so far)
+    [7, 6, 8, 6, 9, 6, 8, 4, 8]  val acc 0.5933  val loss 0.8525  (best so far)
+    [7, 6, 8, 7, 9, 6, 8, 4, 8]  val acc 0.5938  val loss 0.8528  (best so far)
+    [7, 6, 8, 7, 9, 4, 8, 4, 8]  val acc 0.5945  val loss 0.8531  (best so far)
+    [7, 6, 8, 7, 9, 4, 9, 4, 8]  val acc 0.5959  val loss 0.8527  (best so far)
+  35 configurations scored
+  chosen [7, 6, 8, 7, 9, 4, 9, 4, 8]: integer val acc 0.5959 (4595 of 7711) (479.3 s)
+[3/3] writing model/amm-fee-conv-288.json
+  layer 1 (conv1d): weight_frac_bits 7, shift 8, acc frac bits 14, out frac bits 6, worst-case |acc| 35632 (int32 max 2147483647)
+  layer 2 (conv1d): weight_frac_bits 8, shift 7, acc frac bits 14, out frac bits 7, worst-case |acc| 222421 (int32 max 2147483647)
+  layer 3 (conv1d): weight_frac_bits 9, shift 12, acc frac bits 16, out frac bits 4, worst-case |acc| 457905 (int32 max 2147483647)
+  layer 4 (dense): weight_frac_bits 9, shift 9, acc frac bits 13, out frac bits 4, worst-case |acc| 615533 (int32 max 2147483647)
+  layer 5 (dense): weight_frac_bits 8, shift None, acc frac bits 12, out frac bits None, worst-case |acc| 90563 (int32 max 2147483647)
+RESULT validation: integer model 4595, float model 4555, persistence 4378, majority 2545, of 7711
+RESULT time: float 279.5 s, ptq 479.3 s, total 771.4 s
