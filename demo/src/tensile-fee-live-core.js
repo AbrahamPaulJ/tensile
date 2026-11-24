@@ -497,13 +497,20 @@ export class Mainnet {
       const part = blocks.slice(i, i + 25);
       const answers = [];
       const hosts = [];
-      for (const node of this.nodes) {
-        if (answers.length >= this.agree) break;
-        try {
-          answers.push(await this.ticksFrom(node, part));
-          hosts.push(new URL(node.urls[0]).host);
-        } catch {
-          // the next node
+      // Public nodes refuse a request now and then: up to three rounds over the nodes that have
+      // not answered yet, with a pause between rounds.
+      for (let round = 0; round < 3 && answers.length < this.agree; round++) {
+        if (round) await new Promise((done) => setTimeout(done, 3000 * round));
+        for (const node of this.nodes) {
+          if (answers.length >= this.agree) break;
+          const host = new URL(node.urls[0]).host;
+          if (hosts.includes(host)) continue;
+          try {
+            answers.push(await this.ticksFrom(node, part));
+            hosts.push(host);
+          } catch {
+            // the next node
+          }
         }
       }
       if (answers.length < this.agree) throw new Error(`fewer than ${this.agree} mainnet nodes answered for blocks ${part[0]}..${part.at(-1)}`);

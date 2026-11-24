@@ -16,7 +16,7 @@ Nothing here is typed by hand. The status page is
   window it finalises the claim and applies it to `FeeOracle`, whose `fee()` then returns the tier's fee.
 - **The watcher** is in the same keeper run (it challenges any false claim it finds, anyone's) and,
   without a key, in `demo/test/tensile-fee-live.mjs` (hourly in the same workflow) and in the status
-  page, which re-reads every relayed tick from mainnet and re-runs every claim in the browser.
+  page, which re-reads the newest 288 relayed ticks (a day) from mainnet and re-runs every claim in the browser.
 
 ## Late, skipped and repeated runs
 
@@ -159,7 +159,7 @@ after the fact, each at its own block, and the watcher checks them like every ot
 
 ```
 bash tools/check_deployed_fee.sh                  # the bytecode at each address is fe build's
-node demo/test/tensile-fee-live.mjs              # every relayed tick against mainnet, every claim re-run
+node demo/test/tensile-fee-live.mjs              # the newest 288 relayed ticks against mainnet (RECHECK=0: all, needs an archive node), every claim re-run
 cast call --rpc-url https://ethereum-sepolia-rpc.publicnode.com 0xdd922018de3ace1185ccb892b0ed911b4249c41d "fee()(uint32)"
 cast call --rpc-url https://ethereum-sepolia-rpc.publicnode.com 0xee5271bbade35b6223f0abc3180de870a716d8bf "latest()(uint256,int32)"
 cast call --rpc-url https://eth.drpc.org --block <that block> 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640 "slot0()(uint160,int24,uint16,uint16,uint16,uint8,bool)"

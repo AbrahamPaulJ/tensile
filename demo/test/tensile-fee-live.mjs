@@ -79,9 +79,13 @@ const moves = movesOf(relayed.map((r) => r.tick));
 if (relayed.length && moves.length !== oracleState.moves) fail(`${moves.length} moves from the relayed ticks, the oracle holds ${oracleState.moves}`);
 console.log(`TickRelay ${config.relay}: ${relayed.length} ticks, mainnet blocks ${relayState.firstBlock} to ${relayState.latestBlock}; FeeOracle ${config.oracle}: ${oracleState.moves} moves, fee ${oracleState.fee}`);
 
-// The relay against mainnet, every tick.
+// The relay against mainnet: the newest RECHECK ticks (288, a day). Public nodes stop serving the
+// state of older blocks, so a run cannot re-read the whole history for ever; every tick was inside
+// this range for a day of hourly runs. RECHECK=0 re-reads all of them (needs an archive node).
 const safe = await mainnet.safeHead();
-const checkable = relayed.filter((r) => r.block <= safe);
+const recheck = Number(env.RECHECK ?? 288);
+const upTo = relayed.filter((r) => r.block <= safe);
+const checkable = recheck > 0 ? upTo.slice(-recheck) : upTo;
 const real = await mainnet.ticksAt(checkable.map((r) => r.block));
 const compared = compareTicks(checkable, real);
 for (const w of compared.wrong) fail(`relayed tick ${w.number} (mainnet block ${w.block}) is ${w.relayed}; mainnet says ${w.mainnet}`);
@@ -112,7 +116,8 @@ for (const claim of sorted) {
     if (status === 2) fail(`claim ${claim.id} is honest and was slashed`);
     if (status === 1 && now < claim.deadline) {
       const answer = await system.ask(system.challengeData(claim.id, claim, null));
-      if (answer.accepted || answer.why.name !== 'NoFraud') fail(`claim ${claim.id} is honest and a challenge was not refused with NoFraud`);
+      // TooLate is the same refusal when the window closed between reading the clock and asking.
+      if (answer.accepted || !['NoFraud', 'TooLate'].includes(answer.why.name)) fail(`claim ${claim.id} is honest and a challenge was not refused with NoFraud`);
       verdict = `honest, ${answer.why?.name ?? 'accepted'} to a challenge`;
     } else if (status === 1) {
       // Past its window and not yet finalised: the keeper's next run finalises it. Hours later
