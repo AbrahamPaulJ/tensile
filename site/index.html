@@ -156,6 +156,12 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   </div>
 </section>
 
+<section id="library">
+  <h2>Also a fixed-point library for Fe</h2>
+  <p>Under the inference sits a library other Fe projects can import: values whose binary scale is part of the type, int8 vectors packed 32 to a word, and overflow bounds the compiler checks. Three contracts are built on it with no neural network in sight: a moving average of a pool's tick, a weighted scorecard and a kinked lending rate curve. A missing shift after a fixed-point multiply does not compile; a curve that would overflow at 100% utilisation fails a <code>static_assert</code>. Against plain-integer twins the types cost no gas.</p>
+  <p><a class="btn" href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/LIBRARY.md">Library guide</a> <a class="btn" href="api/">API reference</a></p>
+</section>
+
 <section id="scale">
   <h2>A dispute is priced by one neuron, not by the network</h2>
   <p>A generator writes the arbiter for any dense network, and for the shipped model its output equals the hand-written contract byte for byte. Three more models went through the whole pipeline, two of them not about digits: <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/amm-fee/README.md">a fee tier for an AMM pool</a>, predicted from a year of the mainnet USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last four hours"), with a contract that rebuilds the model's input from ticks it read itself; and <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/address-risk/README.md">a scam-risk score for Ethereum accounts</a> (89.35% against a baseline of 83.37%). Measured the same way:</p>
