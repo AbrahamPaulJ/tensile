@@ -308,6 +308,17 @@ def write_report(done, header):
         "output are both hidden vectors, takes a hash, a leaf's layer number, a kernel, a range bound or a",
         "vector from the wrong layer and still type-checks.",
         "",
+        "The suite under test is the shipped arbiter's (`evm/test/Arbiter*.t.sol`, `docs/fe-notes.md` M3.9)",
+        "with the sizes taken out: shapes, rows, biases, proofs and reference samples are read from a fixture",
+        "that `tools/gen_arbiter_fixtures_any.py` writes from the example's `out/model.json`, its reference",
+        "trace and its neuron tree, and the calldata is built from signatures derived from the spec. Its",
+        "oracle for what the network computes is `GModel` (`evm/generated/GenBase.sol`): the integer network",
+        "in plain Solidity over the fixture's rows, with the byte loop of `evm/test/SpecNeuron.sol`. It shares",
+        "no code with the Fe kernel, the generated model ingot or the generator, and",
+        "`test_oracle_reproduces_the_reference_samples` checks it against the committed reference trace (the",
+        "fixture writer also checks every sample against its own forward pass in Python). Run it with",
+        "`tools/gen_foundry.sh`; this file with `tools/gen_mutants.py`.",
+        "",
         "Totals: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())) + f" (of {total}); multi-layer only: "
         + ", ".join(f"{v} {k}" for k, v in sorted(multi_counts.items())) + f" (of {sum(multi_counts.values())}).",
     ]

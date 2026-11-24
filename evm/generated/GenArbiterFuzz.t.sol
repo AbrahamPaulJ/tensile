@@ -132,8 +132,8 @@ contract GenArbiterFuzzTest is GenUser {
     /// The fuzzed inputs reach the middle of every hidden layer: over 256 inputs made the way the
     /// fuzz tests make them (one per value of `amp`), every hidden layer shows activations at 0,
     /// strictly between 0 and 127, and (somewhere in the network) at 127, and every class is
-    /// predicted. Otherwise "an honest claim on a random input" would only ever test dead or
-    /// saturated neurons, or one class.
+    /// predicted (at least two of them for more than three classes). Otherwise "an honest claim
+    /// on a random input" would only ever test dead or saturated neurons, or one class.
     function test_fuzzed_inputs_exercise_every_layer() public view {
         uint256[] memory zero = new uint256[](L);
         uint256[] memory mid = new uint256[](L);
@@ -162,9 +162,15 @@ contract GenArbiterFuzzTest is GenUser {
             require(mid[l] >= 64, "a hidden layer is almost never strictly between 0 and 127 on the fuzzed inputs");
         }
         require(top > 0, "no hidden neuron ever saturates on the fuzzed inputs");
+        // Every class, for the practical models (2 and 3 classes). Random pixels do not look like
+        // every digit, so for a larger output layer at least two classes are required: the class
+        // challenge is then not judged on one answer only. Every class is claimed by a fixture
+        // sample in any case (test_oracle_reproduces_the_reference_samples).
+        uint256 distinct = 0;
         for (uint256 k = 0; k < CLASSES; k++) {
-            require(seen[k], "a class is never predicted on the fuzzed inputs");
+            if (seen[k]) distinct++;
         }
+        require(distinct >= (CLASSES <= 3 ? CLASSES : 2), "too few classes are predicted on the fuzzed inputs");
     }
 
     // ----------------------------------------------------------------------------------------
@@ -220,6 +226,34 @@ contract GenArbiterFuzzTest is GenUser {
                 abi.encodeWithSelector(IArbiter.NeuronOutOfRange.selector, jl),
                 "a neuron index past the layer was not NeuronOutOfRange"
             );
+        }
+        assertUntouched(id, BOND);
+    }
+
+    /// Layers: every index from a layer's width up to the widest layer's width (and twice that),
+    /// in every handler, is `NeuronOutOfRange`: the indices a range check borrowed from ANOTHER
+    /// layer would let through (a fuzzed index rarely lands there). The leaf, row and proof sent
+    /// are those of neuron `j % width`, so a missing check would be visible as another error.
+    function test_P2_every_index_just_past_each_layer_is_refused() public {
+        GClaim memory c = Gx.sample(0);
+        uint256 id = post(c, CLAIMANT, BOND);
+        uint256 widest = 0;
+        for (uint256 l = 0; l <= L; l++) {
+            if (OUT[l] > widest) widest = OUT[l];
+        }
+        for (uint256 l = 1; l <= L; l++) {
+            uint256 n = OUT[l];
+            for (uint256 j = n; j <= 2 * widest; j++) {
+                bytes memory data = neuronData(
+                    l, id, j, inputOf(c, l), outputOf(c, l), Gx.row(l, j % n), Gx.bias(l, j % n), Gx.proof(l, j % n)
+                );
+                mustFail(
+                    CHALLENGER,
+                    data,
+                    abi.encodeWithSelector(IArbiter.NeuronOutOfRange.selector, j),
+                    "an index just past the layer was not NeuronOutOfRange"
+                );
+            }
         }
         assertUntouched(id, BOND);
     }
