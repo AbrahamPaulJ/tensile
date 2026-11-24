@@ -138,7 +138,7 @@ let price: Q<8> = Q::from_raw(51200)          // 200.0
 let whole: Q<0> = price.shifted<8>()           // 200
 ```
 
-`Q` has no `+`, `*` or `<` of its own (see section 4 for why, and for `qmath`).
+`Q` also has `+`, `-`, `*`, `==` and `<` as operators, with the same scale rules (section 4).
 
 ### `Packed<N>`: N int8 values, 32 per word
 
@@ -152,15 +152,13 @@ value, where an `[i8; N]` constant costs 32. `Copy`, `Eq`.
 | `Packed::from_words(words: [u256; word_count(N)])` | wraps words already packed; fails if a padding byte is not zero |
 | `Packed::padded_with_zeros(words) -> bool` | the same check as a value, to revert with your own error |
 | `p.get(i) -> i8` | value `i` |
+| `p.words() -> [u256; word_count(N)]` | the packed words, the form a message or a storage slot carries |
 | `word_count(n) -> usize` | `ceil(n / 32)` |
 
 ```fe
 const TAPS: Packed<5> = Packed::pack([1, -1, 127, -128, 0])   // one word in the code
 ```
 
-There is no public way to read a `Packed`'s words back (`Row::words` and `Activations::words`
-exist); see the recommended additions in the report that came with this guide, and use `Row` or
-`Activations` when the words have to leave the value.
 
 ### `Activations<N, F>`: N values in 0..127 at scale F
 
@@ -269,10 +267,16 @@ use qmath::{add, mul, sub}
 let next: Q<8> = add(average, mul(sub(tick, average.shifted<8>()), ALPHA))
 ```
 
-They are free functions and not `+` and `*` because only the ingot that defines `Q` may implement
+The kernel itself also implements the operators for `Q`: `a + b` and `a - b` at one scale,
+`a * b` with `Q<FA> * Q<FB>` giving `Q<{ FA + FB }>`, `==` and the comparisons at one scale, all
+checked. They live in the kernel because only the ingot that defines `Q` may implement
 `core::ops::Add` for it: from another ingot, Fe 26.5.1 and 26.7.0 both say
-`error[5-0000]: external trait cannot be implemented for external type`. Moving them into the
-kernel as operator impls is one of the additions recommended with this guide.
+`error[5-0000]: external trait cannot be implemented for external type`. The example contracts were
+written before the operators were added and use the `qmath` functions; both forms obey the same rules.
+
+```fe
+let p: Q<10> = Q<4>::from_raw(24) * Q<6>::from_raw(-144)   // scales add
+```
 
 All arithmetic on `Q` is ordinary checked `i32` arithmetic: an overflow reverts (on the EVM) or
 traps. The `static_assert`s of section 5 are how you show that it cannot happen.

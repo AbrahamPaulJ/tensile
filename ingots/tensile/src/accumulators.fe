@@ -1,6 +1,6 @@
 //! Int32 values at a typed scale: biases, accumulators and logits.
 use core::marker::Copy
-use core::ops::Eq
+use core::ops::{Add, Eq, Mul, Ord, Sub}
 use ingot::activations::Activations
 use ingot::packed::Packed
 
@@ -179,4 +179,68 @@ fn equality_compares_every_value() {
     assert!(
         ACC != Accumulators::from_raw([-1, 127, 128, 16255, 16385]),
     )
+}
+
+/// `a + b`, at the same scale. Checked: an overflow fails.
+impl<const F: usize> Add for Q<F> {
+    fn add(own self, _ other: own Self) -> Self {
+        Q::from_raw(self.raw + other.raw)
+    }
+}
+
+/// `a - b`, at the same scale. Checked: an overflow fails.
+impl<const F: usize> Sub for Q<F> {
+    fn sub(own self, _ other: own Self) -> Self {
+        Q::from_raw(self.raw - other.raw)
+    }
+}
+
+/// `a * b`: the scales add, `Q<FA> * Q<FB>` is `Q<{ FA + FB }>`. Checked.
+impl<const FA: usize, const FB: usize> Mul<Q<FB>> for Q<FA> {
+    type Output = Q<{ FA + FB }>
+
+    fn mul(own self, _ other: own Q<FB>) -> Q<{ FA + FB }> {
+        Q::from_raw(self.raw * other.raw)
+    }
+}
+
+impl<const F: usize> Eq for Q<F> {
+    const fn eq(self, _ other: Self) -> bool {
+        self.raw == other.raw
+    }
+
+    const fn ne(self, _ other: Self) -> bool {
+        self.raw != other.raw
+    }
+}
+
+impl<const F: usize> Ord for Q<F> {
+    fn lt(self, _ other: Self) -> bool {
+        self.raw < other.raw
+    }
+
+    fn le(self, _ other: Self) -> bool {
+        self.raw <= other.raw
+    }
+
+    fn gt(self, _ other: Self) -> bool {
+        self.raw > other.raw
+    }
+
+    fn ge(self, _ other: Self) -> bool {
+        self.raw >= other.raw
+    }
+}
+
+#[test]
+fn q_operators_follow_the_scale_rules() {
+    let a = Q<4>::from_raw(24)
+    let b = Q<6>::from_raw(-144)
+    let p: Q<10> = a * b
+    assert!(p.raw() == -3456)
+    let a8 = Q<8>::from_raw(300)
+    let b8 = Q<8>::from_raw(-45)
+    assert!(a8 + b8 == Q<8>::from_raw(255))
+    assert!(a8 - b8 == Q<8>::from_raw(345))
+    assert!(b8 < a8 && a8 >= a8)
 }

@@ -36,6 +36,11 @@ ticks it observes, a false claim is slashed by re-running one neuron, and a clai
 another window is refused, which is why the consumer checks the input hash. Four models from 1,042 to 109,386 parameters show
 [where a dispute pays and where it does not](#use-it-with-your-own-network).
 
+**Convolutions too.** A [1D convolutional fee model](#convolutions-a-model-that-cannot-run-in-one-transaction-still-disputed-in-one)
+whose whole run needs 17,966,815 gas, more than one transaction may use, still has any of its values
+disputed for at most 126,032 gas, because a challenge re-runs one filter on one window opened from a
+word-level Merkle tree.
+
 **Not only neural networks.** [Tree ensembles](#tree-ensembles-the-same-dispute-for-the-models-people-use-on-tabular-data),
 the models people actually use for tabular risk scores, get the same one-transaction dispute: a false
 answer is slashed by re-walking one tree on-chain. On the scam-risk data a 300-tree forest beats the dense
@@ -52,7 +57,7 @@ it running a price average, a scorecard and a lending rate curve
 | Command | Needs | What it shows | Time |
 |---|---|---|---|
 | open [the live demo](https://abrahampaulj.github.io/tensile/demo/) | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
-| `fe test` | Fe 26.5.1 | 72 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
+| `fe test` | Fe 26.5.1 | 77 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
 | `node wasm/diff.mjs` | Node 20+ | the committed WebAssembly module against the NumPy reference: 10,000 images, 0 mismatches | 4 s |
 | `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 13 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message, and one correct control that must | 17 s |
 
@@ -264,6 +269,42 @@ is the claim, with the sum of the layer widths (1.11x here), and a dispute is ne
 about 66,000 gas however small the neuron. The largest model's whole run is already 49% of the
 per-transaction gas cap; its dispute is not.
 
+## Convolutions: a model that cannot run in one transaction, still disputed in one
+
+`ingots/tensile/src/conv.fe` adds 1D convolution in the same typed style. A filter is a `Row<K*C, FW>`,
+one output is the dense `neuron` applied to a window of the packed input, and the output length is a
+const generic tied to the shape by a `where` clause, so a result declared with the wrong length does not
+compile. The overflow proof is the dense one over the filter rows.
+
+A dispute re-runs one filter at one position. To do that without the challenger resending a whole layer,
+each vector in a conv claim is committed as a Merkle tree over its 32-byte words, built by the contract
+itself from words it has range-checked; a challenge opens only the few input words the window covers and
+the one output word (`docs/spec-dispute.md` section 11, with the soundness argument). The flat design was
+built and measured too: its filter challenges cost up to 208,130 gas against 107,674, and its arbiter is
+27,394 bytes, over the contract size limit, so it cannot be deployed.
+
+[`examples/amm-fee-conv`](examples/amm-fee-conv/README.md) is the fee-tier task with a convolutional front
+end over 48 hours of ticks (three conv layers, then dense 272-32-3; 11,059 parameters):
+
+| | Conv model | Dense 144-32-16-3 |
+|---|---|---|
+| Correct on the 7,711 held-out windows | 4,374 (56.72%) | 4,399 (57.05%) |
+| Whole forward pass on-chain, gas | 17,966,815 | 466,408 |
+| `claim`, gas | 617,131 | 239,460 |
+| Honest path (`claim` + `finalize`), gas | 672,404 | 290,511 |
+| Honest path against one whole run | 3.7% | 62.3% |
+| Dearest dispute (first slash), gas | 126,032 | 116,791 |
+
+The whole run needs 1.07 times the 16,777,216 gas one Osaka transaction may use, and anvil with the cap
+enforced refuses it (the figure is measured under Prague's rules); the generated `Network` is also 70,261
+bytes, too large to deploy as one contract. So this model cannot be run on-chain at all as it stands, and
+every value in it can still be disputed for 62,940 to 126,032 gas. What it costs: the claim is 2.6 times
+the dense one, because the contract builds the word trees. And the conv model is not better: 25 windows
+worse than the dense one, within noise. It is here as the demonstration of the mechanism, not as a better
+fee policy. Not covered by the fuzz and mutation runs; its evidence is 22 generated contract tests, the
+anvil runs, and 0 mismatches between the native build and the NumPy reference on 7,711 samples and
+592,400 traced values. No padding, no pooling, no 2D.
+
 ## Tree ensembles: the same dispute for the models people use on tabular data
 
 `ingots/trees` is a second kernel on the same types, for gradient-boosted trees and random forests:
@@ -335,7 +376,7 @@ curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | b
 fe --version          # fe 26.5.1 (149c758)
 sha256sum "$(command -v fe)"   # 2d48fd56e45f56a775bea73a3180ffcab73ad440887d0a985be2050fb5993916 (Linux x86-64)
 fe fmt --check ingots
-fe test               # 72 tests on the EVM backend, about 25 s
+fe test               # 77 tests on the EVM backend, about 25 s
 fe build              # the contracts, into ./out
 ```
 
@@ -371,7 +412,7 @@ contracts build and pass their tests on 26.7.0 from the same source as on 26.5.1
 ```sh
 curl -fsSL -o ~/fe-267/fe --create-dirs https://github.com/argotorg/fe/releases/download/v26.7.0/fe_linux_amd64 && chmod +x ~/fe-267/fe
 sha256sum ~/fe-267/fe          # 4ef2b818e260f0ba0b0af4bd78468dda589dc4949503fffaef25d8188e5107d5
-bash tools/check_fe267.sh      # fe check and fe test of tensile, model, dispute, onchain: 62 tests, 49 s
+bash tools/check_fe267.sh      # fe check and fe test of tensile, model, dispute, onchain: 67 tests, 49 s
 bash tools/build_wasm.sh       # the WebAssembly module, 70 s
 ```
 
@@ -427,7 +468,9 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
 - **It proves a computation, not a good model.** The arbiter says a claim matches the committed integer
   network, nothing about whether the network is right about the digit: it is wrong on 2.56% of the test
   set, and hand-drawn digits are harder still.
-- **Dense networks and tree ensembles only.** No convolution. Layer sizes are compile-time, so each model gets its own
+- **Dense networks, 1D convolutions and tree ensembles only.** No padding, pooling or 2D convolution.
+  A convolution's claim carries every hidden vector and builds a word tree of each on-chain, so a longer
+  sequence makes the claim grow, not the dispute. Layer sizes are compile-time, so each model gets its own
   generated arbiter. Layer 1's weights do not fit one contract, so `Network` reads them from others. One
   overflow proof can visit about 150,000 weights, which bounds a single layer. The native auditor and the
   WebAssembly module are built for the shipped model; the other models' off-chain side is their native

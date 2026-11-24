@@ -62,6 +62,11 @@ impl<const N: usize> Packed<N> {
         Self { words }
     }
 
+    /// The packed words, the form a contract message or storage slot carries.
+    pub const fn words(self) -> [u256; word_count(N)] {
+        self.words
+    }
+
     /// Value `i`.
     pub const fn get(self, _ i: usize) -> i8 {
         assert!(i < N)
