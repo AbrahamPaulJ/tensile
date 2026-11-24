@@ -223,7 +223,7 @@ class Shape:
         if not self.tree:
             return "keccak_words(%s)" % name
         n = self.packed_words(name)
-        return "word_root<%d, %d>(%s)" % (n, word_width(n), name)
+        return "word_root<%d>(%s)" % (n, name)
 
 
 # ------------------------------------------------------------------ arbiter.fe
@@ -1756,19 +1756,24 @@ pub fn word_parent(_ a: u256, _ b: u256) -> u256 {
     }
 }
 
-/// The root of the tree of `N` words, `WIDTH` the least power of two that is
-/// at least `N`.
-pub fn word_root<const N: usize, const WIDTH: usize>(_ words: [u256; N]) -> u256 {
-    var level: [u256; WIDTH] = [0; WIDTH]
+/// The root of the tree of `N` words. Each level is computed in place over
+/// its first `count` nodes only: a node past them is a zero padding node, so
+/// the last node of an odd level is paired with zero, and after
+/// `log2(WIDTH)` levels one node is left. No array of `WIDTH` nodes is built:
+/// with one, the root of 141 words cost 8 kB of contract code (Fe 26.5.1).
+pub fn word_root<const N: usize>(_ words: [u256; N]) -> u256 {
+    var level: [u256; N] = words
     for i in 0 .. N {
-        level[i] = word_leaf(i, words[i])
+        level[i] = word_leaf(i, level[i])
     }
-    var count = WIDTH
+    var count = N
     while count > 1 {
-        for k in 0 .. count / 2 {
-            level[k] = word_parent(level[2 * k], level[2 * k + 1])
+        let half = (count + 1) / 2
+        for k in 0 .. half {
+            let right: u256 = if 2 * k + 1 < count { level[2 * k + 1] } else { 0 }
+            level[k] = word_parent(level[2 * k], right)
         }
-        count = count / 2
+        count = half
     }
     level[0]
 }

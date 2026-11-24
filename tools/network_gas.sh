@@ -13,6 +13,12 @@
 # repeated on a fresh anvil at Prague, which has no per-transaction cap, with a block gas limit of
 # 1,000,000,000: the gas of the forward pass measured where it can run.
 #
+# If the `Network` is larger than a contract may be (EIP-170: 24,576 bytes of runtime code; the
+# generated network of a model with a convolution keeps every weight in its own code), every anvil
+# above is started with --disable-code-size-limit, the Network is deployed through a raw
+# eth_sendTransaction (its init code is too long to pass to `cast` as an argument), and the record
+# says so ("network_over_size_limit"). A dense network never takes this path.
+#
 # usage: network_gas.sh <fe-out-dir> <ref-dir> [record.json] [port] [samples]
 #   <fe-out-dir>  a directory with Network.bin and Rows0.bin, Rows1.bin, ... from `fe build`
 #                 (or RowsLow.bin and RowsHigh.bin: the hand-written network of ingots/onchain;
@@ -37,10 +43,21 @@ anvil_pid=""
 trap 'kill $anvil_pid 2> /dev/null' EXIT
 failures=0
 
+# A Network over the EIP-170 limit cannot be deployed on a real chain; it is measured on an anvil
+# without the limit.
+size_limit=24576
+runtime_bytes=$(( $(tr -d '\n' < "$out/Network.runtime.bin" | wc -c) / 2 ))
+init_bytes=$(( $(tr -d '\n' < "$out/Network.bin" | wc -c) / 2 ))
+oversize=""
+if [ "$runtime_bytes" -gt $size_limit ]; then
+  oversize="--disable-code-size-limit"
+  echo "Network: $runtime_bytes bytes of runtime code, over the $size_limit-byte limit of EIP-170 ($init_bytes bytes of init code); measured on anvil with $oversize"
+fi
+
 # start_chain <hardfork> [anvil arguments...]: a fresh anvil on the port.
 start_chain() {
   [ -n "$anvil_pid" ] && kill $anvil_pid 2> /dev/null && wait $anvil_pid 2> /dev/null
-  anvil --hardfork "$@" --port $port > /dev/null 2>&1 &
+  anvil --hardfork "$@" $oversize --port $port > /dev/null 2>&1 &
   anvil_pid=$!
   sleep 2
 }
@@ -48,6 +65,22 @@ start_chain() {
 deploy() {
   cast send --rpc-url $rpc --private-key $key --create "$1" --json \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["contractAddress"])'
+}
+# deploy_raw <init-code-file> <constructor-args-hex>: the same as deploy, through a raw JSON-RPC
+# request read from a file, for init code longer than an argument may be.
+deploy_raw() {
+  local body hash
+  body="$(mktemp)"
+  python3 -c '
+import json, sys
+code = open(sys.argv[1]).read().strip() + sys.argv[2]
+print(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_sendTransaction",
+                  "params": [{"from": sys.argv[3], "data": "0x" + code, "gas": hex(30000000)}]}))
+' "$1" "$2" "$me" > "$body"
+  hash=$(curl -s -H 'content-type: application/json' --data @"$body" $rpc \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["result"])')
+  rm -f "$body"
+  cast receipt --rpc-url $rpc "$hash" --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["contractAddress"])'
 }
 size_of() {
   echo $(( ($(cast code --rpc-url $rpc "$1" | wc -c) - 3) / 2 ))
@@ -77,7 +110,11 @@ deploy_all() {
   if [ ${#holders[@]} -gt 0 ]; then
     ctor=$(cast abi-encode "constructor($(IFS=,; echo "${types[*]}"))" "${holders[@]}")
   fi
-  network=$(deploy "0x$(cat "$out/Network.bin")${ctor#0x}")
+  if [ -n "$oversize" ]; then
+    network=$(deploy_raw "$out/Network.bin" "${ctor#0x}")
+  else
+    network=$(deploy "0x$(cat "$out/Network.bin")${ctor#0x}")
+  fi
   network_size=$(size_of "$network")
   echo "Network at $network ($network_size bytes deployed), ${#holders[@]} weight contracts ($sizes bytes)"
 }
@@ -173,19 +210,23 @@ else
 fi
 echo "network_gas: $failures wrong result(s)"
 if [ -n "$record" ] && [ $failures -eq 0 ]; then
-  python3 - "$record" "$ref/model.json" "$estimate" "$used" "$execution" "$bytes" "$network_size" "$samples" "$(fe --version)" "$chain" "$osaka_estimate" "$osaka_send" $sizes <<'EOF'
+  python3 - "$record" "$ref/model.json" "$estimate" "$used" "$execution" "$bytes" "$network_size" "$samples" "$(fe --version)" "$chain" "$osaka_estimate" "$osaka_send" "$oversize" "$runtime_bytes" "$init_bytes" $sizes <<'EOF'
 import json, sys
 record_path, model_path, estimate, used, execution, size, network_size, samples, fe_version = sys.argv[1:10]
-chain, osaka_estimate, osaka_send = sys.argv[10:13]
+chain, osaka_estimate, osaka_send, oversize, runtime_bytes, init_bytes = sys.argv[10:16]
 model = json.load(open(model_path, encoding="utf-8"))
 record = {"model": model["name"], "fe": fe_version, "chain": chain, "sample": 0,
           "classify": {"estimate": int(estimate), "gas_used": int(used), "execution": int(execution),
                        "calldata_bytes": int(size)},
           "classify_samples_checked": int(samples),
           "network_deployed_bytes": int(network_size),
-          "weight_contract_bytes": [int(v) for v in sys.argv[13:]]}
+          "weight_contract_bytes": [int(v) for v in sys.argv[16:]]}
 if osaka_estimate:
     record["osaka"] = {"tx_gas_cap": 16777216, "estimate": osaka_estimate, "send_30m_gas_limit": osaka_send}
+if oversize:
+    record["network_over_size_limit"] = {"eip170_runtime_limit": 24576, "runtime_bytes": int(runtime_bytes),
+                                         "eip3860_initcode_limit": 49152, "init_code_bytes": int(init_bytes),
+                                         "anvil": oversize}
 with open(record_path, "w", encoding="utf-8", newline="\n") as f:
     json.dump(record, f, indent=1)
     f.write("\n")
