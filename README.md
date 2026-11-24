@@ -2,10 +2,13 @@
 
 [![CI](https://github.com/AbrahamPaulJ/tensile/actions/workflows/ci.yml/badge.svg)](https://github.com/AbrahamPaulJ/tensile/actions/workflows/ci.yml)
 
-**Pitch:** One integer neural-network kernel, written once in Fe with shapes and fixed-point scales in
-its types, runs natively and in WebAssembly to classify, and on the EVM to settle a dispute: a false
-answer posted on-chain is proven false by re-running a single neuron, at 9.4% of the gas of running the
-whole network. An honest answer, claimed and finalised with no dispute, costs 15.6%.
+**Pitch:** A contract that needs a model's answer (a fee tier, a risk score) cannot afford to compute
+it on-chain. Tensile is one integer inference kernel, written once in Fe with shapes and fixed-point
+scales in its types, that runs natively and in WebAssembly to compute the answer and on the EVM to settle
+a dispute: a false answer posted on-chain is proven false in one transaction by re-running a single
+neuron, at 9.4% of the gas of running the whole network. An honest answer, claimed and finalised with no
+dispute, costs 15.6%. It is [running on Sepolia](https://abrahampaulj.github.io/tensile/fee-live/), setting
+a pool's fee tier from the mainnet USDC/WETH pool's ticks.
 
 [![A false claim is slashed: the contract proves the neuron's weights against the model's Merkle root and re-runs that one neuron](docs/img/dispute.gif)](https://abrahampaulj.github.io/tensile/demo/)
 
@@ -33,6 +36,7 @@ file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo
 | Command | Needs | What it shows | Time |
 |---|---|---|---|
 | open [the live demo](https://abrahampaulj.github.io/tensile/demo/) | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
+| open [the fee tier on Sepolia](https://abrahampaulj.github.io/tensile/fee-live/) | a browser | a model's answers posted hourly on real pool data, each re-run in your browser, one false claim slashed | 1 min |
 | `fe test` | Fe 26.5.1 or 26.7.0 | 67 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
 | `node wasm/diff.mjs` | Node 20+ | the committed WebAssembly module against the NumPy reference: 10,000 images, 0 mismatches | 4 s |
 | `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 13 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message, and one correct control that must | 17 s |
