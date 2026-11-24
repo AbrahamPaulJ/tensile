@@ -1,0 +1,10 @@
+// expect: const requirement is not satisfied
+// expect: sum_fits_i32
+// 40,000 values of 16 bits and a base within 2^30 could overflow an int32 score: the sum is
+// only defined for at most 32,768 trees.
+use tensile::Accumulators
+use trees::{Base, Outputs}
+
+pub fn scores(outputs: Outputs<40000, 8>, base: Base<2, 8>) -> Accumulators<2, 8> {
+    outputs.scores(base)
+}

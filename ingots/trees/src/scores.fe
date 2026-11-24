@@ -21,11 +21,7 @@ pub const fn sum_fits_i32(_ trees: usize) -> bool {
 /// score of class 1 (one margin; the score of class 0 is its base alone);
 /// with more, tree `t` adds to class `t % classes`.
 pub const fn target(_ t: usize, classes: usize) -> usize {
-    if classes == 2 {
-        1
-    } else {
-        t % classes
-    }
+    if classes == 2 { 1 } else { t % classes }
 }
 
 /// The base scores of a forest: one int32 per class with `LF` fractional
@@ -110,7 +106,10 @@ impl<const TREES: usize, const LF: usize> Outputs<TREES, LF> {
     /// arithmetic is unchecked; a claim's outputs are added with this same
     /// function, whatever values it states.
     #[arithmetic(unchecked)]
-    pub const fn scores<const CLASSES: usize>(self, _ base: Base<CLASSES, LF>) -> Accumulators<CLASSES, LF>
+    pub const fn scores<const CLASSES: usize>(self, _ base: Base<CLASSES, LF>) -> Accumulators<
+        CLASSES,
+        LF,
+    >
     where sum_fits_i32(TREES)
     {
         var raw: [i32; CLASSES] = [0; CLASSES]
@@ -154,7 +153,8 @@ static_assert(sum_fits_i32(32768))
 static_assert(!sum_fits_i32(32769))
 static_assert(target(5, classes: 2) == 1)
 static_assert(target(5, classes: 3) == 2)
-static_assert(THREE.words()[0] == 0xffff012c7fff0000000000000000000000000000000000000000000000000000)
+static_assert(THREE.words()[0]
+    == 0xffff012c7fff0000000000000000000000000000000000000000000000000000)
 static_assert(THREE.get(0).raw() == -1 && THREE.get(2).raw() == 32767)
 static_assert(Outputs<3, 8>::well_formed(THREE.words()))
 static_assert(!Outputs<3, 8>::well_formed([THREE.words()[0] | 1]))

@@ -21,7 +21,7 @@
 //!
 //! Like `tensile`, the ingot is pure: no `std`, no EVM, no host. A dispute
 //! re-runs one `Tree::eval`, the function a whole forest runs once per tree.
-pub use forest::Forest
+pub use forest::{Forest, score_bound}
 pub use lanes::{lane_words, signed}
 pub use probe::{TreeProbe, Unobserved}
 pub use scores::{BASE_LIMIT, Base, Outputs, sum_fits_i32, target}

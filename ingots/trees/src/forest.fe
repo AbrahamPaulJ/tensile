@@ -2,7 +2,7 @@
 use core::num::UnsignedAbs
 use ingot::probe::TreeProbe
 use ingot::scores::{Base, Outputs, sum_fits_i32, target}
-use ingot::tree::{Tree, leaf_count}
+use ingot::tree::Tree
 use tensile::{Accumulators, Activations}
 
 /// A tree ensemble (`docs/spec-trees.md` sections 2 to 4): `TREES` complete
@@ -22,18 +22,15 @@ pub struct Forest<
     const IN: usize,
     const CLASSES: usize,
     const LF: usize,
-> {
-    pub(ingot) trees: [Tree<DEPTH, IN, LF>; TREES],
-    pub(ingot) base: Base<CLASSES, LF>,
-}
+> { pub(ingot) trees: [Tree<DEPTH, IN, LF>; TREES], pub(ingot) base: Base<CLASSES, LF> }
 
-impl<const TREES: usize, const DEPTH: usize, const IN: usize, const CLASSES: usize, const LF: usize> Forest<
-    TREES,
-    DEPTH,
-    IN,
-    CLASSES,
-    LF,
-> {
+impl<
+    const TREES: usize,
+    const DEPTH: usize,
+    const IN: usize,
+    const CLASSES: usize,
+    const LF: usize,
+> Forest<TREES, DEPTH, IN, CLASSES, LF> {
     /// A forest from its trees, in order, and its base scores. Fails unless
     /// there are 2 to 255 classes and at least one tree.
     pub const fn new(_ trees: own [Tree<DEPTH, IN, LF>; TREES], base: Base<CLASSES, LF>) -> Self {
@@ -91,31 +88,46 @@ impl<const TREES: usize, const DEPTH: usize, const IN: usize, const CLASSES: usi
     /// can overflow; this is the model's actual range, which the generated
     /// model ingot compares with the value its model file records.
     pub const fn worst_case(self) -> u256 {
-        var worst: u256 = 0
-        var c: usize = 0
-        while c < CLASSES {
-            var bound: u256 = self.base.at(c).raw().unsigned_abs() as u256
-            var t: usize = 0
-            while t < TREES {
-                if target(t, classes: CLASSES) == c {
-                    var largest: u256 = 0
-                    var k: usize = 0
-                    while k < leaf_count(DEPTH) {
-                        let size = self.trees[t].leaf(k).raw().unsigned_abs() as u256
-                        if size > largest {
-                            largest = size
-                        }
-                        k += 1
-                    }
-                    bound += largest
-                }
-                t += 1
-            }
-            if bound > worst {
-                worst = bound
-            }
-            c += 1
+        var largest: [u256; TREES] = [0; TREES]
+        var t: usize = 0
+        while t < TREES {
+            largest[t] = self.trees[t].largest_leaf()
+            t += 1
         }
-        worst
+        score_bound(self.base, largest)
     }
+}
+
+/// The largest absolute class score of a forest whose tree `t` has largest
+/// absolute leaf `largest[t]`: for each class, `|base|` plus the largest
+/// leaves of the trees that add to it; the largest over the classes. A large
+/// forest's generated model ingot checks each tree's `largest_leaf` in a
+/// constant of its own and this sum in another, because one evaluation of
+/// `worst_case` over every leaf of hundreds of trees exceeds the compiler's
+/// budget of steps for one constant.
+pub const fn score_bound<const TREES: usize, const CLASSES: usize, const LF: usize>(
+    _ base: Base<CLASSES, LF>,
+    _ largest: [u256; TREES],
+) -> u256 {
+    var bounds: [u256; CLASSES] = [0; CLASSES]
+    var c: usize = 0
+    while c < CLASSES {
+        bounds[c] = base.at(c).raw().unsigned_abs() as u256
+        c += 1
+    }
+    var t: usize = 0
+    while t < TREES {
+        let k = target(t, classes: CLASSES)
+        bounds[k] = bounds[k] + largest[t]
+        t += 1
+    }
+    var worst: u256 = 0
+    c = 0
+    while c < CLASSES {
+        if bounds[c] > worst {
+            worst = bounds[c]
+        }
+        c += 1
+    }
+    worst
 }
