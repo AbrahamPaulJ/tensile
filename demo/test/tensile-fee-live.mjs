@@ -13,11 +13,12 @@
 //     planted must be found false at the value that was changed;
 //   - `Network.classify` (the whole network as EVM bytecode on Sepolia) agrees with this run on
 //     the newest claims, and the fee the oracle reports follows from its last applied claim;
-//   - the relay is no more than LAG_LIMIT mainnet blocks behind mainnet's safe head (the keeper is
+//   - the relay is no more than LAG_LIMIT mainnet blocks behind mainnet's safe head, and no honest
+//     claim waits more than FINALIZE_LIMIT seconds past its window to be finalised (the keeper is
 //     alive).
 // usage: node demo/test/tensile-fee-live.mjs
 //   env: SEPOLIA_RPC, MAINNET_RPC (comma-separated), RECORD_FILE (deploy/sepolia-fee.jsonl),
-//        LAG_LIMIT (900 blocks, three hours), MAINNET_FILE + MAINNET_HEAD (tests: a ticks.csv as
+//        LAG_LIMIT (900 blocks, three hours), FINALIZE_LIMIT (10800 s), MAINNET_FILE + MAINNET_HEAD (tests: a ticks.csv as
 //        mainnet), CHAIN_ID (11155111)
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +44,7 @@ const model = JSON.parse(readFileSync(at('../../examples/amm-fee/out/model.json'
 const dataset = readFileSync(at('../../examples/amm-fee/data/ticks.csv'), 'utf8').trim().split('\n').map(Number);
 const DATASET_FIRST = 23850000;
 const lagLimit = Number(env.LAG_LIMIT ?? 900);
+const finalizeLimit = Number(env.FINALIZE_LIMIT ?? 10800);
 
 let failures = 0;
 const fail = (text) => {
@@ -108,10 +110,16 @@ for (const claim of sorted) {
   let verdict;
   if (finding === null) {
     if (status === 2) fail(`claim ${claim.id} is honest and was slashed`);
-    if (status === 1) {
+    if (status === 1 && now < claim.deadline) {
       const answer = await system.ask(system.challengeData(claim.id, claim, null));
       if (answer.accepted || answer.why.name !== 'NoFraud') fail(`claim ${claim.id} is honest and a challenge was not refused with NoFraud`);
       verdict = `honest, ${answer.why?.name ?? 'accepted'} to a challenge`;
+    } else if (status === 1) {
+      // Past its window and not yet finalised: the keeper's next run finalises it. Hours later
+      // means the keeper is not running.
+      const waiting = now - claim.deadline;
+      if (waiting > finalizeLimit) fail(`claim ${claim.id} is honest and has waited ${waiting} s past its window without being finalised (limit ${finalizeLimit} s): the keeper is not running`);
+      verdict = `honest, window closed ${waiting} s ago, waiting for finalize`;
     } else verdict = 'honest';
   } else if (status === 3) {
     fail(`claim ${claim.id} is false (${describeFinding(finding)}) and became final`);
