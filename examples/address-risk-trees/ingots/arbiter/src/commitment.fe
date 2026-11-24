@@ -1,0 +1,123 @@
+//! The leaves of the model commitment (`docs/spec-trees.md` section 7).
+//!
+//! `tree_leaf(t) = keccak256("tensile.tree.v0" || u256(t) || tree words)`, and
+//! the header leaf `keccak256("tensile.forest.v0" || u256(in) || u256(depth)
+//! || u256(classes) || u256(leaf_frac_bits) || u256(trees) || i256(base) ..)`.
+//! The arbiter rebuilds a tree's leaf from the words a challenger sends and
+//! verifies it against the committed root with `std::evm::merkle::verify`, so
+//! only a committed tree can be used in a challenge, and only as itself.
+//! `tools/trees_ref.py` is the off-chain twin of these functions.
+use core::num::IntWord
+use core::ptr::{self, MemSlice}
+use model::{BASE, commitment, tree}
+use std::evm::{merkle, packed}
+
+/// The domain tag at the start of every tree leaf.
+pub const TREE_TAG: String<15> = "tensile.tree.v0"
+
+/// The domain tag of the header leaf.
+pub const HEADER_TAG: String<17> = "tensile.forest.v0"
+
+/// The leaf of tree `tree` with the packed words `words`.
+pub fn tree_leaf<const N: usize>(tree: u256, words: [u256; N]) -> u256 {
+    var preimage = packed::Packed::with_capacity(bytes: 15 + 32 + 32 * N)
+    preimage.string(TREE_TAG)
+    preimage.u256(tree)
+    for word in words {
+        preimage.u256(word)
+    }
+    preimage.keccak256()
+}
+
+/// The header leaf of this model: its sizes, its leaf scale and its base
+/// scores, from the model ingot. The root commits to it, so an arbiter
+/// compiled with other base scores than the committed ones fails the tests.
+pub fn header_leaf() -> u256 {
+    var preimage = packed::Packed::with_capacity(bytes: 17 + 32 * (5 + 2))
+    preimage.string(HEADER_TAG)
+    preimage.u256(14)
+    preimage.u256(6)
+    preimage.u256(2)
+    preimage.u256(14)
+    preimage.u256(300)
+    for c in 0 .. 2 {
+        preimage.u256(BASE.at(c).raw().to_word())
+    }
+    preimage.keccak256()
+}
+
+/// A proof given as an array, in the form `merkle::verify` reads.
+fn nodes<const N: usize>(_ proof: [u256; N]) -> ref MemSlice<u256> {
+    var array = unsafe {
+        ptr::alloc_array<u256>(N)
+    }
+    for i in 0 .. N {
+        array[i] = proof[i]
+    }
+    array.as_slice()
+}
+
+#[test]
+fn leaves_equal_the_generator() {
+    assert!(
+        tree_leaf(tree: 0, words: tree(0).words()) == commitment::TREE_LEAF_0,
+    )
+    assert!(
+        tree_leaf(tree: 299, words: tree(299).words()) == commitment::TREE_LEAF_LAST,
+    )
+    assert!(header_leaf() == commitment::HEADER_LEAF)
+}
+
+#[test]
+fn proofs_verify_against_the_root() {
+    let root = commitment::MODEL_ROOT
+    assert!(
+        merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_0),
+            root,
+            leaf: tree_leaf(tree: 0, words: tree(0).words()),
+        ),
+    )
+    assert!(
+        merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_LAST),
+            root,
+            leaf: tree_leaf(tree: 299, words: tree(299).words()),
+        ),
+    )
+    assert!(
+        merkle::verify(
+            proof: nodes(commitment::HEADER_PROOF),
+            root,
+            leaf: header_leaf(),
+        ),
+    )
+}
+
+#[test]
+fn a_tree_does_not_verify_as_another() {
+    let root = commitment::MODEL_ROOT
+    // Tree 0 presented as tree 1, and tree 1's words at position 0.
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_0),
+            root,
+            leaf: tree_leaf(tree: 1, words: tree(0).words()),
+        ),
+    )
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_0),
+            root,
+            leaf: tree_leaf(tree: 0, words: tree(1).words()),
+        ),
+    )
+    // The right leaf with the proof of another tree.
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_LAST),
+            root,
+            leaf: tree_leaf(tree: 0, words: tree(0).words()),
+        ),
+    )
+}

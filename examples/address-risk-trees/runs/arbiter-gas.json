@@ -1,0 +1,81 @@
+{
+ "model": "address-risk-trees-300x6",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "sample": 0,
+ "arbiter_runtime_bytes": 6683,
+ "calls": [
+  {
+   "call": "claim",
+   "signature": "claim(uint256[1],uint256[19],uint8)",
+   "estimate": 204576,
+   "gas_used": 204576,
+   "execution": 174848,
+   "calldata_bytes": 676
+  },
+  {
+   "call": "challengeTree (tree 5, proof 9)",
+   "signature": "challengeTree(uint256,uint256,uint256[1],uint256[19],uint256[8],bytes32[])",
+   "estimate": 118880,
+   "gas_used": 118880,
+   "execution": 80292,
+   "calldata_bytes": 1316
+  },
+  {
+   "call": "challengeTree (tree 299, proof 6)",
+   "signature": "challengeTree(uint256,uint256,uint256[1],uint256[19],uint256[8],bytes32[])",
+   "estimate": 82372,
+   "gas_used": 82372,
+   "execution": 45596,
+   "calldata_bytes": 1220
+  },
+  {
+   "call": "challengeClass",
+   "signature": "challengeClass(uint256,uint256[19])",
+   "estimate": 68437,
+   "gas_used": 68437,
+   "execution": 38993,
+   "calldata_bytes": 644
+  },
+  {
+   "call": "later challengeTree (tree 5, proof 9)",
+   "signature": "challengeTree(uint256,uint256,uint256[1],uint256[19],uint256[8],bytes32[])",
+   "estimate": 84680,
+   "gas_used": 84680,
+   "execution": 46092,
+   "calldata_bytes": 1316
+  },
+  {
+   "call": "later challengeTree (tree 299, proof 6)",
+   "signature": "challengeTree(uint256,uint256,uint256[1],uint256[19],uint256[8],bytes32[])",
+   "estimate": 82372,
+   "gas_used": 82372,
+   "execution": 45596,
+   "calldata_bytes": 1220
+  },
+  {
+   "call": "later challengeClass",
+   "signature": "challengeClass(uint256,uint256[19])",
+   "estimate": 68437,
+   "gas_used": 68437,
+   "execution": 38993,
+   "calldata_bytes": 644
+  },
+  {
+   "call": "finalize",
+   "signature": "finalize(uint256)",
+   "estimate": 46711,
+   "gas_used": 46711,
+   "execution": 25519,
+   "calldata_bytes": 36
+  },
+  {
+   "call": "withdraw (7 credits)",
+   "signature": "withdraw()",
+   "estimate": 35620,
+   "gas_used": 29951,
+   "execution": 8887,
+   "calldata_bytes": 4
+  }
+ ]
+}

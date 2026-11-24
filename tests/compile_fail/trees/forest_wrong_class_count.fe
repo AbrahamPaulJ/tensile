@@ -1,0 +1,9 @@
+// expect: type mismatch
+// expect: expected `Accumulators<3, 8>`, but `Accumulators<2, 8>` is given
+// A two-class forest gives two scores, not three.
+use tensile::{Accumulators, Activations}
+use trees::Forest
+
+pub fn scores(forest: Forest<10, 4, 14, 2, 8>, x: Activations<14, 7>) -> Accumulators<3, 8> {
+    forest.scores(x)
+}

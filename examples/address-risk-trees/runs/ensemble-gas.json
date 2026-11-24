@@ -1,0 +1,30 @@
+{
+ "model": "address-risk-trees-300x6",
+ "fe": "fe 26.5.1 (149c758)",
+ "chain": "anvil, Osaka",
+ "classify": [
+  {
+   "sample": 0,
+   "estimate": 1301202,
+   "gas_used": 1301202,
+   "execution": 1279842,
+   "calldata_bytes": 36
+  },
+  {
+   "sample": 6,
+   "estimate": 1296863,
+   "gas_used": 1296863,
+   "execution": 1275503,
+   "calldata_bytes": 36
+  }
+ ],
+ "classify_samples_checked": 20,
+ "ensemble_deployed_bytes": 3902,
+ "holder_bytes": [
+  17693,
+  17693,
+  17693,
+  17693,
+  12450
+ ]
+}

@@ -1,0 +1,4 @@
+reference: 7054 samples of 14 bytes, 1000 traced, 300 trees
+classes: 7054 samples, 0 mismatches, 16.79 s
+trace: 1000 samples (303000 values), 0 mismatching samples, 1.85 s
+diff_native_trees: PASS, zero mismatches

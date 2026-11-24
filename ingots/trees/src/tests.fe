@@ -1,0 +1,224 @@
+//! Unit tests of the kernel against plain loops over unpacked arrays, on both
+//! backends: trees of depth 1 to 8, forests of two and three classes, the
+//! probe, and the extremes of the overflow bound.
+use ingot::forest::Forest
+use ingot::probe::TreeProbe
+use ingot::scores::{BASE_LIMIT, Base, Outputs, target}
+use ingot::tree::{Tree, leaf_count, node_count}
+use tensile::{Accumulators, Activations, Q}
+
+/// `N` bytes: `(start + i * step) % modulus`.
+fn bytes<const N: usize>(start: usize, step: usize, modulus: usize) -> [u8; N] {
+    var out: [u8; N] = [0; N]
+    for i in 0 .. N {
+        out[i] = ((start + i * step) % modulus).downcast_truncate()
+    }
+    out
+}
+
+/// `N` signed 16-bit values spread over the whole range.
+fn values<const N: usize>(start: usize) -> [i32; N] {
+    var out: [i32; N] = [0; N]
+    for i in 0 .. N {
+        let v: i32 = ((start + i * 4099) % 65536).downcast_truncate()
+        out[i] = v - 32768
+    }
+    out
+}
+
+/// `N` activations in 0..127.
+fn input<const N: usize>(start: usize) -> [i8; N] {
+    var out: [i8; N] = [0; N]
+    for i in 0 .. N {
+        out[i] = ((start + i * 37) % 128).downcast_truncate()
+    }
+    out
+}
+
+/// The walk as the spec states it, over plain arrays.
+fn plain_leaf<const DEPTH: usize, const IN: usize>(
+    features: [u8; node_count(DEPTH)],
+    thresholds: [u8; node_count(DEPTH)],
+    x: [i8; IN],
+) -> usize {
+    var i: usize = 0
+    for _ in 0 .. DEPTH {
+        let f = features[i] as usize
+        if (x[f] as i32) <= thresholds[i] as i32 {
+            i = 2 * i + 1
+        } else {
+            i = 2 * i + 2
+        }
+    }
+    i - node_count(DEPTH)
+}
+
+/// Builds a tree of depth `DEPTH` from sequences and compares `leaf_index`
+/// and `eval` with the plain walk on `inputs` different inputs.
+fn tree_equals_plain_walk<const DEPTH: usize>(seed: usize) -> bool {
+    let features: [u8; node_count(DEPTH)] = bytes(start: seed, step: 7, modulus: 20)
+    let thresholds: [u8; node_count(DEPTH)] = bytes(start: seed * 3, step: 41, modulus: 256)
+    let leaves: [i32; leaf_count(DEPTH)] = values(start: seed)
+    let tree = Tree<DEPTH, 20, 9>::build(features, thresholds, values: leaves)
+    var ok = true
+    for s in 0 .. 40 {
+        let raw: [i8; 20] = input(start: s * 13 + seed)
+        let x = Activations<20, 7>::pack(raw)
+        let want = plain_leaf<DEPTH, 20>(features, thresholds, x: raw)
+        if tree.leaf_index(x) != want || tree.eval(x).raw() != leaves[want] {
+            ok = false
+        }
+    }
+    ok
+}
+
+#[test]
+fn trees_of_every_depth_walk_as_the_spec_says() {
+    assert!(tree_equals_plain_walk<1>(seed: 3))
+    assert!(tree_equals_plain_walk<2>(seed: 5))
+    assert!(tree_equals_plain_walk<3>(seed: 11))
+    assert!(tree_equals_plain_walk<4>(seed: 1))
+    assert!(tree_equals_plain_walk<5>(seed: 2))
+    assert!(tree_equals_plain_walk<6>(seed: 17))
+    assert!(tree_equals_plain_walk<8>(seed: 29))
+}
+
+#[test]
+fn a_tree_keeps_its_nodes_and_leaves() {
+    let features: [u8; 31] = bytes(start: 4, step: 3, modulus: 14)
+    let thresholds: [u8; 31] = bytes(start: 200, step: 77, modulus: 256)
+    let leaves: [i32; 32] = values(start: 9)
+    let tree = Tree<5, 14, 10>::build(features, thresholds, values: leaves)
+    for i in 0 .. 31 {
+        assert!(tree.feature(i) == features[i] as usize)
+        assert!(tree.threshold(i) == thresholds[i] as i32)
+    }
+    for k in 0 .. 32 {
+        assert!(tree.leaf(k).raw() == leaves[k])
+    }
+    assert!(Tree<5, 14, 10>::from_words(tree.words()) == tree)
+}
+
+#[test]
+fn malformed_tree_words_are_refused() {
+    let tree = Tree<4, 3, 6>::build(
+        features: bytes(start: 0, step: 1, modulus: 3),
+        thresholds: bytes(start: 9, step: 9, modulus: 128),
+        values: values(start: 1),
+    )
+    let good = tree.words()
+    assert!(Tree<4, 3, 6>::well_formed(good))
+    // Feature 3 of three in node 0.
+    var feature = good
+    feature[0] = feature[0] | (0x03 << 248)
+    assert!(!Tree<4, 3, 6>::well_formed(feature))
+    // The unused 16th lane of the node word.
+    var padding = good
+    padding[0] = padding[0] | 1
+    assert!(!Tree<4, 3, 6>::well_formed(padding))
+    // A leaf word has no unused lane at depth 4: every value is a leaf.
+    var leaf = good
+    leaf[1] = leaf[1] ^ 1
+    assert!(Tree<4, 3, 6>::well_formed(leaf))
+}
+
+/// Four trees of depth 3 over 6 features.
+fn four_trees() -> [Tree<3, 6, 8>; 4] {
+    var out: [Tree<3, 6, 8>; 4] = [
+        Tree::build(features: [0; 7], thresholds: [0; 7], values: [0; 8]),
+        Tree::build(features: [0; 7], thresholds: [0; 7], values: [0; 8]),
+        Tree::build(features: [0; 7], thresholds: [0; 7], values: [0; 8]),
+        Tree::build(features: [0; 7], thresholds: [0; 7], values: [0; 8]),
+    ]
+    for t in 0 .. 4 {
+        out[t] = Tree::build(
+            features: bytes(start: t, step: 5, modulus: 6),
+            thresholds: bytes(start: 30 * t, step: 19, modulus: 128),
+            values: values(start: 100 * t),
+        )
+    }
+    out
+}
+
+#[test]
+fn two_classes_add_every_tree_to_class_1() {
+    let trees = four_trees()
+    let forest = Forest<4, 3, 6, 2, 8>::new(trees, base: Base::from_raw([0, -1234]))
+    for s in 0 .. 20 {
+        let x = Activations<6, 7>::pack(input(start: s * 5))
+        var margin: i32 = -1234
+        for t in 0 .. 4 {
+            margin += trees[t].eval(x).raw()
+        }
+        let scores = forest.scores(x)
+        assert!(scores == Accumulators::from_raw([0, margin]))
+        // The lowest index wins a tie: class 1 only for a margin above 0.
+        assert!(scores.argmax() == if margin > 0 { 1 } else { 0 })
+    }
+}
+
+#[test]
+fn three_classes_add_tree_t_to_class_t_mod_3() {
+    let trees = four_trees()
+    let forest = Forest<4, 3, 6, 3, 8>::new(trees, base: Base::from_raw([5, -6, 7]))
+    for s in 0 .. 20 {
+        let x = Activations<6, 7>::pack(input(start: s * 3 + 1))
+        var raw: [i32; 3] = [5, -6, 7]
+        for t in 0 .. 4 {
+            raw[target(t, classes: 3)] += trees[t].eval(x).raw()
+        }
+        assert!(forest.scores(x) == Accumulators::from_raw(raw))
+        assert!(forest.outputs(x).get(3).raw() == trees[3].eval(x).raw())
+    }
+}
+
+#[test]
+fn the_sum_reaches_both_ends_of_the_bound_without_overflow() {
+    // 32,768 trees is the most the bound allows; four of them at the
+    // extremes, with the base at its limit, exercise the same arithmetic.
+    let low = Outputs<4, 0>::pack([-32768, -32768, -32768, -32768])
+    let high = Outputs<4, 0>::pack([32767, 32767, 32767, 32767])
+    let base = Base<2, 0>::from_raw([0, -BASE_LIMIT])
+    assert!(low.scores(base).at(1).raw() == -BASE_LIMIT - 4 * 32768)
+    let top = Base<2, 0>::from_raw([0, BASE_LIMIT])
+    assert!(high.scores(top).at(1).raw() == BASE_LIMIT + 4 * 32767)
+}
+
+/// A probe that checks it is shown each tree once, in order, with the value
+/// `eval` gives.
+struct Recorder { seen: usize, sum: i32 }
+
+impl TreeProbe for Recorder {
+    fn reached<const LF: usize>(mut self, tree: usize, leaf: usize, _ value: Q<LF>) {
+        assert!(tree == self.seen)
+        self.seen += 1
+        self.sum += value.raw()
+    }
+}
+
+#[test]
+fn the_probe_sees_every_tree_in_order() {
+    let trees = four_trees()
+    let forest = Forest<4, 3, 6, 2, 8>::new(trees, base: Base::from_raw([0, 0]))
+    let x = Activations<6, 7>::pack(input(start: 77))
+    var recorder = Recorder { seen: 0, sum: 0 }
+    let outputs = with (TreeProbe = recorder) {
+        forest.walk(x)
+    }
+    assert!(recorder.seen == 4)
+    assert!(outputs == forest.outputs(x))
+    assert!(recorder.sum == forest.scores(x).at(1).raw())
+}
+
+#[test]
+fn worst_case_is_the_base_plus_the_largest_leaves() {
+    let a = Tree<1, 2, 0>::build(features: [0], thresholds: [5], values: [-7, 3])
+    let b = Tree<1, 2, 0>::build(features: [1], thresholds: [9], values: [2, -1])
+    let forest = Forest<2, 1, 2, 2, 0>::new([a, b], base: Base::from_raw([100, -10]))
+    // Class 0 is its base alone (100); class 1 is 10 + 7 + 2.
+    assert!(forest.worst_case() == 100)
+    let three = Forest<2, 1, 2, 3, 0>::new([a, b], base: Base::from_raw([1, 1, 1]))
+    // Tree 0 adds to class 0, tree 1 to class 1.
+    assert!(three.worst_case() == 8)
+    assert!(node_count(1) == 1 && leaf_count(1) == 2)
+}

@@ -1,0 +1,14 @@
+// expect-success
+// The harness check: a forest of two trees of depth 2 over 4 features, two classes, run on an
+// input and added up, with nothing wrong. If this stops compiling, the other cases fail for a
+// reason of their own and prove nothing.
+use tensile::{Accumulators, Activations}
+use trees::{Base, Forest, Tree}
+
+const T0: Tree<2, 4, 8> = Tree::build(features: [0, 1, 2], thresholds: [10, 20, 30], values: [1, 2, 3, 4])
+const T1: Tree<2, 4, 8> = Tree::build(features: [3, 3, 3], thresholds: [5, 6, 7], values: [-1, -2, -3, -4])
+const FOREST: Forest<2, 2, 4, 2, 8> = Forest::new([T0, T1], base: Base::from_raw([0, -3]))
+
+pub fn scores(x: Activations<4, 7>) -> Accumulators<2, 8> {
+    FOREST.scores(x)
+}

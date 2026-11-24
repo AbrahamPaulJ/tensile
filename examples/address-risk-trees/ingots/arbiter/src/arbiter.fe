@@ -1,0 +1,373 @@
+//! `Arbiter`: optimistic verification of tree-ensemble inference claims
+//! (`docs/spec-trees.md` sections 7 to 9).
+//!
+//! Anyone posts a claimed inference with a bond: the input, the output of
+//! every tree and the class. Anyone can prove it wrong before the deadline in
+//! one transaction, by re-walking one tree on-chain with `Tree::eval`, the
+//! function the off-chain forest runs once per tree (the tree's words proven
+//! against the model root), or by re-adding the committed outputs. The
+//! lifecycle rule is `dispute::step` and the bond is shared out by
+//! `dispute::shares`, as in the dense arbiter: all of it back on finalising;
+//! on a slash, half to the challenger and the rest burned. Credits are pulled
+//! with `withdraw`, the only handler that sends ETH (`mut call`).
+use core::result::Result
+use dispute::{Action, Payee, Rejection, Status, Transition, shares, step}
+use ingot::commitment::tree_leaf
+use ingot::record::{Record, dynamic}
+use ingot::signals::{
+    BondTooSmall,
+    ClaimNotOpen,
+    ClassOutOfRange,
+    ClassSlashed,
+    Claimed,
+    Finalized,
+    InputMismatch,
+    MalformedInput,
+    MalformedOutputs,
+    NoFraud,
+    NotCommitted,
+    NotFinal,
+    NothingToWithdraw,
+    OutputMismatch,
+    TooEarly,
+    TooLate,
+    TransferFailed,
+    TreeOutOfRange,
+    TreeSlashed,
+    UnknownClaim,
+    Withdrawn,
+}
+use model::{BASE, Input, ModelTree, Outputs}
+use std::abi::{Bytes32, DynArray}
+use std::evm::{
+    Address,
+    Call,
+    Ctx,
+    Duration,
+    Log,
+    StorageMap,
+    Timestamp,
+    Wei,
+    keccak_words,
+    merkle,
+    wei,
+}
+
+/// Number of trees.
+const TREES: u256 = 300
+
+/// Number of classes.
+const CLASSES: u8 = 2
+
+/// The arbiter's interface. The input and the tree outputs are packed words
+/// (`docs/spec.md` section 7, `docs/spec-trees.md` section 6), a tree is its
+/// 8 packed words, a proof is `bytes32[]` (siblings from the leaf up, as
+/// OpenZeppelin's `MerkleProof`).
+pub msg ArbiterMsg {
+    /// Posts a claim with at least `bond()` attached: for input `x0`, tree `t`
+    /// outputs lane `t` of `outputs`, and the class is `class`. Returns the
+    /// claim number.
+    #[selector = sol("claim(uint256[1],uint256[19],uint8)")]
+    Claim { x0: [u256; 1], outputs: [u256; 19], class: u8 } -> u256,
+    /// Proves claim `id` wrong at tree `t`: `x0` and `outputs` must be the
+    /// committed vectors, `tree` and `proof` the committed tree `t`. Reverts
+    /// unless the tree, walked on `x0`, ends at another value than the claim's.
+    #[selector = sol(
+        "challengeTree(uint256,uint256,uint256[1],uint256[19],uint256[8],bytes32[])",
+    )]
+    ChallengeTree {
+        id: u256,
+        t: u256,
+        x0: [u256; 1],
+        outputs: [u256; 19],
+        tree: [u256; 8],
+        proof: DynArray<Bytes32>,
+    },
+    /// Proves claim `id` wrong at the class: the committed outputs, added to
+    /// the base scores, give another class (highest score, lowest index on a
+    /// tie).
+    #[selector = sol("challengeClass(uint256,uint256[19])")]
+    ChallengeClass { id: u256, outputs: [u256; 19] },
+    /// Closes claim `id` at or after its deadline and credits the whole bond
+    /// back to the claimant.
+    #[selector = sol("finalize(uint256)")]
+    Finalize { id: u256 },
+    /// Sends the caller's credits to the caller. Returns the amount.
+    #[selector = sol("withdraw()")]
+    Withdraw -> Wei,
+    /// The class of a `Final` claim. Reverts for any other claim.
+    #[selector = sol("result(uint256)")]
+    ResultOf { id: u256 } -> u8,
+    /// Number of claims posted so far; claims are numbered from 0.
+    #[selector = sol("claimCount()")]
+    ClaimCount -> u256,
+    /// Claimant, bond, deadline, class and status code (1 open, 2 slashed,
+    /// 3 final) of claim `id`.
+    #[selector = sol("claimInfo(uint256)")]
+    ClaimInfo { id: u256 } -> (Address, Wei, Timestamp, u8, u8),
+    /// The committed hashes of claim `id`: input words, output words.
+    #[selector = sol("claimHashes(uint256)")]
+    ClaimHashes { id: u256 } -> (u256, u256),
+    /// What `account` can withdraw.
+    #[selector = sol("creditOf(address)")]
+    CreditOf { account: Address } -> Wei,
+    /// The model root the arbiter was deployed with.
+    #[selector = sol("modelRoot()")]
+    ModelRoot -> u256,
+    /// The bond a claim must attach.
+    #[selector = sol("bond()")]
+    Bond -> Wei,
+    /// The total burned by slashes: half of every slashed bond, rounded up.
+    /// It stays in the contract and nobody can withdraw it.
+    #[selector = sol("burned()")]
+    Burned -> Wei,
+    /// How long a claim stays challengeable.
+    #[selector = sol("window()")]
+    Window -> Duration,
+}
+
+/// The arbiter for one forest: deployed with the model root, the bond and the
+/// challenge window. Each handler names the effects it needs: only `Withdraw`
+/// can move ETH (`mut call`); the views touch nothing but storage.
+pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    root: u256,
+    bond: Wei,
+    window: Duration,
+    mut count: u256,
+    mut claims: StorageMap<u256, Record>,
+    mut credits: StorageMap<Address, Wei>,
+    mut burned: Wei,
+
+    init(model_root: u256, bond_required: Wei, challenge_window: Duration)
+    uses (mut root, mut bond, mut window)
+    {
+        root = model_root
+        bond = bond_required
+        window = challenge_window
+    }
+
+    recv ArbiterMsg {
+        #[payable]
+        Claim { x0, outputs, class } -> u256 uses (
+            ctx,
+            bond,
+            window,
+            mut count,
+            mut claims,
+            mut log,
+        ) {
+            let paid = ctx.value()
+            if paid < bond {
+                revert_error(BondTooSmall { sent: paid, required: bond })
+            }
+            if !Input::well_formed(x0) {
+                revert_error(MalformedInput {})
+            }
+            if !Outputs::well_formed(outputs) {
+                revert_error(MalformedOutputs {})
+            }
+            if class >= CLASSES {
+                revert_error(ClassOutOfRange { class })
+            }
+            let id = count
+            count = id + 1
+            let claimant = ctx.caller()
+            let deadline = ctx.timestamp() + window
+            claims[id] = Record {
+                claimant,
+                class,
+                status: Status::Open.code(),
+                bond: paid,
+                deadline,
+                x0_hash: keccak_words(x0),
+                outputs_hash: keccak_words(outputs),
+            }
+            log.emit(
+                Claimed {
+                    id,
+                    claimant,
+                    x0: dynamic(x0),
+                    outputs: dynamic(outputs),
+                    class,
+                    bond: paid,
+                    deadline,
+                },
+            )
+            id
+        }
+
+        ChallengeTree { id, t, x0, outputs, tree, proof }
+        uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
+        {
+            // Two `u256` effects are in scope here (`root` and `count`), so the one
+            // `load` reads is named.
+            let record = with (u256 = count) {
+                load(id)
+            }
+            if t >= TREES {
+                revert_error(TreeOutOfRange { tree: t })
+            }
+            if keccak_words(x0) != record.x0_hash {
+                revert_error(InputMismatch {})
+            }
+            if keccak_words(outputs) != record.outputs_hash {
+                revert_error(OutputMismatch {})
+            }
+            if !merkle::verify(proof, root, leaf: tree_leaf(tree: t, words: tree)) {
+                revert_error(NotCommitted {})
+            }
+            let recomputed = ModelTree::from_words(tree).eval(Input::from_words(x0))
+            // `t < TREES` was checked above, so narrowing it loses nothing.
+            let claimed = Outputs::from_words(outputs).get(t.downcast_truncate())
+            let challenger = ctx.caller()
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Challenge(recomputed.raw() != claimed.raw()),
+                challenger,
+            )
+            log.emit(TreeSlashed { id, challenger, tree: t })
+        }
+
+        ChallengeClass { id, outputs } uses (
+            ctx,
+            count,
+            mut claims,
+            mut credits,
+            mut burned,
+            mut log,
+        ) {
+            let record = load(id)
+            if keccak_words(outputs) != record.outputs_hash {
+                revert_error(OutputMismatch {})
+            }
+            let fraud = Outputs::from_words(outputs).scores(BASE).argmax() != record.class as usize
+            let challenger = ctx.caller()
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Challenge(fraud),
+                challenger,
+            )
+            log.emit(ClassSlashed { id, challenger })
+        }
+
+        Finalize { id } uses (ctx, count, mut claims, mut credits, mut burned, mut log) {
+            let record = load(id)
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Finalize,
+                challenger: ctx.caller(),
+            )
+            log.emit(Finalized { id, class: record.class })
+        }
+
+        Withdraw -> Wei uses (ctx, mut call, mut credits, mut log) {
+            let account = ctx.caller()
+            let amount = credits[account]
+            if amount == Wei::zero() {
+                revert_error(NothingToWithdraw {})
+            }
+            // State first, then the transfer; a failed transfer reverts both.
+            credits[account] = Wei::zero()
+            if !call.send_value(addr: account, gas: ctx.gas(), value: amount).success() {
+                revert_error(TransferFailed {})
+            }
+            log.emit(Withdrawn { account, amount })
+            amount
+        }
+
+        ResultOf { id } -> u8 uses (count, claims) {
+            let record = load(id)
+            if record.status != Status::Final.code() {
+                revert_error(NotFinal { id })
+            }
+            record.class
+        }
+
+        ClaimCount -> u256 uses (count) {
+            count
+        }
+
+        ClaimInfo { id } -> (Address, Wei, Timestamp, u8, u8)
+        uses (count, claims)
+        {
+            let record = load(id)
+            (record.claimant, record.bond, record.deadline, record.class, record.status)
+        }
+
+        ClaimHashes { id } -> (u256, u256) uses (count, claims) {
+            let record = load(id)
+            (record.x0_hash, record.outputs_hash)
+        }
+
+        CreditOf { account } -> Wei uses (credits) {
+            credits[account]
+        }
+
+        ModelRoot -> u256 uses (root) {
+            root
+        }
+
+        Bond -> Wei uses (bond) {
+            bond
+        }
+
+        Burned -> Wei uses (burned) {
+            burned
+        }
+
+        Window -> Duration uses (window) {
+            window
+        }
+    }
+}
+
+/// Claim `id`, or `UnknownClaim`.
+fn load(_ id: u256) -> Record
+uses (count: u256, claims: StorageMap<u256, Record>)
+{
+    if id >= count {
+        revert_error(UnknownClaim { id })
+    }
+    claims[id]
+}
+
+/// Applies the lifecycle rule to claim `id`: stores the new status, credits
+/// the payee its share of the bond and adds the rest to `burned`, or reverts
+/// with the rule's reason. `challenger` is the caller; it is paid only when
+/// the rule says so. `burned` grows only on a slash; finalising burns nothing.
+fn settle(_ id: u256, _ record: Record, now: Timestamp, action: Action, challenger: Address)
+uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei>, burned: mut Wei)
+{
+    let claim = dispute::Claim {
+        status: Status::from_code(record.status),
+        deadline: record.deadline.as_seconds(),
+    }
+    match step(claim, now: now.as_seconds(), action) {
+        Result::Err(why) => {
+            match why {
+                Rejection::NotOpen => revert_error(ClaimNotOpen { id }),
+                Rejection::TooLate => revert_error(TooLate { deadline: record.deadline }),
+                Rejection::TooEarly => revert_error(TooEarly { deadline: record.deadline }),
+                Rejection::NoFraud => revert_error(NoFraud {}),
+            }
+        },
+        Result::Ok(transition) => {
+            claims[id].status = transition.status.code()
+            let payee = match transition.bond_to {
+                Payee::Challenger => challenger,
+                Payee::Claimant => record.claimant,
+            }
+            let (paid, burnt) = shares(record.bond.as_wei(), transition)
+            credits[payee] = credits[payee] + wei(paid)
+            if burnt != 0 {
+                burned = burned + wei(burnt)
+            }
+        },
+    }
+}

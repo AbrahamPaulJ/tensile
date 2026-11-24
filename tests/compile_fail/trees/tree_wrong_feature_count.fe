@@ -1,0 +1,9 @@
+// expect: type mismatch
+// expect: expected `Activations<4, _>`, but `Activations<5, 7>` is given
+// A tree built for 4 features cannot walk an input of 5.
+use tensile::{Activations, Q}
+use trees::Tree
+
+pub fn walk(tree: Tree<2, 4, 8>, x: Activations<5, 7>) -> Q<8> {
+    tree.eval(x)
+}

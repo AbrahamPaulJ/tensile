@@ -120,3 +120,31 @@ jobs:
           examples/amm-fee/runs/network-gas.json
           examples/amm-fee/runs/oracle-gas.json
           examples/amm-fee/runs/sizes.json
+
+  address-risk-trees:
+    name: Address risk as a forest of 300 trees (tree-ensemble kernel, arbiter, RiskGate), the whole check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: fe --version
+      # All of check.sh, from the committed model and vectors: no data set, no NumPy, no
+      # scikit-learn; the reference it runs again is pure Python. It also tests ingots/trees on
+      # both backends and runs its compile-fail cases.
+      - run: bash examples/address-risk-trees/check.sh
+      - name: The generated sources and the recorded gas and sizes are what this run produced
+        run: >
+          git diff --exit-code --
+          examples/address-risk-trees/ingots
+          examples/address-risk-trees/fe.toml
+          examples/address-risk-trees/runs/arbiter-gas.json
+          examples/address-risk-trees/runs/ensemble-gas.json
+          examples/address-risk-trees/runs/gate-gas.json
+          examples/address-risk-trees/runs/sizes.json
