@@ -234,6 +234,16 @@ the shipped model, they show where a dispute pays and where it does not:
 | Dearest dispute (first slash), gas | 101,727 | 116,791 | 178,662 | 185,003 |
 | Dearest dispute against one whole run | 65.7% | 25.0% | 9.4% | 2.3% |
 
+The three-layer arbiters the generator writes are tested as hard as the hand-written one. They pass the
+same Foundry fuzz and invariant suite, 50 tests each, with tests added for what only a multi-layer arbiter
+can get wrong: the middle layer checked against another layer's hash or leaf, a lie carried forward that
+must be slashed only where it starts (`tools/gen_foundry.sh`, a CI job). The oracle is the network written
+again in plain Solidity, sharing no code with the Fe kernel or the generator. A mutation run of 81 faults
+planted in the generated fee-tier arbiter, 31 of them faults only a multi-layer arbiter can have, ends with
+78 killed by tests, 2 refused by the compiler and 1 survivor, which reads a value through another type of
+the same layout and is argued equivalent
+([`docs/mutation-results-generated.md`](docs/mutation-results-generated.md)).
+
 **Small models should simply be called; the dispute pays from a few thousand parameters up.** At 1,042
 parameters the whole network runs on-chain for 154,748 gas, less than a claim, so the generated `Network`
 contract is the right tool and the arbiter is not. At 5,219 a claim is cheaper than a run, but only just
@@ -419,8 +429,9 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   one seed, beats a weak baseline, and nothing here measures whether such a fee earns liquidity providers
   anything; no Uniswap v4 hook is built. The risk model's features come from a published data set, and
   `RiskGate` does not check that the 14 bytes belong to the account. Each example's README lists its
-  limits. Only the shipped digit model is on Sepolia, in the browser demo and under the fuzz and mutation
-  runs.
+  limits. The generated arbiters of amm-fee and address-risk are under the full fuzz and invariant runs,
+  and amm-fee's is under a mutation run as well; the larger digit model's arbiter is fuzzed only at reduced
+  counts, and the tree arbiter not at all.
 - **Not audited, and on a testnet only.** The contracts are on Sepolia (`docs/sepolia.md`), with test ETH,
   and nowhere else. Sepolia already runs the next fork, which charges more for new storage, so its
   receipts are higher than the figures here, which are measured under mainnet's current rules. The
