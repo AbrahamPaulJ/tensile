@@ -80,3 +80,26 @@ static_assert(!tail_is_zero(
     1,
 ))
 static_assert(tail_is_zero(0xffff, 16))
+// `lane_sum` at its edges: nothing, every lane -1, -32768 and 32767, and a
+// mix (-1, 300, 32767 and thirteen zeros) against adding lane by lane.
+static_assert(lane_sum(0) == 0)
+static_assert(lane_sum(LANE_ONES * 0xffff) == -16)
+static_assert(lane_sum(LANE_ONES * 0x8000) == -524288)
+static_assert(lane_sum(LANE_ONES * 0x7fff) == 524272)
+static_assert(lane_sum(MIXED) == 33066)
+static_assert(lane_sum(MIXED) == by_lanes(MIXED))
+static_assert(lane_sum(LANE_ONES * 0x8001 + 5) == by_lanes(LANE_ONES * 0x8001 + 5))
+
+/// Three lanes, -1, 300 and 32767, then zeros.
+const MIXED: u256 = 0xffff012c7fff0000000000000000000000000000000000000000000000000000
+
+/// The sum of a word's 16 lanes, one at a time: what `lane_sum` must equal.
+const fn by_lanes(_ word: u256) -> i32 {
+    var total: i32 = 0
+    var i: usize = 0
+    while i < 16 {
+        total = total + signed(lane_of(word, i))
+        i += 1
+    }
+    total
+}

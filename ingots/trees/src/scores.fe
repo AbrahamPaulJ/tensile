@@ -2,7 +2,16 @@
 use core::marker::Copy
 use core::num::IntWord
 use core::ops::Eq
-use ingot::lanes::{I16_MAX, I16_MIN, lane_of, lane_shift, lane_words, signed, tail_is_zero}
+use ingot::lanes::{
+    I16_MAX,
+    I16_MIN,
+    lane_of,
+    lane_shift,
+    lane_sum,
+    lane_words,
+    signed,
+    tail_is_zero,
+}
 use tensile::{Accumulators, Q}
 
 /// The largest absolute base score: `2^30 - 1`.
@@ -105,6 +114,11 @@ impl<const TREES: usize, const LF: usize> Outputs<TREES, LF> {
     /// no sum can overflow, for every possible output of every tree, so the
     /// arithmetic is unchecked; a claim's outputs are added with this same
     /// function, whatever values it states.
+    ///
+    /// With two classes every tree adds to class 1, so the outputs are added
+    /// a word (16 trees) at a time with `lane_sum`: the unused lanes of the
+    /// last word are zero (`well_formed`, which every constructor checks), so
+    /// the sum of the words is the sum of the outputs.
     #[arithmetic(unchecked)]
     pub const fn scores<const CLASSES: usize>(self, _ base: Base<CLASSES, LF>) -> Accumulators<
         CLASSES,
@@ -117,6 +131,14 @@ impl<const TREES: usize, const LF: usize> Outputs<TREES, LF> {
         while c < CLASSES {
             raw[c] = base.at(c).raw()
             c += 1
+        }
+        if CLASSES == 2 {
+            var k: usize = 0
+            while k < lane_words(TREES) {
+                raw[1] = raw[1] + lane_sum(self.words[k])
+                k += 1
+            }
+            return Accumulators::from_raw(raw)
         }
         var t: usize = 0
         while t < TREES {
