@@ -16,11 +16,9 @@
 //!    that was about this contract's own observations and that survived its
 //!    dispute window.
 //!
-//! The model was trained to pick the tier for the 24 intervals that start 6
-//! intervals after the window. `fee()` returns the tier from the moment the
-//! claim is applied until that target period ends (move `end + 6 + 24`), so
-//! it also covers the gap before the target; after that it falls back to
-//! `DEFAULT_FEE` until a newer claim is applied.
+//! The model's target is the 24 intervals starting 6 after the window. `fee()`
+//! returns the tier from when the claim is applied until that target ends
+//! (move `end + 30`), gap included; then `DEFAULT_FEE` until a newer claim.
 //!
 //! Out of scope: this is not a Uniswap v4 hook. A hook would call `fee()`
 //! from `beforeSwap` and `observe()` from `afterSwap`; neither is written
