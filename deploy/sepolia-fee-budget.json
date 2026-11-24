@@ -1,0 +1,16 @@
+{
+ "measured": "2026-11-23T18:12:01Z",
+ "block": 12197331,
+ "fe": "fe 26.5.1 (149c758)",
+ "balance_wei": 42499998090038544,
+ "gas_price_wei": 22,
+ "base_fee_wei": 20,
+ "creations": {
+  "Rows0": 10076375,
+  "Network": 12408301,
+  "Arbiter": 17065082,
+  "TickRelay": 3850001,
+  "FeeOracle": 3734872
+ },
+ "creations_total": 47134631
+}

@@ -1,0 +1,391 @@
+//! Tests of `TickRelay` with the example's own `FeeOracle` (interval 0) and
+//! generated `Arbiter`: the relay must feed the oracle the input the model
+//! was exported on, on one gapless grid of mainnet blocks, and nothing but
+//! the keeper's relayed ticks may reach the oracle.
+use arbiter::{Arbiter, ArbiterMsg}
+use consumer::{DEFAULT_FEE, FeeMsg, FeeOracle, PoolMsg, fee_of}
+use ingot::{
+    BATCH,
+    BadBatch,
+    BadTick,
+    MAX_TICK,
+    NoOracle,
+    NotKeeper,
+    NotNext,
+    NotRelaying,
+    OffGrid,
+    OracleAlreadySet,
+    RelayMsg,
+    STEP,
+    TickRelay,
+}
+use model::{commitment, reference}
+use std::evm::{Address, Call, CallOutcome, Evm, Wei, is_error, seconds, wei}
+
+const GAS: u256 = 16777216
+const BOND: Wei = wei(1_000_000)
+/// A block of the grid of `data/ticks.csv` (a multiple of 50).
+const FIRST: u256 = 26472000
+/// A tick of the real pool.
+const START_TICK: i32 = 201860
+
+msg StrangerMsg {
+    #[selector = sol("relayAs(address)")]
+    RelayAs { relay: Address } -> bool,
+    #[selector = sol("setOracleAs(address)")]
+    SetOracleAs { relay: Address } -> bool,
+}
+
+/// Another account than the keeper: tries the keeper's calls and returns
+/// whether they were refused with `NotKeeper`.
+contract Stranger uses (call: mut Call) {
+    recv StrangerMsg {
+        RelayAs { relay } -> bool uses (mut call) {
+            let outcome = relay
+                .try_call(
+                    RelayMsg::Relay { first: FIRST, ticks: [START_TICK; BATCH], count: 1 },
+                )
+            !outcome.success() && is_error<NotKeeper>(outcome.returndata())
+        }
+
+        SetOracleAs { relay } -> bool uses (mut call) {
+            let outcome = relay.try_call(RelayMsg::SetOracle { oracle: relay })
+            !outcome.success() && is_error<NotKeeper>(outcome.returndata())
+        }
+    }
+}
+
+/// An arbiter, a relay and an oracle that reads the relay with an interval of
+/// 0 blocks, wired as on Sepolia: the relay is deployed first and told the
+/// oracle's address once.
+fn setup() -> (Address, Address, Address) uses (evm: mut Evm) {
+    let arbiter = evm
+        .create2<Arbiter>(
+            value: Wei::zero(),
+            args: (commitment::MODEL_ROOT, BOND, seconds(0)),
+            salt: 0,
+        )
+    let relay = evm.create2<TickRelay>(value: Wei::zero(), args: (), salt: 0)
+    let oracle = evm.create2<FeeOracle>(value: Wei::zero(), args: (relay, arbiter, 0), salt: 0)
+    evm.call(
+        addr: relay,
+        gas: GAS,
+        value: Wei::zero(),
+        message: RelayMsg::SetOracle { oracle },
+    )
+    (arbiter, relay, oracle)
+}
+
+fn push(_ target: Address, first: u256, ticks: [i32; BATCH], count: u256) -> CallOutcome
+uses (evm: mut Evm)
+{
+    evm.try_call(
+        addr: target,
+        gas: GAS,
+        value: Wei::zero(),
+        message: RelayMsg::Relay { first, ticks, count },
+    )
+}
+
+/// Relays one tick at mainnet block `block`.
+fn push_one(_ target: Address, block: u256, tick: i32) -> CallOutcome
+uses (evm: mut Evm)
+{
+    push(target, first: block, ticks: [tick; BATCH], count: 1)
+}
+
+fn moves(oracle: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: oracle,
+        gas: GAS,
+        value: Wei::zero(),
+        message: FeeMsg::Moves {},
+    )
+}
+
+fn relayed(_ target: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: target,
+        gas: GAS,
+        value: Wei::zero(),
+        message: RelayMsg::Relayed {},
+    )
+}
+
+fn next_block(_ target: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: target,
+        gas: GAS,
+        value: Wei::zero(),
+        message: RelayMsg::NextBlock {},
+    )
+}
+
+/// Relays the 145 ticks whose 144 distances are the input of reference
+/// sample 0 (alternating direction, as the consumer's own tests walk the
+/// test pool), in batches of `BATCH` and a last short one. Returns the last
+/// tick.
+fn relay_sample_0(_ target: Address) -> i32 uses (evm: mut Evm) {
+    var tick = START_TICK
+    var batch: [i32; BATCH] = [0; BATCH]
+    var filled: usize = 0
+    var block = FIRST
+    batch[0] = tick
+    filled = 1
+    for i in 0 .. 144 {
+        let step: i32 = reference::X0.get(i) as i32
+        if i % 2 == 0 {
+            tick += step
+        } else {
+            tick -= step
+        }
+        batch[filled] = tick
+        filled += 1
+        if filled == BATCH {
+            assert!(
+                push(target, first: block, ticks: batch, count: BATCH as u256).success(),
+            )
+            block += STEP * BATCH as u256
+            filled = 0
+        }
+    }
+    if filled > 0 {
+        assert!(
+            push(target, first: block, ticks: batch, count: filled as u256).success(),
+        )
+    }
+    tick
+}
+
+#[test(balance = 10_000_000)]
+fn relayed_ticks_become_the_reference_input() uses (evm: mut Evm) {
+    let (_, relay, oracle) = setup()
+    let last = relay_sample_0(relay)
+    assert!(relayed(relay) == 145)
+    assert!(moves(oracle) == 144)
+    assert!(next_block(relay) == FIRST + 145 * STEP)
+    let latest: (u256, i32) = evm
+        .call(
+            addr: relay,
+            gas: GAS,
+            value: Wei::zero(),
+            message: RelayMsg::Latest {},
+        )
+    assert!(latest.0 == FIRST + 144 * STEP)
+    assert!(latest.1 == last)
+    let first: u256 = evm
+        .call(
+            addr: relay,
+            gas: GAS,
+            value: Wei::zero(),
+            message: RelayMsg::FirstBlock {},
+        )
+    assert!(first == FIRST)
+    let words: [u256; 5] = evm
+        .call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::InputWords { end: 144 },
+        )
+    let expected = reference::X0.words()
+    assert!(words[0] == expected[0])
+    assert!(words[1] == expected[1])
+    assert!(words[2] == expected[2])
+    assert!(words[3] == expected[3])
+    assert!(words[4] == expected[4])
+}
+
+#[test(balance = 10_000_000)]
+fn a_finalised_claim_about_relayed_ticks_sets_the_fee() uses (evm: mut Evm) {
+    let (arbiter, relay, oracle) = setup()
+    relay_sample_0(relay)
+    let id: u256 = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: BOND,
+            message: ArbiterMsg::Claim {
+                x0: reference::X0.words(),
+                hidden1: reference::HIDDEN1_0.words(),
+                hidden2: reference::HIDDEN2_0.words(),
+                logits: reference::LOGITS0.values(),
+                class: reference::CLASS0.downcast_truncate(),
+            },
+        )
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::Finalize { id },
+    )
+    let before: u32 = evm.call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::Fee {},
+        )
+    assert!(before == DEFAULT_FEE)
+    let applied = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::Apply { id, end: 144 },
+        )
+    assert!(applied.success())
+    let after: u32 = evm.call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::Fee {},
+        )
+    assert!(
+        after == fee_of(tier: reference::CLASS0.downcast_truncate()),
+    )
+}
+
+#[test(balance = 10_000_000)]
+fn the_grid_has_no_gap_and_no_repeat() uses (evm: mut Evm) {
+    let (_, relay, oracle) = setup()
+    assert!(next_block(relay) == 0)
+    assert!(push_one(relay, block: FIRST, tick: START_TICK).success())
+    let repeat = push_one(relay, block: FIRST, tick: START_TICK)
+    assert!(
+        !repeat.success() && is_error<NotNext>(repeat.returndata()),
+    )
+    let gap = push_one(relay, block: FIRST + 2 * STEP, tick: START_TICK)
+    assert!(!gap.success() && is_error<NotNext>(gap.returndata()))
+    let early = push_one(relay, block: FIRST - STEP, tick: START_TICK)
+    assert!(!early.success() && is_error<NotNext>(early.returndata()))
+    assert!(
+        push_one(relay, block: FIRST + STEP, tick: START_TICK + 7).success(),
+    )
+    assert!(relayed(relay) == 2)
+    assert!(moves(oracle) == 1)
+    let first_move: u8 = evm
+        .call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::MoveAt { number: 0 },
+        )
+    assert!(first_move == 7)
+    assert!(next_block(relay) == FIRST + 2 * STEP)
+}
+
+#[test(balance = 10_000_000)]
+fn the_first_block_is_on_the_grid() uses (evm: mut Evm) {
+    let (_, relay, _) = setup()
+    let off = push_one(relay, block: FIRST + 1, tick: START_TICK)
+    assert!(!off.success() && is_error<OffGrid>(off.returndata()))
+    assert!(relayed(relay) == 0)
+}
+
+#[test(balance = 10_000_000)]
+fn only_the_keeper_relays_and_sets_the_oracle() uses (evm: mut Evm) {
+    let (_, relay, oracle) = setup()
+    let stranger = evm.create2<Stranger>(value: Wei::zero(), args: (), salt: 0)
+    let refused: bool = evm
+        .call(
+            addr: stranger,
+            gas: GAS,
+            value: Wei::zero(),
+            message: StrangerMsg::RelayAs { relay },
+        )
+    assert!(refused)
+    let refused_set: bool = evm
+        .call(
+            addr: stranger,
+            gas: GAS,
+            value: Wei::zero(),
+            message: StrangerMsg::SetOracleAs { relay },
+        )
+    assert!(refused_set)
+    assert!(relayed(relay) == 0)
+    assert!(moves(oracle) == 0)
+}
+
+#[test(balance = 10_000_000)]
+fn the_oracle_is_set_once_and_needed() uses (evm: mut Evm) {
+    let (_, relay, oracle) = setup()
+    let again = evm
+        .try_call(
+            addr: relay,
+            gas: GAS,
+            value: Wei::zero(),
+            message: RelayMsg::SetOracle { oracle: relay },
+        )
+    assert!(
+        !again.success() && is_error<OracleAlreadySet>(again.returndata()),
+    )
+    let set: Address = evm
+        .call(
+            addr: relay,
+            gas: GAS,
+            value: Wei::zero(),
+            message: RelayMsg::Oracle {},
+        )
+    assert!(set == oracle)
+    let bare = evm.create2<TickRelay>(value: Wei::zero(), args: (), salt: 1)
+    let early = push_one(bare, block: FIRST, tick: START_TICK)
+    assert!(!early.success() && is_error<NoOracle>(early.returndata()))
+}
+
+#[test(balance = 10_000_000)]
+fn nothing_but_a_relay_reaches_the_oracle() uses (evm: mut Evm) {
+    let (_, relay, oracle) = setup()
+    assert!(push_one(relay, block: FIRST, tick: START_TICK).success())
+    // Outside `relay`, the relay's `slot0()` refuses to answer...
+    let read = evm.try_call(
+            addr: relay,
+            gas: GAS,
+            value: Wei::zero(),
+            message: PoolMsg::Slot0 {},
+        )
+    assert!(
+        !read.success() && is_error<NotRelaying>(read.returndata()),
+    )
+    // ...so an `observe()` sent to the oracle directly stores nothing.
+    let direct = evm
+        .try_call(
+            addr: oracle,
+            gas: GAS,
+            value: Wei::zero(),
+            message: FeeMsg::Observe {},
+        )
+    assert!(
+        !direct.success() && is_error<NotRelaying>(direct.returndata()),
+    )
+    assert!(moves(oracle) == 0)
+    assert!(relayed(relay) == 1)
+}
+
+#[test(balance = 10_000_000)]
+fn a_batch_holds_one_to_24_ticks_in_the_pool_range() uses (evm: mut Evm) {
+    let (_, relay, _) = setup()
+    let none = push(relay, first: FIRST, ticks: [START_TICK; BATCH], count: 0)
+    assert!(!none.success() && is_error<BadBatch>(none.returndata()))
+    let many = push(
+        relay,
+        first: FIRST,
+        ticks: [START_TICK; BATCH],
+        count: BATCH as u256 + 1,
+    )
+    assert!(!many.success() && is_error<BadBatch>(many.returndata()))
+    let high = push_one(relay, block: FIRST, tick: MAX_TICK + 1)
+    assert!(!high.success() && is_error<BadTick>(high.returndata()))
+    let low = push_one(relay, block: FIRST, tick: -MAX_TICK - 1)
+    assert!(!low.success() && is_error<BadTick>(low.returndata()))
+    // A failed batch leaves nothing behind; a full one is relayed whole.
+    assert!(relayed(relay) == 0)
+    assert!(
+        push(
+            relay,
+            first: FIRST,
+            ticks: [START_TICK; BATCH],
+            count: BATCH as u256,
+        ).success(),
+    )
+    assert!(relayed(relay) == BATCH as u256)
+}

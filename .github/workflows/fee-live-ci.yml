@@ -1,0 +1,47 @@
+name: Fee live system CI
+
+# The offline tests of the live fee-tier system on Sepolia (docs/sepolia-fee.md), on every push:
+# the relay's Fe tests, the shared JavaScript core against the example's reference vectors, and
+# that the committed status page is the page these sources build. The live checks against Sepolia
+# and mainnet run in fee-keeper.yml (watch).
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FE_VERSION: v26.5.1
+
+jobs:
+  relay:
+    name: TickRelay Fe tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - run: fe --version
+      - run: fe test
+        working-directory: examples/amm-fee/relay
+      - run: fe build --out-dir "$RUNNER_TEMP/relay" .
+        working-directory: examples/amm-fee/relay
+
+  core:
+    name: Fee live core and page
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: npm ci --no-audit --no-fund
+        working-directory: demo
+      - run: node test/tensile-fee-live-core.mjs
+        working-directory: demo
+      - run: node tools/build_fee_live.mjs
+      - name: The committed status page is the page these sources build
+        run: git diff --exit-code demo/dist/tensile-fee-live.html

@@ -1,0 +1,247 @@
+//! `TickRelay`: the stand-in for the mainnet pool on the Sepolia deployment
+//! of the fee-tier example.
+//!
+//! TRUST ASSUMPTION. Sepolia has no pool that trades at mainnet prices, so on
+//! Sepolia `FeeOracle` reads its ticks from this contract, and this contract
+//! holds whatever tick its keeper gave it. Nothing on Sepolia can check that a
+//! tick is the mainnet pool's: the keeper is trusted for that. To make the
+//! trust checkable, every relayed tick names the mainnet block it was read at
+//! (the `Relayed` event, and the grid below), so anyone can read the pool's
+//! `slot0()` at that block and compare (`tools/fee_watch.mjs` does it for
+//! every tick, and so does the status page). On mainnet there is no relay: the
+//! oracle reads the pool itself.
+//!
+//! What this contract does enforce:
+//! - only the keeper (the deployer) relays;
+//! - the ticks are of mainnet blocks on one grid, `STEP` blocks apart, with
+//!   no gap and no repeat: tick `n` (from 0) is of block
+//!   `firstBlock() + STEP * n`, and the first block is a multiple of `STEP`,
+//!   the grid of `data/ticks.csv`;
+//! - every relayed tick is observed by the oracle exactly once, in the same
+//!   call: `relay` calls the oracle's `observe()` after setting each tick, and
+//!   `slot0()` reverts outside a `relay` call, so the oracle cannot store a
+//!   tick twice or store one that was not relayed.
+//!
+//! The oracle is deployed with an interval of 0 blocks for this. Its clock is
+//! then this grid of mainnet blocks, not Sepolia's blocks: a keeper that runs
+//! late relays the ticks it missed, each read at its own mainnet block, and
+//! the moves stay 50 mainnet blocks apart, as in the training data. That
+//! catch-up is visible on chain: the Sepolia block of a `Relayed` event is
+//! later than its mainnet block by more than usual.
+use consumer::{FeeMsg, PoolMsg}
+use std::evm::{Address, Call, Ctx, Log, TSlot}
+
+/// Mainnet blocks between two relayed ticks: the oracle's interval on mainnet
+/// and the spacing of the training data.
+pub const STEP: u256 = 50
+/// The most ticks one `relay` call carries: four hours of the grid.
+pub const BATCH: usize = 24
+/// The largest tick of a Uniswap v3 pool (`TickMath.MAX_TICK`).
+pub const MAX_TICK: i32 = 887272
+
+/// Tick number `number` (from 0), the pool's tick at the end of mainnet block
+/// `block`, was relayed and observed; the oracle then held `moves` moves.
+#[event]
+pub struct Relayed {
+    #[indexed]
+    pub number: u256,
+    #[indexed]
+    pub block: u256,
+    pub tick: i32,
+    pub moves: u256,
+}
+
+/// The oracle this relay feeds was set, once.
+#[event]
+pub struct OracleSet { pub oracle: Address }
+
+/// Only the keeper relays and sets the oracle.
+#[error]
+pub struct NotKeeper { pub caller: Address }
+
+/// `relay` before `setOracle`.
+#[error]
+pub struct NoOracle {}
+
+/// `setOracle` a second time.
+#[error]
+pub struct OracleAlreadySet { pub oracle: Address }
+
+/// The first relayed block is not a multiple of `STEP`.
+#[error]
+pub struct OffGrid { pub block: u256 }
+
+/// A batch that does not start at the next block of the grid.
+#[error]
+pub struct NotNext { pub block: u256, pub expected: u256 }
+
+/// A batch of no ticks, or of more than `BATCH`.
+#[error]
+pub struct BadBatch { pub length: u256 }
+
+/// A tick outside the range of a Uniswap v3 pool.
+#[error]
+pub struct BadTick { pub tick: i32 }
+
+/// `slot0()` outside a `relay` call.
+#[error]
+pub struct NotRelaying {}
+
+pub msg RelayMsg {
+    /// Sets the oracle that `relay` feeds. Keeper only, once.
+    #[selector = sol("setOracle(address)")]
+    SetOracle { oracle: Address },
+    /// Relays the first `count` of `ticks`, the pool's ticks at mainnet blocks
+    /// `first`, `first + STEP`, ...: for each, makes it the tick `slot0()`
+    /// answers and calls the oracle's `observe()`. Keeper only. `first` must
+    /// be the next block of the grid. Returns the oracle's number of moves.
+    #[selector = sol("relay(uint256,int32[24],uint256)")]
+    Relay { first: u256, ticks: [i32; BATCH], count: u256 } -> u256,
+    /// The account that relays.
+    #[selector = sol("keeper()")]
+    Keeper -> Address,
+    /// The oracle fed, or the zero address before `setOracle`.
+    #[selector = sol("oracle()")]
+    Oracle -> Address,
+    /// Number of ticks relayed so far.
+    #[selector = sol("relayed()")]
+    Relayed -> u256,
+    /// Mainnet block of tick 0 (0 before the first relay).
+    #[selector = sol("firstBlock()")]
+    FirstBlock -> u256,
+    /// Mainnet block the next relayed tick must be of (0 before the first
+    /// relay: then any multiple of `STEP`).
+    #[selector = sol("nextBlock()")]
+    NextBlock -> u256,
+    /// Mainnet block and tick of the last relayed tick ((0, 0) before any).
+    #[selector = sol("latest()")]
+    Latest -> (u256, i32),
+}
+
+/// Deployed by the keeper. Its effects: `call` is `mut` because `relay` calls
+/// the oracle's `observe()`, which writes the oracle's storage; it sends no
+/// ETH (no handler is payable and no call carries value).
+pub contract TickRelay uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    keeper: Address,
+    mut oracle: Address,
+    mut first_block: u256,
+    mut count: u256,
+    mut last_tick: i32,
+    mut current: TSlot<i32>,
+    mut relaying: TSlot<bool>,
+
+    init() uses (ctx, mut keeper) { keeper = ctx.caller() }
+
+    recv RelayMsg {
+        SetOracle { oracle: target } uses (ctx, keeper, mut oracle, mut log) {
+            if ctx.caller() != keeper {
+                revert_error(NotKeeper { caller: ctx.caller() })
+            }
+            if oracle != Address::zero() {
+                revert_error(OracleAlreadySet { oracle })
+            }
+            oracle = target
+            log.emit(OracleSet { oracle: target })
+        }
+
+        Relay { first, ticks, count: length } -> u256
+        uses (
+            ctx,
+            call,
+            keeper,
+            oracle,
+            mut first_block,
+            mut count,
+            mut last_tick,
+            mut current,
+            mut relaying,
+            mut log,
+        )
+        {
+            if ctx.caller() != keeper {
+                revert_error(NotKeeper { caller: ctx.caller() })
+            }
+            if oracle == Address::zero() {
+                revert_error(NoOracle {})
+            }
+            if length == 0 || length > BATCH as u256 {
+                revert_error(BadBatch { length })
+            }
+            if count == 0 {
+                if first % STEP != 0 {
+                    revert_error(OffGrid { block: first })
+                }
+                first_block = first
+            } else if first != first_block + STEP * count {
+                revert_error(
+                    NotNext { block: first, expected: first_block + STEP * count },
+                )
+            }
+            let n: usize = length.downcast_truncate()
+            let target: Address = oracle
+            relaying.write(true)
+            var moves: u256 = 0
+            for i in 0 .. n {
+                let tick = ticks[i]
+                if tick > MAX_TICK || tick < -MAX_TICK {
+                    revert_error(BadTick { tick })
+                }
+                current.write(tick)
+                moves = target.call(FeeMsg::Observe {})
+                let k = i as u256
+                log.emit(
+                    Relayed { number: count + k, block: first + STEP * k, tick, moves },
+                )
+            }
+            relaying.write(false)
+            count = count + length
+            last_tick = ticks[n - 1]
+            moves
+        }
+
+        Keeper -> Address uses (keeper) {
+            keeper
+        }
+
+        Oracle -> Address uses (oracle) {
+            oracle
+        }
+
+        Relayed -> u256 uses (count) {
+            count
+        }
+
+        FirstBlock -> u256 uses (first_block) {
+            first_block
+        }
+
+        NextBlock -> u256 uses (first_block, count) {
+            if count == 0 {
+                0
+            } else {
+                first_block + STEP * count
+            }
+        }
+
+        Latest -> (u256, i32) uses (first_block, count, last_tick) {
+            if count == 0 {
+                (0, 0)
+            } else {
+                (first_block + STEP * (count - 1), last_tick)
+            }
+        }
+    }
+
+    /// The pool's view, as `FeeOracle` reads it. Only the tick is relayed; the
+    /// other fields are zero (the price), zero and `true` (unlocked).
+    recv PoolMsg {
+        Slot0 -> (u256, i32, u16, u16, u16, u8, bool)
+        uses (current, relaying)
+        {
+            if !relaying.read() {
+                revert_error(NotRelaying {})
+            }
+            (0, current.read(), 0, 0, 0, 0, true)
+        }
+    }
+}

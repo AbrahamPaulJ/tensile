@@ -1,0 +1,68 @@
+name: Fee keeper and watcher (Sepolia)
+
+# The live fee-tier system on Sepolia (docs/sepolia-fee.md).
+#
+# keep (every 10 minutes, as GitHub schedules it: often late, sometimes skipped): one run of
+#   tools/fee_keeper.mjs. It relays the mainnet pool's ticks that are due to the relay contract,
+#   challenges any false claim, finalises and applies honest claims, claims the newest window and
+#   withdraws returned bonds. It keeps no state: a late or skipped run is caught up by the next one
+#   (each tick is still read at its own mainnet block), and a run repeated at once sends nothing.
+#   Spending per run is capped (GAS_BUDGET gas, MAX_FEE_WEI per gas). Needs the repository secret
+#   SEPOLIA_KEEPER_KEY (the keeper's private key, 0x...); without it the job does nothing.
+#   One run at a time: the concurrency group queues a run that starts while another is going.
+#
+# watch (every hour, and on demand): demo/test/tensile-fee-live.mjs, read-only, no key. Fails if a
+#   relayed tick differs from mainnet, if a false claim became final or went unchallenged, if the
+#   oracle's fee or moves do not follow from the chain, or if the relay is three hours behind.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+    - cron: "37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keep:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '*/10 * * * *' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    concurrency:
+      group: fee-keeper
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+        working-directory: demo
+      - name: keeper run
+        env:
+          SEPOLIA_KEEPER_KEY: ${{ secrets.SEPOLIA_KEEPER_KEY }}
+          GAS_BUDGET: "6000000"
+          MAX_FEE_WEI: "50000000"
+          MAX_TICKS: "72"
+        run: |
+          if [ -z "$SEPOLIA_KEEPER_KEY" ]; then
+            echo "::notice::SEPOLIA_KEEPER_KEY is not set: the keeper does nothing."
+            exit 0
+          fi
+          node tools/fee_keeper.mjs
+
+  watch:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '37 * * * *' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+        working-directory: demo
+      - run: node test/tensile-fee-live-core.mjs
+        working-directory: demo
+      - run: node test/tensile-fee-live.mjs
+        working-directory: demo

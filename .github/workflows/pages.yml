@@ -41,6 +41,11 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version v26.5.1 --no-modify-path
           echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
       - run: bash tools/api_docs.sh _site/api
+      # The live status page of the fee-tier system on Sepolia (tools/build_fee_live.mjs).
+      - name: The live status page of the fee-tier system on Sepolia, at /fee-live/
+        run: |
+          mkdir -p _site/fee-live
+          cp demo/dist/tensile-fee-live.html _site/fee-live/index.html
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site

@@ -1,0 +1,12 @@
+[ingot]
+name = "relay"
+version = "0.1.0"
+
+# Not a member of the example's workspace (../fe.toml is generated and lists only the example's own
+# ingots): the relay exists for the Sepolia deployment only. It reads the example's ingots by path.
+# `arbiter` uses `unsafe` in its storage record (generated code), so it is trusted explicitly here;
+# the workspace's own `consumer` trusts it the same way through the workspace.
+[dependencies]
+consumer = { path = "../ingots/consumer" }
+arbiter = { path = "../ingots/arbiter", allow_unsafe = true }
+model = { path = "../ingots/model" }
