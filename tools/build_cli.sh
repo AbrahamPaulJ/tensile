@@ -7,5 +7,5 @@ if [ $# -ne 2 ]; then
   echo "usage: build_cli.sh <0|1|2> <out-dir>" >&2
   exit 2
 fi
-fe build --color never --backend native -O "$1" --out-dir "$2" --ingot cli . || exit 1
+fe build --color never --backend native -O "$1" --out-dir "$2" ingots/cli || exit 1
 test -x "$2/cli"

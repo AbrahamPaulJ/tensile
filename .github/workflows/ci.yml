@@ -28,6 +28,8 @@ jobs:
       - run: fe --version
       - run: fe fmt --check ingots
       - run: fe test
+      - name: The native classifier's tests (its own ingot; it needs 26.5.1)
+        run: fe test ingots/cli
       - run: fe build
       - run: bash tools/m1_check.sh
       - run: bash tools/m2_check.sh
@@ -50,6 +52,8 @@ jobs:
           curl -fsSL -o "$HOME/fe-267/fe" "$FE_267_URL"
           echo "$FE_267_SHA256  $HOME/fe-267/fe" | sha256sum -c -
           chmod +x "$HOME/fe-267/fe"
+      - name: Plain `fe test` at the repository root on 26.7.0
+        run: '"$HOME/fe-267/fe" test'
       - run: FE267="$HOME/fe-267/fe" bash tools/check_fe267.sh
       - name: The library examples on 26.7.0 (lib-examples/, docs/LIBRARY.md)
         run: FE267="$HOME/fe-267/fe" bash tools/check_fe267_lib.sh

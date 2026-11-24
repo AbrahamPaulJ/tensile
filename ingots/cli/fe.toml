@@ -3,5 +3,5 @@ name = "cli"
 version = "0.1.0"
 
 [dependencies]
-tensile = true
-model = true
+tensile = { path = "../tensile" }
+model = { path = "../model" }

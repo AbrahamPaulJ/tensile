@@ -45,7 +45,7 @@ python3 tools/ref_vectors.py --model examples/tiny/model.json --random 200 --see
 bash tools/gen_workspace.sh build/tiny/out/model.json build/tiny/out build/tiny 3 network
 cd build/tiny
 fe test && fe build --out-dir build/out && bash ../../tools/check_size.sh build/out
-fe build --backend native -O 1 --out-dir build/native --ingot cli . && python3 ../../tools/diff_native.py --ref out build/native/cli
+fe build --backend native -O 1 --out-dir build/native ingots/cli && python3 ../../tools/diff_native.py --ref out build/native/cli
 ```
 
 1. `ref_vectors.py` runs the NumPy reference (`ref/tensile_ref.py`, the oracle) on your inputs

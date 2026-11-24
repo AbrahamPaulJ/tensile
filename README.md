@@ -15,49 +15,25 @@ is 14 seconds of it). **[Catch a lie on Sepolia](https://abrahampaulj.github.io/
 dozen claims were posted on a public chain, some false, and the page re-runs the network in your browser,
 names the wrong neuron and asks the chain whether the challenge would win; with a wallet you can send it
 and keep half the bond. Addresses and every transaction: [`docs/sepolia.md`](docs/sepolia.md).
-**[Watch the fee tier live](https://abrahampaulj.github.io/tensile/fee-live/)**: the fee-tier example runs on
-Sepolia on real mainnet data. A keeper relays the mainnet USDC/WETH pool's tick at every 50th block,
-`FeeOracle` (Fe) builds the model's input from those ticks, and about every hour the keeper posts the
-network's tier with a bond; one deliberately false claim from a second account was slashed. The page
-re-reads every relayed tick from mainnet and re-runs every claim in your browser. The relay is a trust
-assumption a mainnet deployment would not have (the oracle would read the pool itself), and it is checked
-tick by tick. Addresses and every transaction: [`docs/sepolia-fee.md`](docs/sepolia-fee.md).
 **[The project page](https://abrahampaulj.github.io/tensile/)** has all of these. The demo is also [`demo/dist/tensile-demo.html`](demo/dist/tensile-demo.html), one self-contained
 file that opens from disk, and the video is [`demo/video/tensile-demo.mp4`](demo/video/tensile-demo.mp4).
 
-**Not only digits.** The same generator built two models someone could use, each with a consumer contract
-in Fe: [a fee tier for an AMM pool](examples/amm-fee/README.md), predicted from a year of the mainnet
-USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last
-four hours"), where the contract rebuilds the model's input from ticks it read itself; and
-[a scam-risk score for Ethereum accounts](examples/address-risk/README.md) (89.35% against a baseline of
-83.37%). **[Try the fee tier live](https://abrahampaulj.github.io/tensile/fee/)**: the `examples/amm-fee`
-contracts run in your browser on a year of real pool ticks, `FeeOracle` builds the model's input from the
-ticks it observes, a false claim is slashed by re-running one neuron, and a claim that is correct about
-another window is refused, which is why the consumer checks the input hash. Four models from 1,042 to 109,386 parameters show
-[where a dispute pays and where it does not](#use-it-with-your-own-network).
+**Built on the same kernel** (each with its evidence and limits in [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md)):
 
-**Convolutions too.** A [1D convolutional fee model](#convolutions-a-model-that-cannot-run-in-one-transaction-still-disputed-in-one)
-whose whole run needs 17,966,815 gas, more than one transaction may use, still has any of its values
-disputed for at most 126,032 gas, because a challenge re-runs one filter on one window opened from a
-word-level Merkle tree.
-
-**Not only neural networks.** [Tree ensembles](#tree-ensembles-the-same-dispute-for-the-models-people-use-on-tabular-data),
-the models people actually use for tabular risk scores, get the same one-transaction dispute: a false
-answer is slashed by re-walking one tree on-chain. On the scam-risk data a 300-tree forest beats the dense
-network (F1 0.7065 against 0.6422), costs 1,301,202 gas to run whole on-chain and 251,287 to claim and
-finalise (19.3%).
-
-**And not only inference.** The kernel is a fixed-point library other Fe projects can import: scales in
-the type, packed vectors, overflow proofs the compiler checks. [`docs/LIBRARY.md`](docs/LIBRARY.md) shows
-it running a price average, a scorecard and a lending rate curve
-([use the kernel as a library](#use-the-kernel-as-a-library)).
+- Two models someone could use, a [fee tier for an AMM pool](examples/amm-fee/README.md) and a
+  [scam-risk score](examples/address-risk/README.md), each with a consumer contract in Fe. The fee tier
+  runs [in your browser](https://abrahampaulj.github.io/tensile/fee/) and
+  [on Sepolia on mainnet ticks](https://abrahampaulj.github.io/tensile/fee-live/).
+- [Where a dispute pays and where it does not](#use-it-with-your-own-network), measured on four models.
+- 1D convolutions and gradient-boosted tree ensembles, each with its own one-transaction dispute.
+- The kernel as a fixed-point library for other Fe projects ([`docs/LIBRARY.md`](docs/LIBRARY.md)).
 
 **For a judge with five minutes**, from the repository root:
 
 | Command | Needs | What it shows | Time |
 |---|---|---|---|
 | open [the live demo](https://abrahampaulj.github.io/tensile/demo/) | a browser | draw a digit, post a lie, watch one neuron disprove it | 2 min |
-| `fe test` | Fe 26.5.1 | 77 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
+| `fe test` | Fe 26.5.1 or 26.7.0 | 67 tests: kernel, model against the reference, dispute rule, contracts | 25 s |
 | `node wasm/diff.mjs` | Node 20+ | the committed WebAssembly module against the NumPy reference: 10,000 images, 0 mismatches | 4 s |
 | `bash tools/check_compile_fail.sh -v` | Fe 26.5.1 | 13 wrong models that must not compile (a bias at the wrong scale, mismatched layers...), each with the compiler's message, and one correct control that must | 17 s |
 
@@ -71,6 +47,17 @@ time window. Then only a dispute costs anything, and it need only re-run one ste
 The dispute is worth nothing unless the step re-run on-chain computes *exactly* what the off-chain run
 computed, down to the rounding of a negative number. Usually these are two code bases in two languages,
 kept in step by hope.
+
+**Related work.** Optimistic verification of machine learning is not new, and neither is proving it.
+opML (ORA) compiles the model for a fraud-proof virtual machine and settles a dispute by an interactive
+bisection game down to one instruction. Agatha (Zheng et al., 2021) pinpoints one operation of the
+computation graph over several rounds. zkML systems such as EZKL prove every inference with a SNARK:
+no window and no watcher, at a large proving cost per answer. Tensile is in the first family and differs
+in three ways. The claim commits every layer's output, so a dispute is one transaction with no bisection
+and no second move by the claimant; the price is a claim that grows with the layer widths. The step the
+chain re-runs is not a port: it is the same Fe function the off-chain run calls, bit-exact on EVM, native
+and WebAssembly. And shape, scale and the absence of overflow are checked by the Fe compiler, not by a
+test. We have not measured Tensile against any of these systems.
 
 Who would use it: a contract that needs a model's answer (a risk score before a loan, a classifier
 gating a payout) and cannot afford to compute it. An operator runs the model off-chain and posts the
@@ -269,101 +256,6 @@ is the claim, with the sum of the layer widths (1.11x here), and a dispute is ne
 about 66,000 gas however small the neuron. The largest model's whole run is already 49% of the
 per-transaction gas cap; its dispute is not.
 
-## Convolutions: a model that cannot run in one transaction, still disputed in one
-
-`ingots/tensile/src/conv.fe` adds 1D convolution in the same typed style. A filter is a `Row<K*C, FW>`,
-one output is the dense `neuron` applied to a window of the packed input, and the output length is a
-const generic tied to the shape by a `where` clause, so a result declared with the wrong length does not
-compile. The overflow proof is the dense one over the filter rows.
-
-A dispute re-runs one filter at one position. To do that without the challenger resending a whole layer,
-each vector in a conv claim is committed as a Merkle tree over its 32-byte words, built by the contract
-itself from words it has range-checked; a challenge opens only the few input words the window covers and
-the one output word (`docs/spec-dispute.md` section 11, with the soundness argument). The flat design was
-built and measured too: its filter challenges cost up to 208,130 gas against 107,674, and its arbiter is
-27,394 bytes, over the contract size limit, so it cannot be deployed.
-
-[`examples/amm-fee-conv`](examples/amm-fee-conv/README.md) is the fee-tier task with a convolutional front
-end over 48 hours of ticks (three conv layers, then dense 272-32-3; 11,059 parameters):
-
-| | Conv model | Dense 144-32-16-3 |
-|---|---|---|
-| Correct on the 7,711 held-out windows | 4,374 (56.72%) | 4,399 (57.05%) |
-| Whole forward pass on-chain, gas | 17,966,815 | 466,408 |
-| `claim`, gas | 617,131 | 239,460 |
-| Honest path (`claim` + `finalize`), gas | 672,404 | 290,511 |
-| Honest path against one whole run | 3.7% | 62.3% |
-| Dearest dispute (first slash), gas | 126,032 | 116,791 |
-
-The whole run needs 1.07 times the 16,777,216 gas one Osaka transaction may use, and anvil with the cap
-enforced refuses it (the figure is measured under Prague's rules); the generated `Network` is also 70,261
-bytes, too large to deploy as one contract. So this model cannot be run on-chain at all as it stands, and
-every value in it can still be disputed for 62,940 to 126,032 gas. What it costs: the claim is 2.6 times
-the dense one, because the contract builds the word trees. And the conv model is not better: 25 windows
-worse than the dense one, within noise. It is here as the demonstration of the mechanism, not as a better
-fee policy. Not covered by the fuzz and mutation runs; its evidence is 22 generated contract tests, the
-anvil runs, and 0 mismatches between the native build and the NumPy reference on 7,711 samples and
-592,400 traced values. No padding, no pooling, no 2D.
-
-## Tree ensembles: the same dispute for the models people use on tabular data
-
-`ingots/trees` is a second kernel on the same types, for gradient-boosted trees and random forests:
-`Tree<DEPTH, IN, LF>` and `Forest<TREES, DEPTH, IN, CLASSES, LF>`, with the no-overflow proof of the score
-sum in a `where` clause. A claim commits to the input and to every tree's output. One challenge names a
-tree, and the contract re-walks it (6 comparisons at depth 6) against a Merkle proof of that tree, with the
-same `Tree::eval` the off-chain forest runs; the other re-adds the committed outputs and compares the
-class. If any tree's output is wrong the first succeeds; if all are right the class follows from them, so
-a wrong class falls to the second. `ingots/dispute`, the claim state machine, is reused unchanged. Spec:
-[`docs/spec-trees.md`](docs/spec-trees.md).
-
-On the address-risk data ([`examples/address-risk-trees`](examples/address-risk-trees/README.md)), a
-forest of 300 trees of depth 6, chosen on validation and scored once on the same 7,054 held-out accounts:
-
-| | Forest 300x6 | Dense 14-32-16-2 | Always "not flagged" |
-|---|---|---|---|
-| Accuracy | 91.22% | 89.35% | 83.37% |
-| Precision | 79.59% | 72.79% | |
-| Recall | 63.51% | 57.46% | |
-| F1 | 0.7065 | 0.6422 | |
-| Whole model on-chain, gas | 1,301,202 | 154,748 | |
-| Honest path (`claim` + `finalize`), gas | 251,287 | 281,361 | |
-| Honest path against one whole run | 19.3% | 181.8% | |
-| Dearest dispute, gas | 118,880 | 101,727 | |
-| Dearest dispute against one whole run | 9.1% | 65.7% | |
-
-So on this data the better model is also the one the dispute pays for: the forest is too dear to run on
-every call and cheap to claim, where the small dense network was the reverse. The unflattering rows: a
-tree dispute costs more gas than a small neuron's (1,316 bytes of calldata against 452), the native
-classifier is slow (20 to 25 s for 7,054 rows), and the tree arbiter has its generated Fe tests and anvil
-scripts but no fuzz suite or mutation run. Choosing a whole tree per Merkle leaf over one path rests on a
-calculation, not on having built both (spec section 10). One compiler limit was met and recorded
-(`tests/defects/where_after_substitution.fe`).
-
-## Use the kernel as a library
-
-Under the inference sits a small fixed-point library for Fe: values whose binary scale is part of the
-type (`Q<F>`), int8 vectors packed 32 to a word, a dot product whose overflow is ruled out by a `where`
-clause, and bounds the compiler checks. `ingots/tensile` has no dependencies and works as a path or git
-dependency:
-
-```toml
-tensile = { source = "https://github.com/AbrahamPaulJ/tensile", rev = "<commit>", path = "ingots/tensile" }
-```
-
-[`lib-examples/`](lib-examples/README.md) builds three contracts on it with no neural network in sight:
-`TickEma` (a moving average of a pool's tick), `Scorecard` (a weighted score over 16 features) and
-`RateCurve` (a kinked borrow rate). Six mistakes that compile in Solidity are compile errors there, with
-the compiler's message recorded for each (`lib-examples/compile_fail/`): a missing shift after a
-fixed-point multiply is "expected `Q<16>`, but `Q<28>` is given", and a rate curve that would overflow at
-100% utilisation fails a `static_assert`. Measured against plain-integer twins written in Fe, the types
-cost no gas where the code has the same shape (execution gas: `RateCurve` 472 against 472, `TickEma` 7,634
-against 7,751), and the kernel's packed dot product runs the scorecard for 1,559 against 4,691 for a
-byte-by-byte loop (`lib-examples/runs/gas.json`).
-The guide, [`docs/LIBRARY.md`](docs/LIBRARY.md), starts from an empty directory, and CI runs that
-walkthrough on Fe 26.5.1 and 26.7.0. API reference, generated by `fe doc`:
-[abrahampaulj.github.io/tensile/api](https://abrahampaulj.github.io/tensile/api/). The example parameters
-are made up; the library is not audited.
-
 ## Build and test
 
 The exact versions used: **fe 26.5.1 (149c758)**, Foundry 1.9.0, solc 0.8.38, Python 3.11, NumPy 2.3,
@@ -376,7 +268,8 @@ curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | b
 fe --version          # fe 26.5.1 (149c758)
 sha256sum "$(command -v fe)"   # 2d48fd56e45f56a775bea73a3180ffcab73ad440887d0a985be2050fb5993916 (Linux x86-64)
 fe fmt --check ingots
-fe test               # 77 tests on the EVM backend, about 25 s
+fe test               # 67 tests on the EVM backend, about 25 s (26.5.1 or 26.7.0)
+fe test ingots/cli     # 10 more: the native classifier and auditor, which need 26.5.1
 fe build              # the contracts, into ./out
 ```
 
@@ -434,7 +327,7 @@ Times are from one laptop (i5-13420H, WSL2 Ubuntu 24.04), with the repository on
 ### A reproducible example without a browser
 
 ```sh
-fe build --backend native -O 1 --out-dir out-native --ingot cli .
+fe build --backend native -O 1 --out-dir out-native ingots/cli
 head -c 784 ref/out/inputs.bin | out-native/cli          # 7
 head -c 784 ref/out/inputs.bin | out-native/cli trace    # every hidden value, every output, the class
 ```
@@ -501,7 +394,7 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
   them on values that provably fit, and 27.4% is decoding array arguments into memory. The page lists
   what the compiler could do about each and reproduces with `python3 tools/gas_gap.py`. Those are Fe at `-O 1` against solc via-IR. `-O 2` moves no gas figure by more than
   0.03%, and solc without via-IR cannot compile the arbiter's twin at all, "Stack too deep" (section 6).
-- **Measured on Fe 26.5.1; the native CLI needs that version.** Every figure here comes from 26.5.1, and
+- **Measured on Fe 26.5.1; the native CLI needs that version.** Plain `fe test` at the root passes on 26.5.1 and 26.7.0 (a CI step each); the CLI is its own ingot outside the workspace for that reason. Every figure here comes from 26.5.1, and
   the Sepolia contracts are its output. The kernel, the generated model, the dispute rule and the
   contracts also pass `fe check` and `fe test` unchanged on the 26.7.0 release (`tools/check_fe267.sh`,
   a CI job), and the 26.5.1 bytecode did not change by a byte when the source was made to build on

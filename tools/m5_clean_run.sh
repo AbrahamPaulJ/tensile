@@ -67,7 +67,7 @@ step "fe fmt --check ingots" fe fmt --check ingots
 step "fe test" fe test --color never
 step "fe build" fe build --color never
 native_example() {
-  fe build --color never --backend native -O 1 --out-dir out-native --ingot cli . > /dev/null \
+  fe build --color never --backend native -O 1 --out-dir out-native ingots/cli > /dev/null \
     && [ "$(head -c 784 ref/out/inputs.bin | out-native/cli)" = "7" ] \
     && head -c 784 ref/out/inputs.bin | out-native/cli trace | tail -1
 }

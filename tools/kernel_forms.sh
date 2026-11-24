@@ -48,7 +48,7 @@ measure() {
   local got=$(cast call --rpc-url $rpc "$address" "$signature(int8)" "${call[0]}" "${call[1]}" "${call[2]}")
   [ "$got" = "${call[3]}" ] || tests="FAIL"
   local estimate=$(cast estimate --rpc-url $rpc "$address" "$signature" "${call[0]}" "${call[1]}" "${call[2]}")
-  fe build --color never --backend native -O 1 --out-dir "$dir/native" --ingot cli . > "$dir/native.log" 2>&1
+  fe build --color never --backend native -O 1 --out-dir "$dir/native" ingots/cli > "$dir/native.log" 2>&1
   local native=$(python3 "$root/tools/diff_native.py" "$dir/native/cli" | grep 'classes' \
     | sed -E 's/.*classes +([0-9]+) samples, ([0-9]+) mismatches, ([0-9.]+) s/\3 s (\2 mismatches)/')
   printf '%-14s %-5s %9s %7s %9s %7s %s\n' "$name" "$tests" "$inside" \
