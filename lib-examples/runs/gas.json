@@ -1,0 +1,25 @@
+{
+  "fe": "fe 26.5.1 (149c758)",
+  "chain": "anvil, Osaka",
+  "calls": {
+    "TickEma.update": {"gas": 28862, "execution": 7634},
+    "PlainTickEma.update": {"gas": 28979, "execution": 7751},
+    "Scorecard.score": {"gas": 22943, "execution": 1559},
+    "PlainScorecard.score": {"gas": 26075, "execution": 4691},
+    "RateCurve.below": {"gas": 22220, "execution": 472},
+    "PlainRateCurve.below": {"gas": 22220, "execution": 472},
+    "WadRateCurve.below": {"gas": 22427, "execution": 939},
+    "RateCurve.above": {"gas": 22220, "execution": 494},
+    "PlainRateCurve.above": {"gas": 22220, "execution": 494},
+    "WadRateCurve.above": {"gas": 22432, "execution": 944}
+  },
+  "runtime_bytes": {
+    "TickEma": 407,
+    "PlainTickEma": 406,
+    "Scorecard": 1146,
+    "PlainScorecard": 926,
+    "RateCurve": 355,
+    "PlainRateCurve": 340,
+    "WadRateCurve": 477
+  }
+}

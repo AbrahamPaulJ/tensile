@@ -10,7 +10,10 @@
     "test": "node test/run.mjs",
     "test:ui": "node test/ui.mjs",
     "build:sepolia": "node build_sepolia.mjs",
-    "test:sepolia": "node test/sepolia.mjs"
+    "test:sepolia": "node test/sepolia.mjs",
+    "build:fee": "node build_fee.mjs",
+    "test:fee": "node test/fee.mjs",
+    "test:fee-ui": "node test/fee_ui.mjs"
   },
   "dependencies": {
     "@ethereumjs/block": "10.1.3",

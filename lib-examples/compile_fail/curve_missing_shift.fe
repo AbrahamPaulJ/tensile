@@ -1,0 +1,11 @@
+// expect: type mismatch
+// expect: expected `Q<16>`, but `Q<28>` is given
+// The rate below the kink, with the product of a rate (16 bits) and a utilisation (12 bits) added
+// to the base without the shift back to 16 bits. It is the Solidity bug of `base + slope * u`
+// with no `/ 1e18`: it compiles, and the rate is 4096 times too large.
+use curve::{BASE, SLOPE, Rate, Utilisation}
+use qmath::{add, mul}
+
+pub fn rate_below_kink(u: Utilisation) -> Rate {
+    add(BASE, mul(SLOPE, u))
+}

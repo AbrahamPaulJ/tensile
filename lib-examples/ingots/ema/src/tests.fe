@@ -1,0 +1,59 @@
+//! Tests of the pure step, on both backends. The contract is tested on the
+//! EVM in the `deployed` ingot.
+use ingot::{ALPHA, Average, MAX_TICK, Tick, ema_fits, seed, step, whole}
+use qmath::from_int
+
+// 1000 seen from 0: one eighth of the way is 125. Then one eighth of the
+// 875 that remain (floor(125) is 125): 125 + 109.375.
+static_assert(step(
+        average: seed(Tick::from_raw(0)),
+        tick: Tick::from_raw(1000),
+    ).raw() == 125 * 256)
+static_assert(step(average: from_int<8>(125), tick: Tick::from_raw(1000)).raw() == 60000)
+// A negative average is floored, not truncated: -0.5 reads as tick -1.
+static_assert(whole(Average::from_raw(-128)).raw() == -1)
+
+/// The step written over plain integers, the way the comment in `lib.fe`
+/// states it.
+fn plain_step(average: i32, tick: i32) -> i32 {
+    average + 32 * (tick - (average >> 8))
+}
+
+#[test]
+fn step_equals_the_plain_formula() {
+    var average = seed(Tick::from_raw(-200))
+    var plain: i32 = -200 * 256
+    let ticks: [i32; 8] = [-200, 13, 13, -887272, 887272, 0, -1, 500000]
+    for i in 0 .. 8 {
+        average = step(average, tick: Tick::from_raw(ticks[i]))
+        plain = plain_step(average: plain, tick: ticks[i])
+        assert!(average.raw() == plain)
+    }
+}
+
+#[test]
+fn the_average_converges_and_never_leaves_the_range() {
+    // 400 steps at one extreme, then 400 at the other: checked arithmetic
+    // would revert on an overflow, and `ema_fits` says it cannot.
+    var average = seed(Tick::from_raw(-MAX_TICK))
+    for i in 0 .. 400 {
+        average = step(average, tick: Tick::from_raw(MAX_TICK))
+        assert!(whole(average).raw() <= MAX_TICK)
+    }
+    assert!(whole(average).raw() == MAX_TICK)
+    for i in 0 .. 400 {
+        average = step(average, tick: Tick::from_raw(-MAX_TICK))
+        assert!(whole(average).raw() >= -MAX_TICK)
+    }
+    assert!(whole(average).raw() == -MAX_TICK)
+    assert!(ALPHA.raw() == 32)
+}
+
+#[test]
+fn the_bound_is_tight_enough_to_matter() {
+    // The proof's arithmetic at the edges: the extreme product of the worst
+    // step, 2 * MAX_TICK * 256, is well inside it.
+    assert!(ema_fits(max_sample: 887272, alpha_bits: 8))
+    assert!(!ema_fits(max_sample: 887272, alpha_bits: 11))
+    assert!(!ema_fits(max_sample: 2147483647, alpha_bits: 0))
+}

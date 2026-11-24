@@ -1,0 +1,11 @@
+// expect: type mismatch
+// expect: expected `Q<0>`, but `Q<8>` is given
+// The average step with the average used as it is stored, 8 bits above a tick, instead of floored
+// to a whole tick first. In Solidity both are int256 and the line compiles; the average then moves
+// by ALPHA times (tick - 256 * average) and drifts to a wrong value with no error.
+use ema::{ALPHA, Average, Tick}
+use qmath::{add, mul, sub}
+
+pub fn step(average: Average, tick: Tick) -> Average {
+    add(average, mul(sub(tick, average), ALPHA))
+}

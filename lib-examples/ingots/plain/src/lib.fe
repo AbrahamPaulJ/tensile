@@ -1,0 +1,187 @@
+//! The three example contracts written again without the library: plain
+//! integers, hand-written shifts and masks, no scale in any type. Same
+//! selectors, same errors, same results (the `deployed` tests check that),
+//! so that `lib-examples/gas.sh` can measure what the types cost.
+//!
+//! `WadRateCurve` is the rate curve a fourth way, with `core::fixed::Wad`
+//! from Fe's own core library: decimal, 256-bit, 18 decimals. Its rate is
+//! not rounded to 1/4096 of utilisation, so it is close to `RateCurve`'s,
+//! not equal.
+//!
+//! Nothing here is checked by the compiler beyond plain integer types: a
+//! missing `>> 12` or a base at the wrong scale compiles. This ingot does not
+//! depend on `tensile`.
+use core::fixed::Wad
+
+/// A tick outside `-887272..887272` (the same error as `ema`'s).
+#[error]
+pub struct TickOutOfRange { pub tick: i32 }
+
+/// `value` or `raw` before the first `update` (the same error as `ema`'s).
+#[error]
+pub struct NotSeeded {}
+
+/// A malformed feature word (the same error as `score`'s).
+#[error]
+pub struct MalformedFeatures { pub word: u256 }
+
+pub msg PlainEmaMsg {
+    #[selector = sol("update(int32)")]
+    Update { tick: i32 } -> i32,
+    #[selector = sol("value()")]
+    Value -> i32,
+    #[selector = sol("raw()")]
+    Raw -> i32,
+}
+
+/// `TickEma` over plain `i32`.
+pub contract PlainTickEma {
+    mut seeded: bool,
+    mut average: i32,
+
+    recv PlainEmaMsg {
+        Update { tick } -> i32 uses (mut seeded, mut average) {
+            if tick < -887272 || tick > 887272 {
+                revert_error(TickOutOfRange { tick })
+            }
+            if seeded {
+                average = average + 32 * (tick - (average >> 8))
+            } else {
+                seeded = true
+                average = tick * 256
+            }
+            average >> 8
+        }
+
+        Value -> i32 uses (seeded, average) {
+            if !seeded {
+                revert_error(NotSeeded {})
+            }
+            average >> 8
+        }
+
+        Raw -> i32 uses (seeded, average) {
+            if !seeded {
+                revert_error(NotSeeded {})
+            }
+            average
+        }
+    }
+}
+
+pub msg PlainScoreMsg {
+    #[selector = sol("score(uint256)")]
+    Score { features: u256 } -> i32,
+    #[selector = sol("accepts(uint256)")]
+    Accepts { features: u256 } -> bool,
+}
+
+/// The points of `score::POINTS`, as a plain constant array.
+const POINTS: [i32; 16] = [48, 32, 24, -40, 16, -64, 20, 12, -24, 8, 36, -16, 28, -8, 4, 40]
+
+/// The sign bit of every byte.
+const SIGN_BITS: u256 = 0x8080808080808080808080808080808080808080808080808080808080808080
+
+/// Whether the 16 features are in 0..127 and the 16 unused bytes are zero.
+fn plain_well_formed(_ word: u256) -> bool {
+    word & SIGN_BITS == 0 && word << 128 == 0
+}
+
+/// `-2560 + sum of POINTS[i] * byte i`, byte 0 the most significant.
+fn plain_score(_ word: u256) -> i32 {
+    var sum: i32 = -2560
+    for i in 0 .. 16 {
+        let shift: u256 = (31 - i as u256) * 8
+        let feature: i32 = ((word >> shift) & 0xff).downcast_truncate()
+        sum += POINTS[i] * feature
+    }
+    sum
+}
+
+/// `Scorecard` over plain integers.
+pub contract PlainScorecard {
+    recv PlainScoreMsg {
+        Score { features } -> i32 {
+            if !plain_well_formed(features) {
+                revert_error(MalformedFeatures { word: features })
+            }
+            plain_score(features)
+        }
+
+        Accepts { features } -> bool {
+            if !plain_well_formed(features) {
+                revert_error(MalformedFeatures { word: features })
+            }
+            plain_score(features) >= 3072
+        }
+    }
+}
+
+pub msg PlainRateMsg {
+    #[selector = sol("borrowRate(uint256,uint256)")]
+    BorrowRate { cash: u256, borrows: u256 } -> i32,
+    #[selector = sol("utilisation(uint256,uint256)")]
+    Utilisation { cash: u256, borrows: u256 } -> i32,
+}
+
+/// Utilisation in 1/4096, as `curve::utilisation`.
+fn plain_utilisation(cash: u256, borrows: u256) -> i32 {
+    let total = cash + borrows
+    if total == 0 { return 0 }
+    let raw: u256 = borrows * 4096 / total
+    raw.downcast_truncate()
+}
+
+/// The rate in 1/65536 per year, as `curve::rate`.
+fn plain_rate(_ u: i32) -> i32 {
+    if u <= 3072 {
+        1024 + (8192 * u >> 12)
+    } else {
+        1024 + 6144 + (131072 * (u - 3072) >> 12)
+    }
+}
+
+/// `RateCurve` over plain integers.
+pub contract PlainRateCurve {
+    recv PlainRateMsg {
+        BorrowRate { cash, borrows } -> i32 {
+            plain_rate(plain_utilisation(cash, borrows))
+        }
+
+        Utilisation { cash, borrows } -> i32 {
+            plain_utilisation(cash, borrows)
+        }
+    }
+}
+
+pub msg WadRateMsg {
+    /// The yearly borrow rate as a `Wad`: 1e18 is 100%.
+    #[selector = sol("borrowRate(uint256,uint256)")]
+    BorrowRate { cash: u256, borrows: u256 } -> u256,
+}
+
+const WAD_BASE: Wad = Wad::from_raw(15625000000000000)
+const WAD_SLOPE: Wad = Wad::from_raw(125000000000000000)
+const WAD_JUMP: Wad = Wad::from_raw(2000000000000000000)
+const WAD_KINK: Wad = Wad::from_raw(750000000000000000)
+
+/// The same curve with `core::fixed::Wad`: utilisation and rates in 18
+/// decimals, every product divided back by 1e18 by the operator itself.
+pub fn wad_rate(cash: u256, borrows: u256) -> Wad {
+    let total = cash + borrows
+    let u = if total == 0 {
+        Wad::zero()
+    } else {
+        Wad::from_ratio(borrows, total)
+    }
+    WAD_BASE + WAD_SLOPE * u.min(WAD_KINK) + WAD_JUMP * u.saturating_sub(WAD_KINK)
+}
+
+/// `RateCurve` with `core::fixed::Wad`.
+pub contract WadRateCurve {
+    recv WadRateMsg {
+        BorrowRate { cash, borrows } -> u256 {
+            wad_rate(cash, borrows).raw()
+        }
+    }
+}

@@ -1,0 +1,152 @@
+//! `TickEma`: an exponential moving average of a pool's tick.
+//!
+//! A tick is a whole number (the logarithm of a price, as Uniswap v3 counts
+//! it), so a sample is a `Q<0>`. The average keeps `ALPHA_BITS` = 8 more bits
+//! than a sample, a `Q<8>`, and the smoothing factor is a `Q<8>` too:
+//! `ALPHA / 256`.
+//!
+//! ```text
+//! average' = average + ALPHA * (tick - floor(average))
+//! ```
+//!
+//! The Solidity version of this line has two classic mistakes, and here both
+//! are compile errors (`lib-examples/compile_fail/`):
+//!
+//! - subtracting the average from the tick without bringing one to the
+//!   scale of the other, which silently moves the average to a wrong value
+//!   (`ema_scale_mix.fe`);
+//! - more fractional bits than the accumulator can hold at the extreme tick
+//!   (`ema_too_many_bits.fe`): in Solidity 0.8 that is a revert at the worst
+//!   moment, the oracle stuck, and in an `unchecked` block or an `int32(..)`
+//!   cast a silent wrap. `static_assert(ema_fits(..))` below proves that no
+//!   step can overflow an int32 for any tick the contract accepts.
+use core::num::UnsignedAbs
+use qmath::{add, from_int, mul, sub}
+use tensile::{I32_MAX, Q}
+
+/// The fractional bits the average keeps beyond a sample.
+pub const ALPHA_BITS: usize = 8
+
+/// A sample: a whole tick.
+pub type Tick = Q<0>
+
+/// The average, and the smoothing factor: `ALPHA_BITS` fractional bits.
+pub type Average = Q<ALPHA_BITS>
+
+/// The smoothing factor, 32 / 256: a new tick moves the average one eighth
+/// of the way.
+pub const ALPHA: Average = Q::from_raw(32)
+
+/// The largest tick, in either direction, of a Uniswap v3 pool.
+pub const MAX_TICK: i32 = 887272
+
+/// Whether every step of the average stays inside an int32 when samples are
+/// at most `max_sample` in magnitude and the average keeps `alpha_bits` more
+/// bits than a sample (with `0 < ALPHA <= 2^alpha_bits`).
+///
+/// Write `M` for `max_sample`, `b` for `alpha_bits`, `E` for the raw
+/// average, `e = E >> b` (a floor) and `r = E - e * 2^b`, in `0..2^b`. One
+/// step is `E' = e * (2^b - A) + A * X + r`. If `|X| <= M` and `|e| <= M`,
+/// then `-2^b * M <= E' <= 2^b * M + 2^b - 1`, so `|e'| <= M` again, and the
+/// seed starts with `e = X`. The largest magnitude ever computed is the
+/// product `A * (X - e)`, at most `2^b * 2M`; `(2M + 1) * 2^b` bounds it and
+/// every average.
+pub const fn ema_fits(max_sample: u256, alpha_bits: usize) -> bool {
+    alpha_bits < 31 && (2 * max_sample + 1) << (alpha_bits as u256) <= I32_MAX
+}
+
+static_assert(ema_fits(
+    max_sample: MAX_TICK.unsigned_abs() as u256,
+    alpha_bits: ALPHA_BITS,
+))
+static_assert(ALPHA.raw() > 0 && ALPHA.raw() <= 1 << ALPHA_BITS.downcast_truncate())
+// The proof has room to spare at 8 bits and none at 11.
+static_assert(ema_fits(max_sample: 887272, alpha_bits: 10))
+static_assert(!ema_fits(max_sample: 887272, alpha_bits: 11))
+
+/// Whether `tick` is one the average accepts.
+pub const fn in_range(_ tick: i32) -> bool {
+    tick >= -MAX_TICK && tick <= MAX_TICK
+}
+
+/// The average that starts at `tick`.
+pub const fn seed(_ tick: Tick) -> Average {
+    from_int(tick.raw())
+}
+
+/// One step: the average after it has seen `tick`.
+///
+/// Each operation is at one scale, and the compiler checks it: the average
+/// comes down to the scale of a tick (`shifted<ALPHA_BITS>`), the difference
+/// is a `Q<0>`, the product with `ALPHA` is a `Q<8>` again.
+pub const fn step(average: Average, tick: Tick) -> Average {
+    add(
+        average,
+        mul(sub(tick, average.shifted<ALPHA_BITS>()), ALPHA),
+    )
+}
+
+/// The average as a whole tick, rounded toward negative infinity.
+pub const fn whole(_ average: Average) -> Tick {
+    average.shifted<ALPHA_BITS>()
+}
+
+/// A tick outside `-887272..887272`.
+#[error]
+pub struct TickOutOfRange { pub tick: i32 }
+
+/// `value` or `raw` before the first `update`.
+#[error]
+pub struct NotSeeded {}
+
+pub msg EmaMsg {
+    /// Feeds one tick and returns the average as a whole tick. The first
+    /// tick seeds the average.
+    #[selector = sol("update(int32)")]
+    Update { tick: i32 } -> i32,
+    /// The average as a whole tick, rounded toward negative infinity.
+    #[selector = sol("value()")]
+    Value -> i32,
+    /// The average with its 8 fractional bits: the tick times 256.
+    #[selector = sol("raw()")]
+    Raw -> i32,
+}
+
+/// The average lives in one storage slot, as the raw int32 of an `Average`.
+/// Anyone may call `update` here; a real oracle would restrict it to the
+/// pool or read the tick itself.
+pub contract TickEma {
+    mut seeded: bool,
+    mut average: i32,
+
+    recv EmaMsg {
+        Update { tick } -> i32 uses (mut seeded, mut average) {
+            if !in_range(tick) {
+                revert_error(TickOutOfRange { tick })
+            }
+            let sample = Tick::from_raw(tick)
+            let next = if seeded {
+                step(average: Average::from_raw(average), tick: sample)
+            } else {
+                seeded = true
+                seed(sample)
+            }
+            average = next.raw()
+            whole(next).raw()
+        }
+
+        Value -> i32 uses (seeded, average) {
+            if !seeded {
+                revert_error(NotSeeded {})
+            }
+            whole(Average::from_raw(average)).raw()
+        }
+
+        Raw -> i32 uses (seeded, average) {
+            if !seeded {
+                revert_error(NotSeeded {})
+            }
+            average
+        }
+    }
+}

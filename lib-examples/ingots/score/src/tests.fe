@@ -1,0 +1,74 @@
+//! Tests of the score, on both backends. The contract is tested on the EVM
+//! in the `deployed` ingot.
+use ingot::{BASE, Features, POINTS, THRESHOLD, accepts, score_of}
+use tensile::Q
+
+/// The points as plain integers, in the order of `POINTS`.
+const PLAIN: [i8; 16] = [48, 32, 24, -40, 16, -64, 20, 12, -24, 8, 36, -16, 28, -8, 4, 40]
+
+/// The score written the obvious way, over plain arrays.
+fn plain_score(_ features: [i8; 16]) -> i32 {
+    var sum: i32 = -2560
+    for i in 0 .. 16 {
+        sum += (PLAIN[i] as i32) * (features[i] as i32)
+    }
+    sum
+}
+
+/// 16 features in 0..127 from a seed.
+fn features_from(_ seed: usize) -> [i8; 16] {
+    var values: [i8; 16] = [0; 16]
+    for i in 0 .. 16 {
+        values[i] = ((seed + i * 37) % 128).downcast_truncate()
+    }
+    values
+}
+
+#[test]
+fn the_score_is_the_plain_sum() {
+    for seed in 0 .. 40 {
+        let values = features_from(seed * 13)
+        assert!(
+            score_of(Features::pack(values)).raw() == plain_score(values),
+        )
+    }
+}
+
+#[test]
+fn every_point_is_packed_as_written() {
+    for i in 0 .. 16 {
+        assert!(POINTS.get(i) == PLAIN[i])
+    }
+}
+
+#[test]
+fn the_extremes_reach_the_bound_and_stay_inside_it() {
+    // All positive points at 127 and the rest at 0 gives the largest score;
+    // the reverse gives the smallest. Both are inside `neuron_bound`.
+    var high: [i8; 16] = [0; 16]
+    var low: [i8; 16] = [0; 16]
+    for i in 0 .. 16 {
+        if PLAIN[i] > 0 {
+            high[i] = 127
+        } else {
+            low[i] = 127
+        }
+    }
+    assert!(score_of(Features::pack(high)).raw() == -2560 + 127 * 268)
+    assert!(score_of(Features::pack(low)).raw() == -2560 - 127 * 152)
+}
+
+#[test]
+fn the_threshold_is_inclusive() {
+    // Feature 0 alone, 48 points per unit: 3072 = -2560 + 48 * x needs
+    // x = 117.33, so 117 falls short and 118 passes.
+    var values: [i8; 16] = [0; 16]
+    values[0] = 117
+    assert!(!accepts(Features::pack(values)))
+    values[0] = 118
+    assert!(accepts(Features::pack(values)))
+    assert!(BASE.raw() < THRESHOLD.raw())
+    assert!(
+        score_of(Features::pack([0; 16])).raw() == Q<11>::from_raw(-2560).raw(),
+    )
+}

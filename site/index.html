@@ -124,7 +124,8 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   <div class="cta">
     <a class="btn primary" href="demo/">Open the live demo</a>
     <a class="btn" href="#video">Watch the video (2.5 min)</a>
-    <a class="btn" href="sepolia/">Catch a lie on Sepolia</a>
+    <a class="btn" href="fee/">Try the fee-tier model</a>
+<a class="btn" href="sepolia/">Catch a lie on Sepolia</a>
     <a class="btn" href="https://github.com/AbrahamPaulJ/tensile">Read the source</a>
   </div>
 
@@ -155,6 +156,12 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   </div>
 </section>
 
+<section id="library">
+  <h2>Also a fixed-point library for Fe</h2>
+  <p>Under the inference sits a library other Fe projects can import: values whose binary scale is part of the type, int8 vectors packed 32 to a word, and overflow bounds the compiler checks. Three contracts are built on it with no neural network in sight: a moving average of a pool's tick, a weighted scorecard and a kinked lending rate curve. A missing shift after a fixed-point multiply does not compile; a curve that would overflow at 100% utilisation fails a <code>static_assert</code>. Against plain-integer twins the types cost no gas.</p>
+  <p><a class="btn" href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/LIBRARY.md">Library guide</a> <a class="btn" href="api/">API reference</a></p>
+</section>
+
 <section id="scale">
   <h2>A dispute is priced by one neuron, not by the network</h2>
   <p>A generator writes the arbiter for any dense network, and for the shipped model its output equals the hand-written contract byte for byte. Three more models went through the whole pipeline, two of them not about digits: <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/amm-fee/README.md">a fee tier for an AMM pool</a>, predicted from a year of the mainnet USDC/WETH pool's own ticks (right on 4,399 of 7,711 held-out windows, against 3,779 for "same as the last four hours"), with a contract that rebuilds the model's input from ticks it read itself; and <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/address-risk/README.md">a scam-risk score for Ethereum accounts</a> (89.35% against a baseline of 83.37%). Measured the same way:</p>
@@ -171,6 +178,7 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
     </tbody>
   </table>
   </div>
+  <p><a class="btn primary" href="fee/">Try the fee tier in your browser</a> A real pool's ticks, a contract written in Fe that builds the model's input from them, a false claim slashed by one neuron, and a fee set only from a claim about the pool's own ticks. No wallet.</p>
   <p class="honest">Small models should simply be called: at 1,042 parameters the whole network runs on-chain for less than a claim costs. The dispute pays from a few thousand parameters up, and across these four models running grows 53 times while an honest claim grows 1.16 times. A dispute is never much cheaper than about 66,000 gas. <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/USAGE.md">Bring your own model</a> in five commands; the <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/mnist-784-128-64-10/RESULTS.md">full results</a> include the unflattering rows.</p>
 </section>
 

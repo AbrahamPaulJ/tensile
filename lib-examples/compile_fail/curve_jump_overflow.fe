@@ -1,0 +1,8 @@
+// expect: static assertion failed
+// A steeper curve, with a jump slope of 800% a year. At 100% utilisation the product
+// 4096 * 524288 is 2^31, one more than an int32 holds. In Solidity 0.8 the rate would revert
+// exactly when the pool is fully borrowed, and with it every action that accrues interest.
+use curve::{BASE, KINK, SLOPE, curve_fits}
+use tensile::Q
+
+static_assert(curve_fits(base: BASE, slope: SLOPE, jump: Q::from_raw(524288), kink: KINK))

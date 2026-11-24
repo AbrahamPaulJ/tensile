@@ -1,0 +1,4 @@
+[workspace]
+name = "tensile-lib-examples"
+version = "0.1.0"
+members = [{ path = "ingots/qmath", name = "qmath" }, { path = "ingots/ema", name = "ema" }, { path = "ingots/score", name = "score" }, { path = "ingots/curve", name = "curve" }, { path = "ingots/plain", name = "plain" }, { path = "ingots/deployed", name = "deployed" }]

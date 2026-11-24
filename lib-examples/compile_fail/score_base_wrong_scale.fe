@@ -1,0 +1,11 @@
+// expect: type mismatch
+// expect: expected `Q<11>`, but `Q<4>` is given
+// The base of the scorecard written in points (4 fractional bits) instead of points times a
+// feature (4 + 7 = 11 bits). In Solidity the intercept is one more int256 in the sum: every score
+// shifts by a constant, applicants are accepted or refused wrongly, and nothing fails.
+use score::{Features, POINTS}
+use tensile::{Q, neuron}
+
+pub fn score(features: Features) -> Q<11> {
+    neuron(row: POINTS, x: features, bias: Q<4>::from_raw(-40))
+}
