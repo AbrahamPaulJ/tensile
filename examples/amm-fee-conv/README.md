@@ -9,7 +9,7 @@ filter on that window with `tensile::filter_at`, the same function the forward p
 position.
 
 Everything below is measured. The generated tables are in `RESULTS.md`; `bash check.sh` rebuilds
-them and checks every figure (443.2 s in its last run here; no download, no NumPy).
+them and checks every figure (441.8 s in its last run here; no download, no NumPy).
 
 ## The model
 
