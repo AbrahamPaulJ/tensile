@@ -22,7 +22,9 @@ The baseline is the whole suite run by tools/gen_foundry.sh (staged under $WORK/
 Results go to build/gen-mutants.jsonl as they happen, so an interrupted run resumes where it
 stopped; docs/mutation-results-generated.md is written at the end.
 
-  wsl -e python3 /mnt/c/.../fe-challenge/tools/gen_mutants.py [--fresh] [--only NAME[,NAME...]]
+  wsl -e python3 /mnt/c/.../fe-challenge/tools/gen_mutants.py [--fresh] [--only NAME[,NAME...]] [--report]
+
+--report only rewrites the report from build/gen-mutants.jsonl (for example after editing NOTES).
 """
 import hashlib
 import json
@@ -37,6 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 WORK = Path.home() / ".cache" / "tensile-gen-mutants"
 RESULTS = ROOT / "build" / "gen-mutants.jsonl"
+PASS = ROOT / "build" / "gen-mutants-pass.txt"  # the header line of the last full pass
 REPORT = ROOT / "docs" / "mutation-results-generated.md"
 EXAMPLE = "amm-fee"
 EX = f"examples/{EXAMPLE}"
@@ -272,7 +275,27 @@ def load_done():
 
 # What each mutant that survived or changed nothing means: why it is equivalent, or which test was
 # added to kill it. Written after a run, by hand; printed at the end of the report.
-NOTES = {}
+NOTES = {
+    "n2_reads_output_as_layer_1_type": (
+        "SURVIVED, and equivalent: no test can kill it. The mutant reads the middle layer's claimed value "
+        "as `Hidden1::from_words(hidden2).get(j)` instead of `Hidden2::from_words(hidden2).get(j)`. In "
+        "144-32-16-3 both types are one packed word (`[u256; 1]`, 32 and 16 values), so it type-checks. "
+        "The two reads differ in three ways, and none is reachable: `get` asserts `j < 32` instead of "
+        "`j < 16`, but the handler has already refused `j >= HIDDEN2` with `NeuronOutOfRange` (which "
+        "`n2_no_range_check` and `n2_range_of_layer_1` show is tested); `from_words` checks that bytes 16 "
+        "to 31 are at most 127 instead of zero, but the vector has just been matched against the claim's "
+        "`hidden2_hash`, and the claim stored that hash only after `Hidden2::well_formed` accepted it "
+        "(`claim_hidden2_checked_as_32_values` is killed); and byte j of the word is the same byte for "
+        "both types. So for every call that reaches the line, both versions return the same value and "
+        "neither assertion fires (barring a keccak collision). The types separate layers only where the "
+        "Fe signatures differ: the kernel swaps (`n2_uses_layer3_kernel`, `n3_uses_layer2_kernel`) are "
+        "refused by the compiler because a hidden neuron returns an `i8` activation and the last layer an "
+        "`i32` logit, but every handler takes its vectors as plain word arrays and `from_words` accepts any "
+        "array of the right word count, so two layers whose vectors fit in the same number of words (here "
+        "both in one) can be read as each other. That is what the rest of the multi-layer rows test, and "
+        "the suite kills every such mutant that changes a value."
+    ),
+}
 
 
 def write_report(done, header):
@@ -306,7 +329,8 @@ def write_report(done, header):
         "",
         "\"Multi-layer\" marks a fault a two-layer arbiter cannot have: the middle handler, whose input and",
         "output are both hidden vectors, takes a hash, a leaf's layer number, a kernel, a range bound or a",
-        "vector from the wrong layer and still type-checks.",
+        "vector from the wrong layer. Most of these still type-check; the compiler refuses only the kernel",
+        "swaps. A survivor is either given the test that kills it or argued equivalent at the end.",
         "",
         "The suite under test is the shipped arbiter's (`evm/test/Arbiter*.t.sol`, `docs/fe-notes.md` M3.9)",
         "with the sizes taken out: shapes, rows, biases, proofs and reference samples are read from a fixture",
@@ -340,6 +364,11 @@ def main():
     only = None
     if "--only" in args:
         only = set(args[args.index("--only") + 1].split(","))
+    if "--report" in args:
+        # Only rewrite the report from the recorded results (after editing NOTES, for example).
+        write_report(load_done(), PASS.read_text().strip() if PASS.exists() else "")
+        print(f"rewrote {REPORT.relative_to(ROOT)} from {RESULTS.relative_to(ROOT)}")
+        return 0
     if "--fresh" in args and RESULTS.exists():
         RESULTS.unlink()
     RESULTS.parent.mkdir(exist_ok=True)
@@ -411,6 +440,7 @@ def main():
     header = ""
     if only is None:
         header = f"Last full pass: {len(MUTANTS)} mutants, wall {wall:.1f} s including the baseline."
+        PASS.write_text(header + "\n")
     write_report(done, header)
     print(f"gen_mutants: {counts}, wall {wall:.1f} s")
     return 0
