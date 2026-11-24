@@ -1,0 +1,2036 @@
+"""Generate the Fe workspace of a tree ensemble: model, arbiter with its tests, a whole-ensemble
+evaluator, and the native classifier's entry point (docs/spec-trees.md).
+
+Usage:
+    python tools/gen_trees.py --model MODEL.json --vectors DIR [--samples N] --out WORKSPACE
+
+Writes, under WORKSPACE:
+
+    ingots/model/src     lib.fe (types, walk, scores, classify), forest.fe (every tree as a
+                         packed constant, the forest, its compile-time checks), commitment.fe
+                         (the root and some leaves and proofs), reference.fe (the first N
+                         reference vectors as constants and unit tests)
+    ingots/arbiter/src   arbiter.fe (`Arbiter`), record.fe, signals.fe, commitment.fe (the tree
+                         and header leaves in Fe), arbiter_tests.fe, lib.fe
+    ingots/ensemble/src  lib.fe: `Ensemble`, the whole forest on-chain, and the tree holders
+                         `Trees0`, `Trees1`, ... that each run a slice of it
+    ingots/cli/src       lib.fe: `cli` and `cli trace` (input.fe and output.fe are copied from
+                         ingots/cli by tools/gen_trees_workspace.sh)
+    build/forest.json    the commitment: root, and every tree's words, leaf and proof
+
+The vectors directory is what tools/trees_vectors.py writes for the model: inputs.bin and
+trace.jsonl. Why a generator: a `msg` variant needs concrete ABI types and a selector string, so
+the number of trees and the input width cannot be const generics of a handler. Everything else
+is the `trees` ingot, the same for every model.
+
+The output is a pure function of the input files, laid out simply: run `fe fmt` on the
+workspace afterwards (tools/gen_trees_workspace.sh does). Standard library only.
+"""
+
+import argparse
+import json
+import os
+import sys
+import textwrap
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+
+import trees_ref as ref  # noqa: E402
+
+# A holder of trees for the whole-ensemble evaluator keeps at most this many bytes of tree words,
+# and a multiple of 16 trees, so that the slices' packed outputs join word for word.
+HOLDER_BUDGET = 20000
+# The honest-claim test challenges at most this many trees per test (the Fe test EVM never frees
+# memory, so very long tests grow costly).
+TESTS_PER_GROUP = 100
+
+
+class Shape:
+    """Sizes and names the templates need."""
+
+    def __init__(self, model):
+        ref.check_model(model)
+        self.model = model
+        self.name = model["name"]
+        self.n_in = model["in"]
+        self.depth = model["depth"]
+        self.classes = model["classes"]
+        self.lf = model["leaf_frac_bits"]
+        self.trees = len(model["trees"])
+        self.xw = (self.n_in + 31) // 32
+        self.lw = ref.lane_words(self.trees)
+        self.tw = ref.tree_word_count(self.depth)
+        self.nodes = ref.node_count(self.depth)
+        self.leaves = ref.leaf_count(self.depth)
+        self.commit = ref.commitment(model)
+        self.proof_depth = max(len(t["proof"]) for t in self.commit["trees"] + [self.commit["header"]])
+        per_holder = max(16, (HOLDER_BUDGET // (32 * self.tw)) // 16 * 16)
+        self.holders = [(start, min(start + per_holder, self.trees))
+                        for start in range(0, self.trees, per_holder)]
+
+    def fill(self, template, **extra):
+        values = {
+            "NAME": self.name, "IN": self.n_in, "DEPTH": self.depth, "CLASSES": self.classes,
+            "LF": self.lf, "TREES": self.trees, "XW": self.xw, "LW": self.lw, "TW": self.tw,
+            "NODES": self.nodes, "LEAVES": self.leaves, "LAST": self.trees - 1,
+            "LEAF_COUNT": self.trees + 1, "PROOF_DEPTH": self.proof_depth,
+        }
+        values.update(extra)
+        out = template
+        for key, value in values.items():
+            out = out.replace("@" + key + "@", str(value))
+        if "@" in out.replace("@@", ""):
+            leftover = [w for w in out.split() if w.count("@") >= 2 and not w.startswith("//")]
+            if leftover:
+                raise ValueError("unfilled placeholder near %s" % leftover[:3])
+        return out
+
+
+def hexword(v):
+    return "0x%064x" % v
+
+
+def words_literal(words, indent):
+    if len(words) == 1:
+        return "[%s]" % hexword(words[0])
+    inner = ",\n".join(indent + "    " + hexword(w) for w in words)
+    return "[\n%s,\n%s]" % (inner, indent)
+
+
+def ints(values):
+    return "[%s]" % ", ".join(str(v) for v in values)
+
+
+def doc(text, prefix="/// ", indent="", width=96):
+    return "\n".join(indent + prefix + line for line in
+                     textwrap.wrap(text, width - len(indent) - len(prefix), break_long_words=False,
+                                   break_on_hyphens=False))
+
+
+# ------------------------------------------------------------------------------------------------
+# The model ingot
+
+MODEL_LIB = """\
+//! GENERATED by tools/gen_trees.py from the model "@NAME@". Do not edit.
+//!
+//! The forest: @TREES@ trees of depth @DEPTH@ over @IN@ input bytes, @CLASSES@ classes, leaf values
+//! with @LF@ fractional bits (`docs/spec-trees.md`). The kernel is the `trees` ingot; this one
+//! holds the trees (`forest.fe`), the commitment (`commitment.fe`) and reference tests.
+use tensile::{Accumulators, Activations}
+use trees::{Base, Forest, Tree, TreeProbe, Unobserved}
+
+/// The input: @IN@ activations 0..127, as for the dense models.
+pub type Input = Activations<@IN@, 7>
+
+/// One tree of this model.
+pub type ModelTree = Tree<@DEPTH@, @IN@, @LF@>
+
+/// The whole forest.
+pub type Model = Forest<@TREES@, @DEPTH@, @IN@, @CLASSES@, @LF@>
+
+/// The output of every tree, the vector a claim commits to.
+pub type Outputs = trees::Outputs<@TREES@, @LF@>
+
+/// The class scores.
+pub type Scores = Accumulators<@CLASSES@, @LF@>
+
+/// Number of trees.
+pub const TREES: usize = @TREES@
+
+/// The base scores, at the leaf scale.
+pub const BASE: Base<@CLASSES@, @LF@> = Base::from_raw(@BASE@)
+
+/// The output of every tree on `x`. The probe is shown each tree's leaf and value, in order.
+pub fn walk(x: Input) -> Outputs uses (probe: mut TreeProbe) {
+    forest::FOREST.walk(x)
+}
+
+/// The output of every tree on `x`, with nothing observing.
+pub fn outputs(x: Input) -> Outputs {
+    var nobody = Unobserved {}
+    with (TreeProbe = nobody) {
+        walk(x)
+    }
+}
+
+/// The class scores on `x`.
+pub fn scores(x: Input) -> Scores {
+    outputs(x).scores(BASE)
+}
+
+/// The predicted class: the highest score, the lowest index winning a tie.
+pub fn classify(x: Input) -> usize {
+    scores(x).argmax()
+}
+
+/// Tree `t`.
+pub const fn tree(_ t: usize) -> ModelTree {
+    forest::FOREST.tree(t)
+}
+
+/// The output of one tree on packed words, the form a contract receives (`docs/spec.md` section
+/// 7, `docs/spec-trees.md` section 6). Fails if the tree or the input is malformed.
+pub fn tree_output_from_words(tree: [u256; @TW@], x: [u256; @XW@]) -> i32 {
+    ModelTree::from_words(tree).eval(Input::from_words(x)).raw()
+}
+
+/// The class scores of a vector of tree outputs given as packed words: what the class challenge
+/// recomputes. Fails if a padding lane is not zero.
+pub fn scores_from_words(outputs: [u256; @LW@]) -> Scores {
+    Outputs::from_words(outputs).scores(BASE)
+}
+"""
+
+FOREST_HEAD = """\
+//! GENERATED by tools/gen_trees.py from the model "@NAME@". Do not edit.
+//!
+//! Every tree as packed words (`docs/spec-trees.md` section 6): @NODES@ node lanes
+//! (`feature << 8 | threshold`), then @LEAVES@ leaf lanes, @TW@ words per tree. Each is a constant of
+//! its own, so that a contract holding a slice of the forest evaluates only its slice at compile
+//! time. `Tree::from_words` checks every one when it is compiled: a feature index of @IN@ or
+//! more, or a non-zero padding lane, is a compile error.
+use ingot::{BASE, Model, ModelTree}
+use tensile::I32_MAX
+use trees::{Forest, score_bound}
+
+"""
+
+FOREST_TAIL = """\
+
+/// The forest.
+pub const FOREST: Model = Forest::new(
+    [
+@LIST@
+    ],
+    base: BASE,
+)
+
+/// The largest absolute class score over every input, as recorded in the model file.
+pub const WORST_CASE: u256 = @WORST@
+
+/// The largest absolute leaf of every tree.
+const LARGEST: [u256; @TREES@] = @LARGEST@
+
+// The compiler recomputes the model's actual score range from the trees and the base, requires
+// the recorded value, and requires that it fits an int32. (The types already prove that no sum
+// of @TREES@ values of 16 bits and a base within 2^30 can overflow: `trees::sum_fits_i32`.)
+// `FOREST.worst_case()` computes the same in one constant, which for this many trees exceeds the
+// compiler's budget of steps; so each tree's largest leaf is checked on its own, then the sum.
+@LARGEST_CHECKS@
+static_assert(score_bound(BASE, LARGEST) == WORST_CASE)
+static_assert(WORST_CASE <= I32_MAX)
+
+// The compiler packs the first and the last tree from their nodes and leaves as plain numbers
+// and requires the packed constants above.
+static_assert(
+    TREE_0 == ModelTree::build(
+        features: @F0@,
+        thresholds: @T0@,
+        values: @L0@,
+    )
+)
+static_assert(
+    TREE_@LAST@ == ModelTree::build(
+        features: @FL@,
+        thresholds: @TL@,
+        values: @LL@,
+    )
+)
+"""
+
+
+def model_forest(shape):
+    model = shape.model
+    out = [shape.fill(FOREST_HEAD)]
+    for t, tree in enumerate(model["trees"]):
+        words = ref.tree_words(tree, shape.depth)
+        out.append("/// Tree %d.\npub const TREE_%d: ModelTree = ModelTree::from_words(%s)\n"
+                   % (t, t, words_literal(words, "")))
+    first, last = model["trees"][0], model["trees"][-1]
+    listing = "\n".join("        TREE_%d," % t for t in range(shape.trees))
+    largest = [max(abs(v) for v in tree["leaf"]) for tree in model["trees"]]
+    checks = "\n".join("static_assert(TREE_%d.largest_leaf() == LARGEST[%d])" % (t, t)
+                       for t in range(shape.trees))
+    out.append(shape.fill(
+        FOREST_TAIL, LIST=listing, WORST=ref.worst_case(model), LARGEST=ints(largest),
+        LARGEST_CHECKS=checks,
+        F0=ints(first["feature"]), T0=ints(first["threshold"]), L0=ints(first["leaf"]),
+        FL=ints(last["feature"]), TL=ints(last["threshold"]), LL=ints(last["leaf"])))
+    return "".join(out)
+
+
+COMMITMENT_FE = """\
+//! GENERATED by tools/gen_trees.py from the model "@NAME@". Do not edit.
+//!
+//! The model commitment (`docs/spec-trees.md` section 7, built by `tools/gen_trees.py` through
+//! `tools/trees_ref.py`): the root of the Merkle tree with one leaf per tree, in tree order, and
+//! a last leaf for the header (sizes, scale and base scores). The leaf and proof of the first
+//! and the last tree and of the header, for the tests that recompute them.
+
+/// The root: what the arbiter is deployed with.
+pub const MODEL_ROOT: u256 = @ROOT@
+
+/// Number of leaves: @TREES@ trees and the header.
+pub const LEAF_COUNT: usize = @LEAF_COUNT@
+
+/// The leaf of tree 0.
+pub const TREE_LEAF_0: u256 = @L0@
+/// Its proof: siblings from the leaf's level up to the child of the root.
+pub const TREE_PROOF_0: [u256; @N0@] = @P0@
+
+/// The leaf of tree @LAST@.
+pub const TREE_LEAF_LAST: u256 = @LL@
+/// Its proof.
+pub const TREE_PROOF_LAST: [u256; @NL@] = @PL@
+
+/// The header leaf.
+pub const HEADER_LEAF: u256 = @LH@
+/// Its proof.
+pub const HEADER_PROOF: [u256; @NH@] = @PH@
+"""
+
+
+def model_commitment(shape):
+    c = shape.commit
+    first, last, header = c["trees"][0], c["trees"][-1], c["header"]
+
+    def proof(p):
+        return words_literal([int(v, 16) for v in p], "")
+
+    return shape.fill(COMMITMENT_FE, ROOT=c["root"], L0=first["leaf"], N0=len(first["proof"]),
+                      P0=proof(first["proof"]), LL=last["leaf"], NL=len(last["proof"]),
+                      PL=proof(last["proof"]), LH=header["leaf"], NH=len(header["proof"]),
+                      PH=proof(header["proof"]))
+
+
+REFERENCE_HEAD = """\
+//! GENERATED by tools/gen_trees.py from the model "@NAME@". Do not edit.
+//!
+//! The first @SAMPLES@ reference vectors (`tools/trees_vectors.py`, the pure-Python reference
+//! `tools/trees_ref.py`): constants for the tests of other ingots, and unit tests in which the
+//! output of every tree, every class score and the class must equal the reference, for the whole
+//! forest and tree by tree from packed words.
+use ingot::{Input, Outputs, Scores, TREES, classify, outputs, scores, tree, tree_output_from_words}
+use tensile::{Accumulators, Activations}
+
+/// Number of reference samples in this module: `X0`, `X1` and so on.
+pub const SAMPLES: usize = @SAMPLES@
+
+"""
+
+REFERENCE_SAMPLE = """\
+/// The input of reference sample @K@.
+pub const X@K@: Input = Activations::from_words(@X@)
+/// The output of every tree for sample @K@.
+pub const OUTPUTS@K@: Outputs = Outputs::from_words(@O@)
+/// The class scores of sample @K@.
+pub const SCORES@K@: Scores = Accumulators::from_raw(@S@)
+/// The class of sample @K@.
+pub const CLASS@K@: usize = @C@
+
+#[test]
+fn sample_@K@_matches_the_reference() {
+    assert!(outputs(x: X@K@) == OUTPUTS@K@)
+    assert!(scores(x: X@K@) == SCORES@K@)
+    assert!(classify(x: X@K@) == CLASS@K@)
+    assert!(OUTPUTS@K@.scores(ingot::BASE) == SCORES@K@)
+}
+
+#[test]
+fn sample_@K@_matches_tree_by_tree() {
+    for t in 0 .. TREES {
+        let got = tree_output_from_words(tree: tree(t).words(), x: X@K@.words())
+        assert!(got == OUTPUTS@K@.get(t).raw())
+    }
+}
+
+"""
+
+
+def read_vectors(vectors_dir, shape, samples):
+    """The first `samples` traced samples (all of them for None), each checked against the
+    reference; the i-th entry is test row i."""
+    n = shape.n_in
+    data = open(os.path.join(vectors_dir, "inputs.bin"), "rb").read()
+    out = []
+    with open(os.path.join(vectors_dir, "trace.jsonl"), "r", encoding="utf-8") as f:
+        for line in f:
+            if len(out) == samples:
+                break
+            entry = json.loads(line)
+            k = entry["i"]
+            if k != len(out):
+                raise SystemExit("gen_trees: trace.jsonl is not in row order at row %d" % k)
+            x = list(data[k * n:(k + 1) * n])
+            _, values, scores, cls = ref.run(shape.model, x)
+            if values != entry["outputs"] or scores != entry["scores"] or cls != entry["class"]:
+                raise SystemExit("gen_trees: trace.jsonl sample %d disagrees with the reference" % k)
+            out.append({"x": x, "outputs": values, "scores": scores, "class": cls})
+    if samples is not None and len(out) < samples:
+        raise SystemExit("gen_trees: only %d traced samples, %d asked for" % (len(out), samples))
+    return out
+
+
+def input_words(x):
+    words = [0] * ((len(x) + 31) // 32)
+    for i, v in enumerate(x):
+        words[i // 32] |= v << ((31 - i % 32) * 8)
+    return words
+
+
+def model_reference(shape, vectors):
+    out = [shape.fill(REFERENCE_HEAD, SAMPLES=len(vectors))]
+    for k, v in enumerate(vectors):
+        out.append(shape.fill(REFERENCE_SAMPLE, K=k, X=words_literal(input_words(v["x"]), ""),
+                              O=words_literal(ref.outputs_words(v["outputs"]), ""),
+                              S=ints(v["scores"]), C=v["class"]))
+    return "".join(out).rstrip("\n") + "\n"
+
+
+# ------------------------------------------------------------------------------------------------
+# The arbiter ingot
+
+ARBITER_FE = """\
+//! `Arbiter`: optimistic verification of tree-ensemble inference claims
+//! (`docs/spec-trees.md` sections 7 to 9).
+//!
+//! Anyone posts a claimed inference with a bond: the input, the output of
+//! every tree and the class. Anyone can prove it wrong before the deadline in
+//! one transaction, by re-walking one tree on-chain with `Tree::eval`, the
+//! function the off-chain forest runs once per tree (the tree's words proven
+//! against the model root), or by re-adding the committed outputs. The
+//! lifecycle rule is `dispute::step` and the bond is shared out by
+//! `dispute::shares`, as in the dense arbiter: all of it back on finalising;
+//! on a slash, half to the challenger and the rest burned. Credits are pulled
+//! with `withdraw`, the only handler that sends ETH (`mut call`).
+use core::result::Result
+use dispute::{Action, Payee, Rejection, Status, Transition, shares, step}
+use ingot::commitment::tree_leaf
+use ingot::record::{Record, dynamic}
+use ingot::signals::{
+    BondTooSmall,
+    ClaimNotOpen,
+    ClassOutOfRange,
+    ClassSlashed,
+    Claimed,
+    Finalized,
+    InputMismatch,
+    MalformedInput,
+    MalformedOutputs,
+    NoFraud,
+    NotCommitted,
+    NotFinal,
+    NothingToWithdraw,
+    OutputMismatch,
+    TooEarly,
+    TooLate,
+    TransferFailed,
+    TreeOutOfRange,
+    TreeSlashed,
+    UnknownClaim,
+    Withdrawn,
+}
+use model::{BASE, Input, ModelTree, Outputs}
+use std::abi::{Bytes32, DynArray}
+use std::evm::{
+    Address,
+    Call,
+    Ctx,
+    Duration,
+    Log,
+    StorageMap,
+    Timestamp,
+    Wei,
+    keccak_words,
+    merkle,
+    wei,
+}
+
+/// Number of trees.
+const TREES: u256 = @TREES@
+
+/// Number of classes.
+const CLASSES: u8 = @CLASSES@
+
+/// The arbiter's interface. The input and the tree outputs are packed words
+/// (`docs/spec.md` section 7, `docs/spec-trees.md` section 6), a tree is its
+/// @TW@ packed words, a proof is `bytes32[]` (siblings from the leaf up, as
+/// OpenZeppelin's `MerkleProof`).
+pub msg ArbiterMsg {
+    /// Posts a claim with at least `bond()` attached: for input `x0`, tree `t`
+    /// outputs lane `t` of `outputs`, and the class is `class`. Returns the
+    /// claim number.
+    #[selector = sol("claim(uint256[@XW@],uint256[@LW@],uint8)")]
+    Claim { x0: [u256; @XW@], outputs: [u256; @LW@], class: u8 } -> u256,
+    /// Proves claim `id` wrong at tree `t`: `x0` and `outputs` must be the
+    /// committed vectors, `tree` and `proof` the committed tree `t`. Reverts
+    /// unless the tree, walked on `x0`, ends at another value than the claim's.
+    #[selector = sol(
+        "challengeTree(uint256,uint256,uint256[@XW@],uint256[@LW@],uint256[@TW@],bytes32[])",
+    )]
+    ChallengeTree {
+        id: u256,
+        t: u256,
+        x0: [u256; @XW@],
+        outputs: [u256; @LW@],
+        tree: [u256; @TW@],
+        proof: DynArray<Bytes32>,
+    },
+    /// Proves claim `id` wrong at the class: the committed outputs, added to
+    /// the base scores, give another class (highest score, lowest index on a
+    /// tie).
+    #[selector = sol("challengeClass(uint256,uint256[@LW@])")]
+    ChallengeClass { id: u256, outputs: [u256; @LW@] },
+    /// Closes claim `id` at or after its deadline and credits the whole bond
+    /// back to the claimant.
+    #[selector = sol("finalize(uint256)")]
+    Finalize { id: u256 },
+    /// Sends the caller's credits to the caller. Returns the amount.
+    #[selector = sol("withdraw()")]
+    Withdraw -> Wei,
+    /// The class of a `Final` claim. Reverts for any other claim.
+    #[selector = sol("result(uint256)")]
+    ResultOf { id: u256 } -> u8,
+    /// Number of claims posted so far; claims are numbered from 0.
+    #[selector = sol("claimCount()")]
+    ClaimCount -> u256,
+    /// Claimant, bond, deadline, class and status code (1 open, 2 slashed,
+    /// 3 final) of claim `id`.
+    #[selector = sol("claimInfo(uint256)")]
+    ClaimInfo { id: u256 } -> (Address, Wei, Timestamp, u8, u8),
+    /// The committed hashes of claim `id`: input words, output words.
+    #[selector = sol("claimHashes(uint256)")]
+    ClaimHashes { id: u256 } -> (u256, u256),
+    /// What `account` can withdraw.
+    #[selector = sol("creditOf(address)")]
+    CreditOf { account: Address } -> Wei,
+    /// The model root the arbiter was deployed with.
+    #[selector = sol("modelRoot()")]
+    ModelRoot -> u256,
+    /// The bond a claim must attach.
+    #[selector = sol("bond()")]
+    Bond -> Wei,
+    /// The total burned by slashes: half of every slashed bond, rounded up.
+    /// It stays in the contract and nobody can withdraw it.
+    #[selector = sol("burned()")]
+    Burned -> Wei,
+    /// How long a claim stays challengeable.
+    #[selector = sol("window()")]
+    Window -> Duration,
+}
+
+/// The arbiter for one forest: deployed with the model root, the bond and the
+/// challenge window. Each handler names the effects it needs: only `Withdraw`
+/// can move ETH (`mut call`); the views touch nothing but storage.
+pub contract Arbiter uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    root: u256,
+    bond: Wei,
+    window: Duration,
+    mut count: u256,
+    mut claims: StorageMap<u256, Record>,
+    mut credits: StorageMap<Address, Wei>,
+    mut burned: Wei,
+
+    init(model_root: u256, bond_required: Wei, challenge_window: Duration)
+    uses (mut root, mut bond, mut window)
+    {
+        root = model_root
+        bond = bond_required
+        window = challenge_window
+    }
+
+    recv ArbiterMsg {
+        #[payable]
+        Claim { x0, outputs, class } -> u256
+        uses (ctx, bond, window, mut count, mut claims, mut log)
+        {
+            let paid = ctx.value()
+            if paid < bond {
+                revert_error(BondTooSmall { sent: paid, required: bond })
+            }
+            if !Input::well_formed(x0) {
+                revert_error(MalformedInput {})
+            }
+            if !Outputs::well_formed(outputs) {
+                revert_error(MalformedOutputs {})
+            }
+            if class >= CLASSES {
+                revert_error(ClassOutOfRange { class })
+            }
+            let id = count
+            count = id + 1
+            let claimant = ctx.caller()
+            let deadline = ctx.timestamp() + window
+            claims[id] = Record {
+                claimant,
+                class,
+                status: Status::Open.code(),
+                bond: paid,
+                deadline,
+                x0_hash: keccak_words(x0),
+                outputs_hash: keccak_words(outputs),
+            }
+            log.emit(
+                Claimed {
+                    id,
+                    claimant,
+                    x0: dynamic(x0),
+                    outputs: dynamic(outputs),
+                    class,
+                    bond: paid,
+                    deadline,
+                },
+            )
+            id
+        }
+
+        ChallengeTree { id, t, x0, outputs, tree, proof }
+        uses (ctx, root, count, mut claims, mut credits, mut burned, mut log)
+        {
+            // Two `u256` effects are in scope here (`root` and `count`), so the one
+            // `load` reads is named.
+            let record = with (u256 = count) {
+                load(id)
+            }
+            if t >= TREES {
+                revert_error(TreeOutOfRange { tree: t })
+            }
+            if keccak_words(x0) != record.x0_hash {
+                revert_error(InputMismatch {})
+            }
+            if keccak_words(outputs) != record.outputs_hash {
+                revert_error(OutputMismatch {})
+            }
+            if !merkle::verify(proof, root, leaf: tree_leaf(tree: t, words: tree)) {
+                revert_error(NotCommitted {})
+            }
+            let recomputed = ModelTree::from_words(tree).eval(Input::from_words(x0))
+            // `t < TREES` was checked above, so narrowing it loses nothing.
+            let claimed = Outputs::from_words(outputs).get(t.downcast_truncate())
+            let challenger = ctx.caller()
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Challenge(recomputed.raw() != claimed.raw()),
+                challenger,
+            )
+            log.emit(TreeSlashed { id, challenger, tree: t })
+        }
+
+        ChallengeClass { id, outputs } uses (
+            ctx,
+            count,
+            mut claims,
+            mut credits,
+            mut burned,
+            mut log,
+        ) {
+            let record = load(id)
+            if keccak_words(outputs) != record.outputs_hash {
+                revert_error(OutputMismatch {})
+            }
+            let fraud = Outputs::from_words(outputs).scores(BASE).argmax() != record.class as usize
+            let challenger = ctx.caller()
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Challenge(fraud),
+                challenger,
+            )
+            log.emit(ClassSlashed { id, challenger })
+        }
+
+        Finalize { id } uses (ctx, count, mut claims, mut credits, mut burned, mut log) {
+            let record = load(id)
+            settle(
+                id,
+                record,
+                now: ctx.timestamp(),
+                action: Action::Finalize,
+                challenger: ctx.caller(),
+            )
+            log.emit(Finalized { id, class: record.class })
+        }
+
+        Withdraw -> Wei uses (ctx, mut call, mut credits, mut log) {
+            let account = ctx.caller()
+            let amount = credits[account]
+            if amount == Wei::zero() {
+                revert_error(NothingToWithdraw {})
+            }
+            // State first, then the transfer; a failed transfer reverts both.
+            credits[account] = Wei::zero()
+            if !call.send_value(addr: account, gas: ctx.gas(), value: amount).success() {
+                revert_error(TransferFailed {})
+            }
+            log.emit(Withdrawn { account, amount })
+            amount
+        }
+
+        ResultOf { id } -> u8 uses (count, claims) {
+            let record = load(id)
+            if record.status != Status::Final.code() {
+                revert_error(NotFinal { id })
+            }
+            record.class
+        }
+
+        ClaimCount -> u256 uses (count) {
+            count
+        }
+
+        ClaimInfo { id } -> (Address, Wei, Timestamp, u8, u8)
+        uses (count, claims)
+        {
+            let record = load(id)
+            (record.claimant, record.bond, record.deadline, record.class, record.status)
+        }
+
+        ClaimHashes { id } -> (u256, u256) uses (count, claims) {
+            let record = load(id)
+            (record.x0_hash, record.outputs_hash)
+        }
+
+        CreditOf { account } -> Wei uses (credits) {
+            credits[account]
+        }
+
+        ModelRoot -> u256 uses (root) {
+            root
+        }
+
+        Bond -> Wei uses (bond) {
+            bond
+        }
+
+        Burned -> Wei uses (burned) {
+            burned
+        }
+
+        Window -> Duration uses (window) {
+            window
+        }
+    }
+}
+
+/// Claim `id`, or `UnknownClaim`.
+fn load(_ id: u256) -> Record
+uses (count: u256, claims: StorageMap<u256, Record>)
+{
+    if id >= count {
+        revert_error(UnknownClaim { id })
+    }
+    claims[id]
+}
+
+/// Applies the lifecycle rule to claim `id`: stores the new status, credits
+/// the payee its share of the bond and adds the rest to `burned`, or reverts
+/// with the rule's reason. `challenger` is the caller; it is paid only when
+/// the rule says so. `burned` grows only on a slash; finalising burns nothing.
+fn settle(_ id: u256, _ record: Record, now: Timestamp, action: Action, challenger: Address)
+uses (claims: mut StorageMap<u256, Record>, credits: mut StorageMap<Address, Wei>, burned: mut Wei)
+{
+    let claim = dispute::Claim {
+        status: Status::from_code(record.status),
+        deadline: record.deadline.as_seconds(),
+    }
+    match step(claim, now: now.as_seconds(), action) {
+        Result::Err(why) => {
+            match why {
+                Rejection::NotOpen => revert_error(ClaimNotOpen { id }),
+                Rejection::TooLate => revert_error(TooLate { deadline: record.deadline }),
+                Rejection::TooEarly => revert_error(TooEarly { deadline: record.deadline }),
+                Rejection::NoFraud => revert_error(NoFraud {}),
+            }
+        },
+        Result::Ok(transition) => {
+            claims[id].status = transition.status.code()
+            let payee = match transition.bond_to {
+                Payee::Challenger => challenger,
+                Payee::Claimant => record.claimant,
+            }
+            let (paid, burnt) = shares(record.bond.as_wei(), transition)
+            credits[payee] = credits[payee] + wei(paid)
+            if burnt != 0 {
+                burned = burned + wei(burnt)
+            }
+        },
+    }
+}
+"""
+
+RECORD_FE = """\
+//! What the arbiter stores about a claim, and the commitments it stores.
+use core::abi::{AbiSize, Encode}
+use core::marker::Copy
+use core::ptr
+use std::abi::{DynArray, Sol}
+use std::evm::{Address, Timestamp, Wei}
+
+/// One claim in storage (`docs/spec-trees.md` section 8). The vectors
+/// themselves are only in the `Claimed` event and the calldata; a challenge
+/// must present vectors that hash to these commitments.
+///
+/// Fields narrower than a word share a slot, in declaration order: the class
+/// and status bytes do. `Address` is a whole word in Fe, so a record takes
+/// six slots: the claimant, the two bytes, the bond, the deadline and the two
+/// hashes.
+pub struct Record {
+    /// Who posted the claim and receives the bond back on `Final`.
+    pub claimant: Address,
+    /// The claimed class.
+    pub class: u8,
+    /// `dispute::Status::code()`: 1 open, 2 slashed, 3 final. 0 means no claim.
+    pub status: u8,
+    /// The ETH attached to the claim, credited exactly once when it ends.
+    pub bond: Wei,
+    /// From this time on the claim can be finalised and no longer challenged.
+    pub deadline: Timestamp,
+    /// `keccak256` of the packed input words.
+    pub x0_hash: u256,
+    /// `keccak256` of the packed words of the tree outputs.
+    pub outputs_hash: u256,
+}
+
+impl Copy for Record {}
+
+/// `values` as a dynamic ABI array, the form an event field takes.
+pub fn dynamic<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
+where T: Encode<Sol> + AbiSize + Copy
+{
+    var array = unsafe {
+        ptr::alloc_array<T>(N)
+    }
+    for i in 0 .. N {
+        array[i] = values[i]
+    }
+    DynArray::from_slice(array.as_slice())
+}
+"""
+
+SIGNALS_FE = """\
+//! The events the arbiter emits and the errors it reverts with.
+//!
+//! Every error is a Solidity custom error (`revert_error`), so a caller can
+//! tell a rejected challenge (`NoFraud`) from a malformed one (`InputMismatch`,
+//! `NotCommitted`) and a client can decode the reason.
+use std::abi::DynArray
+use std::evm::{Address, Timestamp, Wei}
+
+/// A claim was posted. Carries the full vectors, so a watcher needs nothing
+/// but the log to audit it. The vectors are dynamic arrays (`uint256[]`) of
+/// the lengths the `claim` message fixes (@XW@ and @LW@), because an event
+/// field cannot be a fixed-size array (`tests/defects/event_fixed_array.fe`).
+#[event]
+pub struct Claimed {
+    #[indexed]
+    pub id: u256,
+    #[indexed]
+    pub claimant: Address,
+    pub x0: DynArray<u256>,
+    pub outputs: DynArray<u256>,
+    pub class: u8,
+    pub bond: Wei,
+    pub deadline: Timestamp,
+}
+
+/// A tree challenge proved a claim wrong: tree `tree`, walked on the input,
+/// ends at another value. Half the bond is credited to `challenger`; the rest
+/// is burned (`dispute::shares`).
+#[event]
+pub struct TreeSlashed {
+    #[indexed]
+    pub id: u256,
+    #[indexed]
+    pub challenger: Address,
+    pub tree: u256,
+}
+
+/// A class challenge proved a claim wrong: the committed outputs add up to
+/// another class. Half the bond is credited to `challenger`; the rest is
+/// burned (`dispute::shares`).
+#[event]
+pub struct ClassSlashed {
+    #[indexed]
+    pub id: u256,
+    #[indexed]
+    pub challenger: Address,
+}
+
+/// A claim passed its deadline unchallenged. The bond is credited back to the
+/// claimant and `result(id)` now answers.
+#[event]
+pub struct Finalized {
+    #[indexed]
+    pub id: u256,
+    pub class: u8,
+}
+
+/// `account` withdrew its credits.
+#[event]
+pub struct Withdrawn {
+    #[indexed]
+    pub account: Address,
+    pub amount: Wei,
+}
+
+/// Less ETH was attached to a claim than the bond.
+#[error]
+pub struct BondTooSmall { pub sent: Wei, pub required: Wei }
+
+/// The input vector of a claim has a byte above 127 or non-zero padding.
+#[error]
+pub struct MalformedInput {}
+
+/// The output vector of a claim has a non-zero padding lane.
+#[error]
+pub struct MalformedOutputs {}
+
+/// The claimed class is not a class of the forest.
+#[error]
+pub struct ClassOutOfRange { pub class: u8 }
+
+/// No claim has this number.
+#[error]
+pub struct UnknownClaim { pub id: u256 }
+
+/// The claim is already `Slashed` or `Final`.
+#[error]
+pub struct ClaimNotOpen { pub id: u256 }
+
+/// A challenge at or after the deadline.
+#[error]
+pub struct TooLate { pub deadline: Timestamp }
+
+/// A finalisation before the deadline.
+#[error]
+pub struct TooEarly { pub deadline: Timestamp }
+
+/// The challenge recomputed exactly the committed value: the claim stands.
+#[error]
+pub struct NoFraud {}
+
+/// The tree index is not a tree of the forest.
+#[error]
+pub struct TreeOutOfRange { pub tree: u256 }
+
+/// The input presented does not hash to the committed one.
+#[error]
+pub struct InputMismatch {}
+
+/// The outputs presented do not hash to the committed ones.
+#[error]
+pub struct OutputMismatch {}
+
+/// The tree does not verify against the model root at this position.
+#[error]
+pub struct NotCommitted {}
+
+/// `result` was asked for a claim that is not `Final`.
+#[error]
+pub struct NotFinal { pub id: u256 }
+
+/// `withdraw` with no credit.
+#[error]
+pub struct NothingToWithdraw {}
+
+/// The ETH transfer of a withdrawal failed; the credit is left in place.
+#[error]
+pub struct TransferFailed {}
+"""
+
+ARBITER_COMMITMENT_FE = """\
+//! The leaves of the model commitment (`docs/spec-trees.md` section 7).
+//!
+//! `tree_leaf(t) = keccak256("tensile.tree.v0" || u256(t) || tree words)`, and
+//! the header leaf `keccak256("tensile.forest.v0" || u256(in) || u256(depth)
+//! || u256(classes) || u256(leaf_frac_bits) || u256(trees) || i256(base) ..)`.
+//! The arbiter rebuilds a tree's leaf from the words a challenger sends and
+//! verifies it against the committed root with `std::evm::merkle::verify`, so
+//! only a committed tree can be used in a challenge, and only as itself.
+//! `tools/trees_ref.py` is the off-chain twin of these functions.
+use core::num::IntWord
+use core::ptr::{self, MemSlice}
+use model::{BASE, commitment, tree}
+use std::evm::{merkle, packed}
+
+/// The domain tag at the start of every tree leaf.
+pub const TREE_TAG: String<15> = "tensile.tree.v0"
+
+/// The domain tag of the header leaf.
+pub const HEADER_TAG: String<17> = "tensile.forest.v0"
+
+/// The leaf of tree `tree` with the packed words `words`.
+pub fn tree_leaf<const N: usize>(tree: u256, words: [u256; N]) -> u256 {
+    var preimage = packed::Packed::with_capacity(bytes: 15 + 32 + 32 * N)
+    preimage.string(TREE_TAG)
+    preimage.u256(tree)
+    for word in words {
+        preimage.u256(word)
+    }
+    preimage.keccak256()
+}
+
+/// The header leaf of this model: its sizes, its leaf scale and its base
+/// scores, from the model ingot. The root commits to it, so an arbiter
+/// compiled with other base scores than the committed ones fails the tests.
+pub fn header_leaf() -> u256 {
+    var preimage = packed::Packed::with_capacity(bytes: 17 + 32 * (5 + @CLASSES@))
+    preimage.string(HEADER_TAG)
+    preimage.u256(@IN@)
+    preimage.u256(@DEPTH@)
+    preimage.u256(@CLASSES@)
+    preimage.u256(@LF@)
+    preimage.u256(@TREES@)
+    for c in 0 .. @CLASSES@ {
+        preimage.u256(BASE.at(c).raw().to_word())
+    }
+    preimage.keccak256()
+}
+
+/// A proof given as an array, in the form `merkle::verify` reads.
+fn nodes<const N: usize>(_ proof: [u256; N]) -> ref MemSlice<u256> {
+    var array = unsafe {
+        ptr::alloc_array<u256>(N)
+    }
+    for i in 0 .. N {
+        array[i] = proof[i]
+    }
+    array.as_slice()
+}
+
+#[test]
+fn leaves_equal_the_generator() {
+    assert!(tree_leaf(tree: 0, words: tree(0).words()) == commitment::TREE_LEAF_0)
+    assert!(tree_leaf(tree: @LAST@, words: tree(@LAST@).words()) == commitment::TREE_LEAF_LAST)
+    assert!(header_leaf() == commitment::HEADER_LEAF)
+}
+
+#[test]
+fn proofs_verify_against_the_root() {
+    let root = commitment::MODEL_ROOT
+    assert!(
+        merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_0),
+            root,
+            leaf: tree_leaf(tree: 0, words: tree(0).words()),
+        ),
+    )
+    assert!(
+        merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_LAST),
+            root,
+            leaf: tree_leaf(tree: @LAST@, words: tree(@LAST@).words()),
+        ),
+    )
+    assert!(merkle::verify(proof: nodes(commitment::HEADER_PROOF), root, leaf: header_leaf()))
+}
+
+#[test]
+fn a_tree_does_not_verify_as_another() {
+    let root = commitment::MODEL_ROOT
+    // Tree 0 presented as tree 1, and tree 1's words at position 0.
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_0),
+            root,
+            leaf: tree_leaf(tree: 1, words: tree(0).words()),
+        ),
+    )
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_0),
+            root,
+            leaf: tree_leaf(tree: 0, words: tree(1).words()),
+        ),
+    )
+    // The right leaf with the proof of another tree.
+    assert!(
+        !merkle::verify(
+            proof: nodes(commitment::TREE_PROOF_LAST),
+            root,
+            leaf: tree_leaf(tree: 0, words: tree(0).words()),
+        ),
+    )
+}
+"""
+
+ARBITER_LIB = """\
+//! GENERATED by tools/gen_trees.py from the model "@NAME@". Do not edit.
+//!
+//! The dispute arbiter of the forest of @TREES@ trees of depth @DEPTH@: `Arbiter` settles
+//! disputes about claimed inferences by re-walking one tree, or re-adding the committed outputs,
+//! against the committed model (`docs/spec-trees.md`). It calls the `model` ingot, which calls
+//! `trees` and `tensile`; the lifecycle is `dispute`.
+pub use arbiter::{Arbiter, ArbiterMsg}
+pub use commitment::{header_leaf, tree_leaf}
+"""
+
+TESTS_HEAD = """\
+//! Unit tests of `Arbiter` on reference sample 0: an honest claim survives
+//! every challenge; a claim with one wrong tree output or a wrong class is
+//! slashed by the challenge a watcher would name and by no other; a forged
+//! output with a class that follows from it is caught only by its tree;
+//! malformed claims, wrong proofs and vectors that do not match the
+//! commitments are rejected with their own errors; finalising and
+//! withdrawing move the bond. Each failed call is checked for its error
+//! selector, so a revert for the wrong reason fails the test.
+//!
+//! The proofs are built here from the model's own trees and base scores, by
+//! the rule of `tools/trees_ref.py`; the root must come out as the generated
+//! `MODEL_ROOT`, which proves that the compiled model is the committed one.
+use core::abi::Encode
+use core::error::ErrorVariant
+use core::marker::Copy
+use core::message::MsgVariant
+use core::ptr::MemVec
+use ingot::{Arbiter, ArbiterMsg, header_leaf, tree_leaf}
+use ingot::signals::{
+    BondTooSmall,
+    ClaimNotOpen,
+    ClassOutOfRange,
+    InputMismatch,
+    MalformedInput,
+    MalformedOutputs,
+    NoFraud,
+    NotCommitted,
+    NotFinal,
+    NothingToWithdraw,
+    OutputMismatch,
+    TooEarly,
+    TooLate,
+    TransferFailed,
+    TreeOutOfRange,
+    UnknownClaim,
+}
+use model::{Input, Outputs, commitment, reference, tree}
+use std::abi::{Bytes32, DynArray, FixedBytes, Sol}
+use std::evm::{
+    Address,
+    Call,
+    CallOutcome,
+    Ctx,
+    Duration,
+    Evm,
+    Timestamp,
+    Wei,
+    is_error,
+    seconds,
+    wei,
+}
+
+/// Gas given to every call: the Osaka limit of one transaction.
+const GAS: u256 = 16777216
+
+/// The bond the test arbiters require.
+const BOND: Wei = wei(1_000_000)
+
+/// What a slash credits the challenger: half the bond. The rest is burned.
+const REWARD: Wei = wei(500_000)
+const BURN: Wei = wei(500_000)
+
+/// A window no test can reach the end of.
+const LONG: Duration = seconds(1_000_000)
+
+/// Status codes (`dispute::Status::code`).
+const OPEN: u8 = 1
+const SLASHED: u8 = 2
+const FINAL: u8 = 3
+
+/// Number of leaves of the commitment: @TREES@ trees, then the header.
+const LEAVES: usize = @LEAF_COUNT@
+
+/// The longest proof in a tree of @LEAF_COUNT@ leaves.
+const DEPTH: usize = @PROOF_DEPTH@
+
+/// The vectors of one claim.
+struct Vectors { x0: [u256; @XW@], outputs: [u256; @LW@], class: u8 }
+
+impl Copy for Vectors {}
+
+/// The honest claim for reference sample 0.
+fn honest() -> Vectors {
+    Vectors {
+        x0: reference::X0.words(),
+        outputs: reference::OUTPUTS0.words(),
+        class: reference::CLASS0.downcast_truncate(),
+    }
+}
+
+/// The output values of reference sample 0.
+fn values() -> [i32; @TREES@] {
+    var out: [i32; @TREES@] = [0; @TREES@]
+    for t in 0 .. @TREES@ {
+        out[t] = reference::OUTPUTS0.get(t).raw()
+    }
+    out
+}
+
+/// The honest claim with the output of tree `t` changed by one.
+fn wrong_output(_ t: usize) -> Vectors {
+    var raw = values()
+    raw[t] = if raw[t] == 32767 { 32766 } else { raw[t] + 1 }
+    var vectors = honest()
+    vectors.outputs = Outputs::pack(raw).words()
+    vectors
+}
+
+/// The honest claim with another class.
+fn wrong_class() -> Vectors {
+    var vectors = honest()
+    vectors.class = (vectors.class + 1) % @CLASSES@
+    vectors
+}
+
+fn deploy(window: Duration) -> Address uses (evm: mut Evm) {
+    evm.create2<Arbiter>(
+        value: Wei::zero(),
+        args: (commitment::MODEL_ROOT, BOND, window),
+        salt: 0,
+    )
+}
+
+/// Posts `vectors` with the bond and returns the claim number.
+fn post(arbiter: Address, _ vectors: Vectors) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: BOND,
+        message: claim_message(vectors),
+    )
+}
+
+fn claim_message(_ vectors: Vectors) -> ArbiterMsg::Claim {
+    ArbiterMsg::Claim { x0: vectors.x0, outputs: vectors.outputs, class: vectors.class }
+}
+
+/// Every leaf of the commitment, in order: the trees, then the header.
+fn leaves() -> [u256; LEAVES] {
+    var out: [u256; LEAVES] = [0; LEAVES]
+    for t in 0 .. @TREES@ {
+        out[t] = tree_leaf(tree: t as u256, words: tree(t).words())
+    }
+    out[@TREES@] = header_leaf()
+    out
+}
+
+/// The proof of leaf `index` and its length, by the rule of
+/// `docs/spec-dispute.md` section 2 (sorted pairs, the odd last node promoted).
+/// The root the walk reaches must be the generated one.
+fn proof_for(_ all: [u256; LEAVES], _ index: usize) -> ([u256; DEPTH], usize) {
+    var level = all
+    var count = LEAVES
+    var position = index
+    var proof: [u256; DEPTH] = [0; DEPTH]
+    var len: usize = 0
+    while count > 1 {
+        var next: usize = 0
+        var k: usize = 0
+        while k < count {
+            if k + 1 == count {
+                level[next] = level[k]
+            } else {
+                if position == k {
+                    proof[len] = level[k + 1]
+                    len += 1
+                } else if position == k + 1 {
+                    proof[len] = level[k]
+                    len += 1
+                }
+                level[next] = std::evm::merkle::hash_pair_sorted(level[k], level[k + 1])
+            }
+            if position == k || position == k + 1 {
+                position = next
+            }
+            next += 1
+            k += 2
+        }
+        count = next
+    }
+    assert!(level[0] == commitment::MODEL_ROOT)
+    (proof, len)
+}
+
+/// The first `len` nodes of `proof` as the `bytes32[]` a challenge carries.
+fn as_bytes32(_ proof: [u256; DEPTH], len: usize) -> DynArray<Bytes32> {
+    var nodes = MemVec::with_capacity(len)
+    for i in 0 .. len {
+        nodes.push(FixedBytes<32> { val: proof[i] })
+    }
+    DynArray::from_slice(nodes.as_slice())
+}
+
+/// The proof of tree `t`.
+fn proof_of(_ all: [u256; LEAVES], _ t: usize) -> DynArray<Bytes32> {
+    let found = proof_for(all, t)
+    as_bytes32(found.0, len: found.1)
+}
+
+fn attempt<M>(arbiter: Address, _ message: own M) -> CallOutcome
+uses (evm: mut Evm)
+where M: MsgVariant<Sol> + Encode<Sol>
+{
+    evm.try_call(addr: arbiter, gas: GAS, value: Wei::zero(), message)
+}
+
+/// A tree challenge of tree `t` with its committed words and proof.
+fn challenge(arbiter: Address, id: u256, _ all: [u256; LEAVES], _ t: usize, _ vectors: Vectors) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        ArbiterMsg::ChallengeTree {
+            id,
+            t: t as u256,
+            x0: vectors.x0,
+            outputs: vectors.outputs,
+            tree: tree(t).words(),
+            proof: proof_of(all, t),
+        },
+    )
+}
+
+fn challenge_class(arbiter: Address, id: u256, _ vectors: Vectors) -> CallOutcome
+uses (evm: mut Evm)
+{
+    attempt(
+        arbiter,
+        ArbiterMsg::ChallengeClass { id, outputs: vectors.outputs },
+    )
+}
+
+fn finalize(arbiter: Address, id: u256) -> CallOutcome uses (evm: mut Evm) {
+    attempt(arbiter, ArbiterMsg::Finalize { id })
+}
+
+fn status(arbiter: Address, id: u256) -> u8 uses (evm: mut Evm) {
+    let info: (Address, Wei, Timestamp, u8, u8) = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: Wei::zero(),
+            message: ArbiterMsg::ClaimInfo { id },
+        )
+    info.4
+}
+
+fn credit(arbiter: Address, account: Address) -> Wei uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::CreditOf { account },
+    )
+}
+
+fn burned(arbiter: Address) -> Wei uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::Burned {},
+    )
+}
+
+/// After one slash by this test's account: half the bond is its credit, the
+/// other half is burned, and the arbiter still holds all of it.
+fn slashed_once(arbiter: Address) -> bool uses (evm: mut Evm) {
+    credit(arbiter, account: evm.address()) == REWARD
+        && burned(arbiter) == BURN
+        && evm.balance(arbiter) == BOND
+}
+
+fn claim_count(arbiter: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: arbiter,
+        gas: GAS,
+        value: Wei::zero(),
+        message: ArbiterMsg::ClaimCount {},
+    )
+}
+
+/// Whether the call reverted with error `E`.
+fn failed_with<E>(_ outcome: CallOutcome) -> bool where E: ErrorVariant<Sol> {
+    !outcome.success() && is_error<E>(outcome.returndata())
+}
+
+#[test]
+fn the_compiled_model_is_the_committed_one() {
+    // `proof_for` rebuilds the root from the model ingot's trees and base
+    // scores and requires `MODEL_ROOT`.
+    let all = leaves()
+    let (_, len) = proof_for(all, 0)
+    assert!(len > 0)
+}
+
+"""
+
+TESTS_HONEST_GROUP = """\
+#[test(balance = 10_000_000)]
+fn an_honest_claim_survives_the_challenges_of_trees_@FROM@_to_@TO@() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    let all = leaves()
+    for t in @FROM@ .. @END@ {
+        assert!(failed_with<NoFraud>(challenge(arbiter, id, all, t, honest())))
+    }
+    assert!(failed_with<NoFraud>(challenge_class(arbiter, id, honest())))
+    assert!(status(arbiter, id) == OPEN)
+    assert!(credit(arbiter, account: evm.address()) == Wei::zero())
+    assert!(burned(arbiter) == Wei::zero())
+}
+
+"""
+
+TESTS_BODY = """\
+#[test(balance = 10_000_000)]
+fn a_wrong_tree_output_is_slashed_by_its_tree_only() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_output(@WT@)
+    let id = post(arbiter, claimed)
+    // The other trees end at the committed values.
+    assert!(failed_with<NoFraud>(challenge(arbiter, id, all, @WT_BEFORE@, claimed)))
+    assert!(failed_with<NoFraud>(challenge(arbiter, id, all, @WT_AFTER@, claimed)))
+    // One step of one leaf does not change the class: it still follows from
+    // the committed outputs, so only the tree challenge catches this claim.
+    assert!(failed_with<NoFraud>(challenge_class(arbiter, id, claimed)))
+    assert!(status(arbiter, id) == OPEN)
+
+    assert!(challenge(arbiter, id, all, @WT@, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+    // Terminal: nothing moves it again, and it has no result.
+    assert!(failed_with<ClaimNotOpen>(challenge(arbiter, id, all, @WT@, claimed)))
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })))
+    assert!(slashed_once(arbiter))
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_class_is_slashed_by_the_class_challenge_only() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_class()
+    let id = post(arbiter, claimed)
+    assert!(failed_with<NoFraud>(challenge(arbiter, id, all, 0, claimed)))
+    assert!(failed_with<NoFraud>(challenge(arbiter, id, all, @LAST@, claimed)))
+    assert!(challenge_class(arbiter, id, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+}
+
+@FORGED@#[test(balance = 10_000_000)]
+fn malformed_claims_are_rejected() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    var padding = honest()
+    padding.x0[@XW_LAST@] |= 1
+    var high_input = honest()
+    high_input.x0[0] |= 0x80 << 248
+    var class = honest()
+    class.class = @CLASSES@
+    assert!(
+        failed_with<MalformedInput>(
+            evm.try_call(addr: arbiter, gas: GAS, value: BOND, message: claim_message(padding)),
+        ),
+    )
+    assert!(
+        failed_with<MalformedInput>(
+            evm.try_call(addr: arbiter, gas: GAS, value: BOND, message: claim_message(high_input)),
+        ),
+    )
+@OUTPUT_PADDING@    assert!(
+        failed_with<ClassOutOfRange>(
+            evm.try_call(addr: arbiter, gas: GAS, value: BOND, message: claim_message(class)),
+        ),
+    )
+    assert!(
+        failed_with<BondTooSmall>(
+            evm.try_call(
+                addr: arbiter,
+                gas: GAS,
+                value: BOND - wei(1),
+                message: claim_message(honest()),
+            ),
+        ),
+    )
+    assert!(claim_count(arbiter) == 0)
+    // Any 16-bit value is a possible output: a claim of all zeros is well
+    // formed, whatever it claims.
+    var zeros = honest()
+    zeros.outputs = [0; @LW@]
+    assert!(
+        evm.try_call(addr: arbiter, gas: GAS, value: BOND, message: claim_message(zeros)).success(),
+    )
+    assert!(claim_count(arbiter) == 1)
+}
+
+#[test(balance = 10_000_000)]
+fn a_wrong_tree_or_proof_is_rejected() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_output(@WT@)
+    let id = post(arbiter, claimed)
+    // The proof of another tree; another tree's words; one bit of the tree.
+    let other_proof = ArbiterMsg::ChallengeTree {
+        id,
+        t: @WT@,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: tree(@WT@).words(),
+        proof: proof_of(all, @WT_AFTER@),
+    }
+    let other_tree = ArbiterMsg::ChallengeTree {
+        id,
+        t: @WT@,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: tree(@WT_AFTER@).words(),
+        proof: proof_of(all, @WT@),
+    }
+    var flipped = tree(@WT@).words()
+    flipped[@TW_LAST@] = flipped[@TW_LAST@] ^ 1
+    let one_bit = ArbiterMsg::ChallengeTree {
+        id,
+        t: @WT@,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: flipped,
+        proof: proof_of(all, @WT@),
+    }
+    let beyond = ArbiterMsg::ChallengeTree {
+        id,
+        t: @TREES@,
+        x0: claimed.x0,
+        outputs: claimed.outputs,
+        tree: tree(@WT@).words(),
+        proof: proof_of(all, @WT@),
+    }
+    assert!(failed_with<NotCommitted>(attempt(arbiter, other_proof)))
+    assert!(failed_with<NotCommitted>(attempt(arbiter, other_tree)))
+    assert!(failed_with<NotCommitted>(attempt(arbiter, one_bit)))
+    assert!(failed_with<TreeOutOfRange>(attempt(arbiter, beyond)))
+    assert!(status(arbiter, id) == OPEN)
+    assert!(challenge(arbiter, id, all, @WT@, claimed).success())
+}
+
+#[test(balance = 10_000_000)]
+fn vectors_that_do_not_match_the_commitments_are_rejected() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = wrong_output(@WT@)
+    let id = post(arbiter, claimed)
+    var other_input = claimed
+    other_input.x0 = reference::X1.words()
+    var other_outputs = claimed
+    other_outputs.outputs = reference::OUTPUTS1.words()
+    assert!(failed_with<InputMismatch>(challenge(arbiter, id, all, @WT@, other_input)))
+    assert!(failed_with<OutputMismatch>(challenge(arbiter, id, all, @WT@, other_outputs)))
+    assert!(failed_with<OutputMismatch>(challenge_class(arbiter, id, other_outputs)))
+    assert!(failed_with<UnknownClaim>(challenge_class(arbiter, id: 7, claimed)))
+    assert!(status(arbiter, id) == OPEN)
+}
+
+#[test(balance = 10_000_000)]
+fn finalising_after_the_window_returns_the_bond() uses (evm: mut Evm) {
+    // A window of zero: the deadline is now, so a challenge is already too
+    // late and finalising is allowed.
+    let arbiter = deploy(window: seconds(0))
+    let id = post(arbiter, wrong_class())
+    assert!(failed_with<TooLate>(challenge_class(arbiter, id, wrong_class())))
+    assert!(finalize(arbiter, id).success())
+    assert!(status(arbiter, id) == FINAL)
+    let result: u8 = evm
+        .call(
+            addr: arbiter,
+            gas: GAS,
+            value: Wei::zero(),
+            message: ArbiterMsg::ResultOf { id },
+        )
+    assert!(result == wrong_class().class)
+    assert!(failed_with<ClaimNotOpen>(finalize(arbiter, id)))
+    assert!(failed_with<ClaimNotOpen>(challenge_class(arbiter, id, wrong_class())))
+    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(burned(arbiter) == Wei::zero())
+    assert!(evm.balance(arbiter) == BOND)
+    // The test runner's own address cannot receive ETH, so this withdrawal
+    // fails in the transfer: the credit and the balance must be untouched.
+    assert!(failed_with<TransferFailed>(attempt(arbiter, ArbiterMsg::Withdraw {})))
+    assert!(credit(arbiter, account: evm.address()) == BOND)
+    assert!(evm.balance(arbiter) == BOND)
+}
+
+#[test(balance = 10_000_000)]
+fn withdrawing_pays_the_credit_once() uses (evm: mut Evm) {
+    let arbiter = deploy(window: seconds(0))
+    let wallet = evm.create2<Wallet>(value: Wei::zero(), args: (), salt: 1)
+    let vectors = honest()
+    let id: u256 = evm
+        .call(
+            addr: wallet,
+            gas: GAS,
+            value: BOND,
+            message: WalletMsg::Post {
+                arbiter,
+                x0: vectors.x0,
+                outputs: vectors.outputs,
+                class: vectors.class,
+            },
+        )
+    assert!(finalize(arbiter, id).success())
+    assert!(credit(arbiter, account: wallet) == BOND)
+    assert!(evm.balance(wallet) == Wei::zero())
+
+    let paid: Wei = evm
+        .call(
+            addr: wallet,
+            gas: GAS,
+            value: Wei::zero(),
+            message: WalletMsg::Collect { arbiter },
+        )
+    assert!(paid == BOND)
+    assert!(evm.balance(wallet) == BOND)
+    assert!(evm.balance(arbiter) == Wei::zero())
+    assert!(credit(arbiter, account: wallet) == Wei::zero())
+    assert!(!attempt(arbiter: wallet, WalletMsg::Collect { arbiter }).success())
+    assert!(evm.balance(wallet) == BOND)
+}
+
+/// What the test wallet does: post a claim with the ETH it is sent, collect
+/// its credits.
+msg WalletMsg {
+    #[selector = sol("post(address,uint256[@XW@],uint256[@LW@],uint8)")]
+    Post { arbiter: Address, x0: [u256; @XW@], outputs: [u256; @LW@], class: u8 } -> u256,
+    #[selector = sol("collect(address)")]
+    Collect { arbiter: Address } -> Wei,
+}
+
+/// A claimant that can receive ETH, which the test runner's address cannot.
+contract Wallet uses (ctx: Ctx, call: mut Call) {
+    recv {
+        #[payable]
+        WalletMsg::Post { arbiter, x0, outputs, class } -> u256 uses (ctx, mut call) {
+            call.call(
+                addr: arbiter,
+                gas: GAS,
+                value: ctx.value(),
+                message: ArbiterMsg::Claim { x0, outputs, class },
+            )
+        }
+
+        WalletMsg::Collect { arbiter } -> Wei uses (mut call) {
+            call.call(
+                addr: arbiter,
+                gas: GAS,
+                value: Wei::zero(),
+                message: ArbiterMsg::Withdraw {},
+            )
+        }
+
+        /// Plain ETH transfers (the arbiter's `withdraw`) are accepted.
+        #[payable]
+        _ {}
+    }
+}
+
+#[test(balance = 10_000_000)]
+fn finalising_before_the_deadline_is_too_early() uses (evm: mut Evm) {
+    let arbiter = deploy(window: LONG)
+    let id = post(arbiter, honest())
+    assert!(failed_with<TooEarly>(finalize(arbiter, id)))
+    assert!(failed_with<NotFinal>(attempt(arbiter, ArbiterMsg::ResultOf { id })))
+    assert!(failed_with<NothingToWithdraw>(attempt(arbiter, ArbiterMsg::Withdraw {})))
+    assert!(status(arbiter, id) == OPEN)
+}
+"""
+
+TESTS_FORGED = """\
+/// Test row @FS@ (`trace.jsonl`), on which the forest says class @RC@.
+const FORGED_X: [u256; @XW@] = @FX@
+
+/// Its true tree outputs.
+const FORGED_TRUE: [u256; @LW@] = @FO@
+
+/// Test row @FS@ with the output of tree @FT@ forged to @FV@, and the class
+/// that follows from the forged outputs: @FC@, where the forest says @RC@.
+fn forged() -> Vectors {
+    var raw: [i32; @TREES@] = [0; @TREES@]
+    let honest_outputs = Outputs::from_words(FORGED_TRUE)
+    for t in 0 .. @TREES@ {
+        raw[t] = honest_outputs.get(t).raw()
+    }
+    raw[@FT@] = @FV@
+    Vectors { x0: FORGED_X, outputs: Outputs::pack(raw).words(), class: @FC@ }
+}
+
+#[test(balance = 10_000_000)]
+fn a_forged_output_with_a_consistent_class_is_caught_only_by_its_tree() uses (evm: mut Evm) {
+    // The strongest lie: the class is the one the forged outputs add up to,
+    // so the class challenge finds nothing. Only re-walking tree @FT@ does.
+    let arbiter = deploy(window: LONG)
+    let all = leaves()
+    let claimed = forged()
+    let x = Input::from_words(FORGED_X)
+    assert!(model::outputs(x) == Outputs::from_words(FORGED_TRUE))
+    assert!(model::classify(x) == @RC@)
+    let id = post(arbiter, claimed)
+    assert!(failed_with<NoFraud>(challenge_class(arbiter, id, claimed)))
+    assert!(failed_with<NoFraud>(challenge(arbiter, id, all, @FT_OTHER@, claimed)))
+    assert!(challenge(arbiter, id, all, @FT@, claimed).success())
+    assert!(status(arbiter, id) == SLASHED)
+    assert!(slashed_once(arbiter))
+}
+
+"""
+
+OUTPUT_PADDING = """\
+    var output_padding = honest()
+    output_padding.outputs[@LW_LAST@] |= 1
+    assert!(
+        failed_with<MalformedOutputs>(
+            evm.try_call(addr: arbiter, gas: GAS, value: BOND, message: claim_message(output_padding)),
+        ),
+    )
+"""
+
+
+def choose_wrong_tree(shape, vectors):
+    """A tree whose output, one step off, leaves the class of sample 0 unchanged: the tests need a
+    lie that only the tree challenge sees. Prefers tree 5 (any tree with neighbours)."""
+    v = vectors[0]
+    order = [5] + [t for t in range(shape.trees) if t != 5]
+    for t in order:
+        if t >= shape.trees or shape.trees < 3:
+            continue
+        raw = list(v["outputs"])
+        raw[t] = 32766 if raw[t] == 32767 else raw[t] + 1
+        if ref.class_of(shape.model, raw)[1] == v["class"]:
+            return t
+    raise SystemExit("gen_trees: no single-step lie leaves the class unchanged on sample 0")
+
+
+def choose_forgery(shape, vectors):
+    """(sample, tree, forged value, forged class): a forged output of one tree that changes the class,
+    with the class set to what the forged outputs give, or None if no reference sample allows it."""
+    for s, v in enumerate(vectors):
+        for t in range(shape.trees):
+            for value in (ref.I16_MAX, ref.I16_MIN):
+                raw = list(v["outputs"])
+                raw[t] = value
+                cls = ref.class_of(shape.model, raw)[1]
+                if cls != v["class"]:
+                    return s, t, value, cls
+    return None
+
+
+def arbiter_tests(shape, vectors, pool):
+    wt = choose_wrong_tree(shape, vectors)
+    forgery = choose_forgery(shape, pool)
+    if not forgery:
+        raise SystemExit("gen_trees: no traced sample lets one forged tree output change the class")
+    fs, ft, fv, fc = forgery
+    v = pool[fs]
+    forged = shape.fill(TESTS_FORGED, FS=fs, FT=ft, FV=fv, FC=fc, RC=v["class"],
+                        FT_OTHER=(ft + 1) % shape.trees,
+                        FX=words_literal(input_words(v["x"]), ""),
+                        FO=words_literal(ref.outputs_words(v["outputs"]), ""))
+    padding = ""
+    if shape.trees % 16:
+        padding = shape.fill(OUTPUT_PADDING, LW_LAST=shape.lw - 1)
+    out = [shape.fill(TESTS_HEAD)]
+    for start in range(0, shape.trees, TESTS_PER_GROUP):
+        end = min(start + TESTS_PER_GROUP, shape.trees)
+        out.append(shape.fill(TESTS_HONEST_GROUP, FROM=start, TO=end - 1, END=end))
+    out.append(shape.fill(TESTS_BODY, WT=wt, WT_BEFORE=(wt - 1) % shape.trees,
+                          WT_AFTER=(wt + 1) % shape.trees, FORGED=forged, OUTPUT_PADDING=padding,
+                          XW_LAST=shape.xw - 1, TW_LAST=shape.tw - 1))
+    return "".join(out)
+
+
+# ------------------------------------------------------------------------------------------------
+# The whole-ensemble evaluator
+
+ENSEMBLE_HEAD = """\
+//! GENERATED by tools/gen_trees.py from the model "@NAME@". Do not edit.
+//!
+//! `Ensemble`: the whole forest of @TREES@ trees on-chain in one call, to measure what a dispute
+//! saves. The trees do not fit one contract's code (@BYTES@ bytes of tree words), so the holders
+//! `Trees0` .. `Trees@LAST_HOLDER@` each keep a slice of at most @PER@ trees and walk it; `Ensemble` asks
+//! each for its slice's outputs, joins them and adds them up with `Outputs::scores`, the
+//! function the class challenge runs. Every tree is walked by `Tree::eval`, the function a tree
+//! challenge runs.
+use model::{BASE, Input, ModelTree, Outputs, Scores}
+use std::evm::{Address, Call}
+use trees::Outputs as Slice
+
+"""
+
+ENSEMBLE_HOLDER = """\
+/// Trees @FROM@ to @TO@.
+const SLICE_@K@: [ModelTree; @N@] = [
+@LIST@
+]
+
+/// Holds trees @FROM@ to @TO@ and walks them.
+pub contract Trees@K@ {
+    recv SliceMsg@K@ {
+        Outputs { x } -> [u256; @CW@] {
+            let input = Input::from_words(x)
+            let slice = SLICE_@K@
+            var values: [i32; @N@] = [0; @N@]
+            for t in 0 .. @N@ {
+                values[t] = slice[t].eval(input).raw()
+            }
+            Slice<@N@, @LF@>::pack(values).words()
+        }
+    }
+}
+
+/// The message of `Trees@K@`.
+pub msg SliceMsg@K@ {
+    /// The outputs of the slice's trees on `x`, packed.
+    #[selector = sol("outputs(uint256[@XW@])")]
+    Outputs { x: [u256; @XW@] } -> [u256; @CW@],
+}
+
+"""
+
+ENSEMBLE_TAIL = """\
+/// Runs the forest on an input given as packed words. A malformed input
+/// reverts.
+pub msg EnsembleMsg {
+    /// The predicted class.
+    #[selector = sol("classify(uint256[@XW@])")]
+    Classify { x: [u256; @XW@] } -> u256,
+    /// The output of every tree as packed words, and the class scores.
+    #[selector = sol("trace(uint256[@XW@])")]
+    Trace { x: [u256; @XW@] } -> ([u256; @LW@], [i32; @CLASSES@]),
+}
+
+/// The forest on the EVM.
+pub contract Ensemble uses (call: Call) {
+@FIELDS@
+
+    init(@PARAMS@) uses (@MUTS@) {
+@ASSIGN@
+    }
+
+    recv EnsembleMsg {
+        Classify { x } -> u256 uses (call, @NAMES@) {
+            let (_, scores) = run(x, @NAMES@)
+            scores.argmax() as u256
+        }
+
+        Trace { x } -> ([u256; @LW@], [i32; @CLASSES@]) uses (call, @NAMES@) {
+            let (outputs, scores) = run(x, @NAMES@)
+            (outputs.words(), scores.values())
+        }
+    }
+}
+
+/// Every slice's outputs, joined in tree order, and the class scores.
+fn run(x: [u256; @XW@], @PARAMS@) -> (Outputs, Scores) uses (call: Call) {
+    // A malformed input reverts here rather than in a holder.
+    let _ = Input::from_words(x)
+    var words: [u256; @LW@] = [0; @LW@]
+@CALLS@
+    let outputs = Outputs::from_words(words)
+    (outputs, outputs.scores(BASE))
+}
+"""
+
+
+def ensemble(shape):
+    per = shape.holders[0][1] - shape.holders[0][0]
+    out = [shape.fill(ENSEMBLE_HEAD, BYTES=32 * shape.tw * shape.trees,
+                      LAST_HOLDER=len(shape.holders) - 1, PER=per)]
+    calls = []
+    for k, (start, end) in enumerate(shape.holders):
+        n = end - start
+        cw = ref.lane_words(n)
+        listing = "\n".join("    model::forest::TREE_%d," % t for t in range(start, end))
+        out.append(shape.fill(ENSEMBLE_HOLDER, K=k, FROM=start, TO=end - 1, N=n, CW=cw,
+                              LIST=listing))
+        first_word = start // 16
+        calls.append("    let slice%d: [u256; %d] = holder%d.static(SliceMsg%d::Outputs { x })\n"
+                     "    for k in 0 .. %d {\n        words[%d + k] = slice%d[k]\n    }"
+                     % (k, cw, k, k, cw, first_word, k))
+    names = ", ".join("holder%d" % k for k in range(len(shape.holders)))
+    fields = "\n".join("    holder%d: Address," % k for k in range(len(shape.holders)))
+    params = ", ".join("holder%d: Address" % k for k in range(len(shape.holders)))
+    init_params = ", ".join("address%d: Address" % k for k in range(len(shape.holders)))
+    muts = ", ".join("mut holder%d" % k for k in range(len(shape.holders)))
+    assign = "\n".join("        holder%d = address%d" % (k, k) for k in range(len(shape.holders)))
+    tail = shape.fill(ENSEMBLE_TAIL, FIELDS=fields, PARAMS=params, MUTS=muts, ASSIGN=assign,
+                      NAMES=names, CALLS="\n".join(calls))
+    # `init` takes differently named parameters than the fields it sets.
+    tail = tail.replace("    init(%s)" % params, "    init(%s)" % init_params, 1)
+    out.append(tail)
+    return "".join(out)
+
+
+# ------------------------------------------------------------------------------------------------
+# The native classifier's entry point
+
+CLI_LIB = """\
+//! GENERATED by tools/gen_trees.py. Do not edit.
+//!
+//! `cli`: the native command-line classifier of this workspace's forest, for
+//! differential tests against the reference (`tools/diff_native_trees.py`).
+//! `input.fe` and `output.fe` are copies from the Tensile repository's
+//! `ingots/cli`.
+//!
+//! Reads from standard input until it ends. A sample is one byte per input
+//! activation, each 0..127 (`docs/spec.md` section 6).
+//!
+//! - `cli` prints the predicted class of every sample, one per line.
+//! - `cli trace` prints, for every sample, `trees v v ..` (the output of
+//!   every tree, in order, as the probe is shown them), then
+//!   `scores s s ..`, then `class c`.
+//!
+//! Exit status: 0 on success, 1 for an unknown argument, 2 for malformed
+//! input (a byte above 127, or input that ends inside a sample).
+use model::{BASE, Input, classify, walk}
+use std::io::{HostIo, Read, Write, host, write, write_char}
+use std::native::Args
+use tensile::{Activations, Q}
+use trees::TreeProbe
+
+use input::{Chunk, is_word, read_chunk}
+use output::{write_class, write_int}
+
+const OK: i32 = 0
+const USAGE: i32 = 1
+const MALFORMED: i32 = 2
+
+/// The entry point: `cli` or `cli trace`.
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    // `argc` and `argv` are the pair the entry bridge passes to `main`.
+    let args = unsafe {
+        Args::new(argc, argv)
+    }
+    let trace = if args.len() == 1 {
+        false
+    } else if args.len() == 2 && is_word(args.get(1), "trace") {
+        true
+    } else {
+        return USAGE
+    }
+    with (Read = host(), Write = host()) {
+        run(trace)
+    }
+}
+
+/// The probe of trace mode: prints the value of every tree it is shown.
+struct TreePrinter { out: HostIo }
+
+impl TreeProbe for TreePrinter {
+    fn reached<const LF: usize>(mut self, tree: usize, leaf: usize, _ value: Q<LF>) {
+        with (Write = self.out) {
+            write_char(32)
+            write_int(value.raw())
+        }
+    }
+}
+
+/// Classifies every sample on standard input and returns the exit status.
+fn run(trace: bool) -> i32 uses (r: mut Read, w: mut Write) {
+    var status = OK
+    var reading = true
+    while reading {
+        match read_chunk() {
+            Chunk::Full(values) => {
+                let x: Input = Activations::pack(values)
+                if trace {
+                    write("trees")
+                    var printer = TreePrinter { out: host() }
+                    let outputs = with (TreeProbe = printer) {
+                        walk(x)
+                    }
+                    write_char(10)
+                    let scores = outputs.scores(BASE)
+                    write("scores")
+                    for c in 0 .. scores.values().len() {
+                        write_char(32)
+                        write_int(scores.at(c).raw())
+                    }
+                    write_char(10)
+                    write("class ")
+                    write_class(scores.argmax())
+                } else {
+                    write_class(classify(x))
+                }
+            },
+            Chunk::End => {
+                reading = false
+            },
+            Chunk::Malformed => {
+                status = MALFORMED
+                reading = false
+            },
+        }
+    }
+    status
+}
+"""
+
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def generate(model, vectors_dir, samples, out):
+    shape = Shape(model)
+    vectors = read_vectors(vectors_dir, shape, samples)
+    if len(vectors) < 2:
+        raise SystemExit("gen_trees: at least two reference samples")
+    if vectors[1]["x"] == vectors[0]["x"] or vectors[1]["outputs"] == vectors[0]["outputs"]:
+        raise SystemExit("gen_trees: reference samples 0 and 1 must differ in input and outputs")
+    m = os.path.join(out, "ingots", "model", "src")
+    a = os.path.join(out, "ingots", "arbiter", "src")
+    e = os.path.join(out, "ingots", "ensemble", "src")
+    c = os.path.join(out, "ingots", "cli", "src")
+    write(os.path.join(m, "lib.fe"), shape.fill(MODEL_LIB, BASE=ints(model["base"])))
+    write(os.path.join(m, "forest.fe"), model_forest(shape))
+    write(os.path.join(m, "commitment.fe"), model_commitment(shape))
+    write(os.path.join(m, "reference.fe"), model_reference(shape, vectors))
+    write(os.path.join(a, "lib.fe"), shape.fill(ARBITER_LIB))
+    write(os.path.join(a, "arbiter.fe"), shape.fill(ARBITER_FE))
+    write(os.path.join(a, "record.fe"), RECORD_FE)
+    write(os.path.join(a, "signals.fe"), shape.fill(SIGNALS_FE))
+    write(os.path.join(a, "commitment.fe"), shape.fill(ARBITER_COMMITMENT_FE))
+    write(os.path.join(a, "arbiter_tests.fe"),
+          arbiter_tests(shape, vectors, read_vectors(vectors_dir, shape, None)))
+    write(os.path.join(e, "lib.fe"), ensemble(shape))
+    write(os.path.join(c, "lib.fe"), CLI_LIB)
+    commit = dict(shape.commit)
+    commit["holders"] = [{"holder": k, "from": s, "to": t} for k, (s, t) in enumerate(shape.holders)]
+    commit["shape"] = {"in": shape.n_in, "depth": shape.depth, "classes": shape.classes,
+                       "leaf_frac_bits": shape.lf, "trees": shape.trees, "input_words": shape.xw,
+                       "output_words": shape.lw, "tree_words": shape.tw}
+    path = os.path.join(out, "build", "forest.json")
+    write(path, json.dumps(commit, indent=1) + "\n")
+    print("gen_trees: %s, %d trees of depth %d, root %s, %d holders, %d reference samples"
+          % (shape.name, shape.trees, shape.depth, shape.commit["root"], len(shape.holders),
+             len(vectors)))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--vectors", required=True)
+    parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
+    generate(ref.load_model(args.model), args.vectors, args.samples, args.out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
