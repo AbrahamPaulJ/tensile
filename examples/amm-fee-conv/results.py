@@ -150,7 +150,7 @@ def main():
     add("| Data | %s, `../amm-fee/data/ticks.csv` (%s ticks, sha256 `%s`) |" % (task["pool"], n(task["ticks"]), task["ticks_sha256"]))
     add("| Input | the last %d moves, each `min(\\|tick - previous tick\\|, %d)`, one byte each, oldest first |" % (task["n_obs"], task["clip"]))
     add("| Target | the tier of the sum of the %d moves that start %d moves after the input ends |" % (task["horizon"], task["gap"]))
-    add("| Tiers | sum below %s: tier 0; below %s: tier 1; else tier 2 (%s) |" % (n(task["thresholds"][0]), n(task["thresholds"][1]), task["thresholds_from"]))
+    add("| Tiers | sum below %s: tier 0; below %s: tier 1; else tier 2 (thresholds from %s) |" % (n(task["thresholds"][0]), n(task["thresholds"][1]), task["thresholds_from"]))
     add("| Split, in time order | training moves %s, validation %s, test %s |" % tuple(
         "%s to %s" % (n(lo), n(hi)) for lo, hi in (task["split_moves"][k] for k in ("train", "validation", "test"))))
     add("| Training | `train.py`: seed %d, NumPy %s, %d float epochs (epoch %d kept, by validation), post-training "
@@ -201,8 +201,8 @@ def main():
     if diff <= 0:
         add("  Twice the history and three convolutions did not help on this task. This example is the demonstration")
         add("  of the mechanism (a convolutional model, its arbiter and its dispute), not a better fee model.")
-    add("- It beats persistence by %+d samples and the best constant by %+d."
-        % (m["model_correct"] - m["persistence_correct"], m["model_correct"] - m["majority_correct"]))
+    add("- It beats persistence by %s samples and the best constant by %s."
+        % (n(m["model_correct"] - m["persistence_correct"]), n(m["model_correct"] - m["majority_correct"])))
     add("- On the validation split, which chose the epoch and the scales: model %s, persistence %s, the"
         % (share(v["integer_correct"], v["samples"]), share(v["persistence_correct"], v["samples"])))
     add("  training split's majority tier %s; the float model before quantisation %s."
@@ -323,9 +323,9 @@ def main():
         % ("And the model is no better than the dense one" if diff <= 0 else "The model is also a little better than the dense one"))
     add("  mechanism: a network whose full evaluation %s is still settled by one"
         % ("does not fit a transaction" if "osaka" in network else "is costly"))
-    add("  transaction that re-runs %d to %d multiplications." % (
+    add("  transaction that re-runs %d to %d multiplications, against the whole run's %s." % (
         min(layer["kernel"] * layer["channels"] for layer in model["layers"] if layer.get("kind") == "conv1d"),
-        max(layer["in"] for layer in model["layers"])))
+        max(layer["in"] for layer in model["layers"] if layer.get("kind") != "conv1d"), n(macs(model))))
     add("")
     add("## 4. The checks behind this file (`check.sh`, one run)")
     add("")
@@ -346,10 +346,10 @@ def main():
     add("")
     add("## 5. Runtime sizes (`fe build`, limit 24,576 bytes)")
     add("")
-    add("| Contract | Runtime bytes | Under the limit by |")
+    add("| Contract | Runtime bytes | Against the limit |")
     add("|---|---|---|")
     for name, size in sizes.items():
-        add("| `%s` | %s | %s |" % (name, n(size), n(24576 - size)))
+        add("| `%s` | %s | %s |" % (name, n(size), ("%s under" % n(24576 - size)) if size <= 24576 else ("**%s over: cannot be deployed**" % n(size - 24576))))
     add("")
     add("`Wallet` is a test double from the arbiter's tests; `Network` is the whole forward pass, all weights in")
     add("its own code (no weight contracts: a convolution's filters are few).")

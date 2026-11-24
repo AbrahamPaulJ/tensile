@@ -854,3 +854,35 @@ checks its sha256 instead of compiling the compiler):
   `89d07b9`. 10,000 images, 0 mismatches at all three levels; 133 microseconds per image in Node 22 at
   `-O 1` in that run, with other builds running on the machine. Two builds give identical bytes, and so
   does a build of a copy in another directory.
+
+## 1D convolution (2026-11-24, Fe 26.5.1)
+
+`ingots/tensile/src/conv.fe` adds `conv1d`, `filter_at`, `window`, `Filters<OUT, IN, C, S, FW>` and
+`Sequence<N, C, F>`; `examples/amm-fee-conv` is the model built with it. What the build learned:
+
+- **The typed design went through unchanged.** A filter is a `Row<K * C, FW>` and one output is the
+  dense `neuron` on a `window` of the packed input, so the overflow proof is the dense `worst_case`
+  over the filter rows, in a `static_assert`, and the bias scale rule is the dense one. The output
+  length is a const generic of its own tied to the shapes by a `where` clause
+  (`M == conv_outputs(N / C, IN / C, S, OUT)`), so a result declared with the wrong length does not
+  compile. No compile-time limit was hit: the largest layer has 16 filters of 64 weights. 24 kernel
+  tests (4 of them new) pass on the EVM and native backends, and on 26.7.0 (`tools/check_fe267.sh`).
+- **Array copies again (`docs/upstream-reports.md`, defect 1).** The generated contract tests first
+  built a wrong claim by copying a hidden vector into an `[i8; 4496]` array: 3 of 22 tests halted
+  with `StackOverflow`. The generator now changes the byte inside its packed word, and all 22 pass.
+- **Contract size, not gas, was the binding limit.** The word-tree root first used a
+  `[u256; WIDTH]` array (256 nodes for 141 words): the `Arbiter` was 32,955 bytes, over EIP-170.
+  Without that one root it was 24,643; with the root computed in place over the real nodes only
+  (the same value), 22,469. `-O s` and `-O 2` changed the original by about 100 bytes. The
+  flat-binding arbiter of the same model is 27,298 bytes and does not fit at all.
+- **The generated `Network` of the conv model is 70,261 bytes of runtime code** (all weights in its
+  own code; the whole forward pass is 17,966,815 gas, about 134 gas per multiply-accumulate against
+  75 for the dense 784-128-64-10 network). Not investigated further: the model is meant to be
+  settled by the arbiter, and the generated `Network` only measures what running it would cost.
+- **Model tests grow with the sequence.** A reference sample of this model is 5,888 hidden values:
+  16 samples made a 1.1 MB test module (179.8 s on the EVM backend, 91.0 s natively), so the
+  example compiles 4 (38.6 s and 21.8 s).
+- **Tooling, not Fe:** anvil (Foundry 1.9.0) at `--hardfork osaka` does not enforce the EIP-7825
+  per-transaction gas cap unless started with `--enable-tx-gas-limit` (it mined a 17,966,815-gas
+  transaction without it), and init code of 70 kB is too long for one `cast` argument, so
+  `tools/network_gas.sh` deploys it with a raw `eth_sendTransaction`.

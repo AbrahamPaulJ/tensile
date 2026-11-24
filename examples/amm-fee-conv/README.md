@@ -9,7 +9,7 @@ filter on that window with `tensile::filter_at`, the same function the forward p
 position.
 
 Everything below is measured. The generated tables are in `RESULTS.md`; `bash check.sh` rebuilds
-them and checks every figure (@CHECK_TIME@; no download, no NumPy).
+them and checks every figure (443.2 s in its last run here; no download, no NumPy).
 
 ## The model
 
@@ -46,7 +46,32 @@ Twice the history and three convolutions bought nothing on this task. It still b
 
 ## What the dispute costs
 
-@GAS_SECTION@
+Real transactions on anvil, sample 0, each result checked. From `RESULTS.md`:
+
+| | This model, 11,059 parameters | Dense 144-32-16-3, 5,219 |
+|---|---|---|
+| Whole forward pass on-chain (`Network.classify`), gas | 17,966,815 | 466,408 |
+| `Network` runtime code (EIP-170 limit 24,576 bytes) | 70,261 bytes | 7,832 bytes |
+| `claim`, gas | 617,131 | 239,460 |
+| Honest path, `claim` + `finalize`, gas | 672,404 (3.7% of a whole run) | 290,511 (62.3%) |
+| A filter challenge (later slash), gas | 91,832 to 107,674 | |
+| Any challenge (later slash), gas | 62,940 to 110,306 (0.4% to 0.6% of a whole run) | 58,503 to 82,591 |
+| `Arbiter` deployed bytes | 22,565 | 10,814 |
+
+**The whole run does not fit.** It needs 17,966,815 gas, 1.07 times the 16,777,216 an Osaka
+transaction may use (EIP-7825): anvil started with `--enable-tx-gas-limit` refused a
+`classify` transaction with a 30,000,000 gas limit, and the figure was measured on Prague, where
+`classify` was also checked against the reference on 20 samples. Its contract, 70,261 bytes, is
+also 2.86 times the size a contract may have, so it could only be measured on an anvil with the
+size limit turned off. **Unflattering:** both are facts about the generated contract, not about
+the model. At the dense kernel's measured 75.3 gas per multiply-accumulate (784-128-64-10), this
+model's 133,856 would cost about 10.1 million gas, a projection under the cap; the generated
+convolution pays 134.2 per multiply-accumulate because layer 1 is 4,496 calls of 8 values each.
+
+**Every value is still disputed in one small transaction.** The dearest filter challenge (107,674
+gas) costs 1.61 times the smallest neuron challenge of the dense fee model (66,995), while the
+whole run costs 38.5 times as much. The claim is the dear part: it carries every hidden vector
+(6,372 bytes of calldata) and builds a word tree of each.
 
 ## How a claim commits to a long vector: the word tree
 

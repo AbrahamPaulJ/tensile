@@ -223,11 +223,21 @@ Two rules were built and measured (`examples/amm-fee-conv/RESULTS.md`):
   word that holds value `p * F + j`, with its proof. Dense layers of the same model take whole
   vectors as before and recompute the root instead of the hash. The logits keep the flat hash.
 
-The word tree is the rule for every model with a convolution: on the example model its filter
-challenges cost a fraction of the flat ones, and its claim costs more (the roots are computed
-on-chain). The measured figures are in section 12 of this file's companion,
-`examples/amm-fee-conv/RESULTS.md`; the generator still emits the flat rule on request
-(`tools/gen_arbiter.py --binding flat`), which is how the comparison is measured.
+The word tree is the default for every model with a convolution, chosen by measuring both on the
+example model (table below, from `examples/amm-fee-conv/RESULTS.md`): filter challenges cost 91,832 to 107,674 gas with the word tree against 110,965 to 208,130
+flat (the flat ones carry whole vectors and pay the EIP-7623 calldata floor), the claim costs
+617,131 against 520,243, and the flat `Arbiter` (27,394 deployed bytes) is over the 24,576-byte
+limit of EIP-170, so of the two only the word tree can be deployed for that model. The
+generator still emits the flat rule on request (`tools/gen_arbiter.py --binding flat`), which is
+how the comparison is measured.
+
+| `examples/amm-fee-conv`, anvil (Osaka) | Word tree | Flat |
+|---|---|---|
+| `claim` | 617,131 | 520,243 |
+| later `challengeFilter1` (window 8 x 1, input 288 values) | 91,832 | 180,650 |
+| later `challengeFilter2` (window 4 x 16, input 4,496 values) | 107,674 | 208,130 |
+| later `challengeFilter3` (window 4 x 16, input 1,120 values) | 100,319 | 110,965 |
+| `Arbiter` deployed bytes (limit 24,576) | 22,565 | 27,394 |
 
 **Why the word tree is sound.**
 
