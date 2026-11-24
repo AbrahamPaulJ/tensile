@@ -51,6 +51,10 @@ jobs:
           echo "$FE_267_SHA256  $HOME/fe-267/fe" | sha256sum -c -
           chmod +x "$HOME/fe-267/fe"
       - run: FE267="$HOME/fe-267/fe" bash tools/check_fe267.sh
+      - name: The library examples on 26.7.0 (lib-examples/, docs/LIBRARY.md)
+        run: FE267="$HOME/fe-267/fe" bash tools/check_fe267_lib.sh
+      - name: The library guide's walkthrough on 26.7.0, from an empty directory
+        run: FE="$HOME/fe-267/fe" bash lib-examples/walkthrough.sh
 
   wasm:
     name: WebAssembly build (Fe 26.7.0 release)
@@ -148,3 +152,25 @@ jobs:
       - run: fe --version
       - name: demo/generated/fee-assets.json equals what fe build of examples/amm-fee and the committed data give
         run: bash demo/fee_assets.sh --check
+
+  lib-examples:
+    name: The kernel as a library (lib-examples/, docs/LIBRARY.md)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Fe
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/argotorg/fe/master/feup/feup.sh | bash -s -- --version "$FE_VERSION" --no-modify-path
+          echo "$HOME/.fe/bin" >> "$GITHUB_PATH"
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: fe --version
+      # fmt, check, the tests on both backends, the compile-fail cases, fe build, gas on anvil.
+      - run: bash lib-examples/check.sh
+      - name: The recorded gas and sizes are what this run produced
+        run: git diff --exit-code lib-examples/runs/gas.json
+      - name: The guide's walkthrough, from an empty directory
+        run: bash lib-examples/walkthrough.sh
+      - name: The API documentation builds (published by pages.yml)
+        run: bash tools/api_docs.sh "$RUNNER_TEMP/api" && test -s "$RUNNER_TEMP/api/docs.json"

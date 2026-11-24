@@ -1,0 +1,166 @@
+//! Scale-tracked arithmetic on `tensile::Q<F>`, for code that is not a
+//! neural network.
+//!
+//! `Q<F>` is an int32 with `F` fractional bits. The kernel gives it a
+//! constructor, `raw`, a typed shift and a clamp: a layer needs nothing more.
+//! A price filter or a rate curve also adds, subtracts, multiplies and
+//! compares, and these are the rules of binary fixed point, stated once in
+//! the signatures:
+//!
+//! - `add` and `sub` take two values at the same scale and keep it;
+//! - `mul` adds the scales: `Q<FA>` times `Q<FB>` is `Q<{ FA + FB }>`, and
+//!   the caller drops the extra bits with `shifted`, where it can be seen;
+//! - `scaled_by` is `mul` followed by the shift back to the scale of its
+//!   first argument, for code that is generic over the scales (see below);
+//! - `lt`, `le`, `gt`, `ge`, `same`, `min` and `max` compare values at the
+//!   same scale.
+//!
+//! Anything else is a compile error. The arithmetic is checked, so an
+//! overflow reverts; `product_fits_i32` is for the `static_assert` that
+//! proves the check cannot fail for the stated ranges.
+//!
+//! These are free functions, not operators, because only the ingot that
+//! defines `Q` may implement `core::ops::Add` for it (`error[5-0000]:
+//! external trait cannot be implemented for external type`).
+//!
+//! ```fe
+//! use qmath::{add, mul, sub}
+//! use tensile::Q
+//!
+//! // ema: Q<8>, tick: Q<0>, ALPHA: Q<8>
+//! let next: Q<8> = add(ema, mul(sub(tick, ema.shifted<8>()), ALPHA))
+//! ```
+use tensile::{I32_MAX, Q}
+
+/// `a + b`. Both must have the same scale.
+pub const fn add<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> Q<F> {
+    Q::from_raw(a.raw() + b.raw())
+}
+
+/// `a - b`. Both must have the same scale.
+pub const fn sub<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> Q<F> {
+    Q::from_raw(a.raw() - b.raw())
+}
+
+/// `a * b`. The scales add: no precision is dropped, and the caller chooses
+/// where to drop it with `Q::shifted`.
+pub const fn mul<const FA: usize, const FB: usize>(_ a: Q<FA>, _ b: Q<FB>) -> Q<{ FA + FB }> {
+    Q::from_raw(a.raw() * b.raw())
+}
+
+/// `a * b` at the scale of `a`: `(a * b) >> FB`, rounded toward negative
+/// infinity. The same value as `mul(a, b).shifted<FB>()`, for generic code:
+/// the compiler does not simplify `{ FA + FB - FB }` to `FA` when `FA` and
+/// `FB` are parameters, so there the two-step form does not type-check.
+pub const fn scaled_by<const FA: usize, const FB: usize>(_ a: Q<FA>, _ b: Q<FB>) -> Q<FA>
+where FB < 32
+{
+    Q::from_raw((a.raw() * b.raw()) >> FB.downcast_truncate())
+}
+
+/// Whether `a < b`, at the same scale.
+pub const fn lt<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> bool {
+    a.raw() < b.raw()
+}
+
+/// Whether `a <= b`, at the same scale.
+pub const fn le<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> bool {
+    a.raw() <= b.raw()
+}
+
+/// Whether `a > b`, at the same scale.
+pub const fn gt<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> bool {
+    a.raw() > b.raw()
+}
+
+/// Whether `a >= b`, at the same scale.
+pub const fn ge<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> bool {
+    a.raw() >= b.raw()
+}
+
+/// Whether `a == b`, at the same scale.
+pub const fn same<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> bool {
+    a.raw() == b.raw()
+}
+
+/// The smaller of `a` and `b`, at the same scale.
+pub const fn min<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> Q<F> {
+    if b.raw() < a.raw() { b } else { a }
+}
+
+/// The larger of `a` and `b`, at the same scale.
+pub const fn max<const F: usize>(_ a: Q<F>, _ b: Q<F>) -> Q<F> {
+    if b.raw() > a.raw() { b } else { a }
+}
+
+/// The integer `whole` as a `Q<F>`: `whole * 2^F`. Fails if it does not fit:
+/// at compile time for a constant, at run time otherwise.
+pub const fn from_int<const F: usize>(_ whole: i32) -> Q<F> where F < 31 {
+    let one: i32 = 1 << F.downcast_truncate()
+    Q::from_raw(whole * one)
+}
+
+/// Whether the product of two values fits an int32 when their magnitudes are
+/// at most `max_a` and `max_b`.
+pub const fn product_fits_i32(_ max_a: u256, _ max_b: u256) -> bool {
+    max_a * max_b <= I32_MAX
+}
+
+const HALF: Q<1> = Q::from_raw(1)
+const THREE_QUARTERS: Q<2> = Q::from_raw(3)
+
+static_assert(mul(HALF, THREE_QUARTERS).raw() == 3)
+static_assert(same(mul(HALF, THREE_QUARTERS), Q<3>::from_raw(3)))
+static_assert(same(scaled_by(THREE_QUARTERS, HALF), Q<2>::from_raw(1)))
+static_assert(add(HALF, HALF).raw() == 2)
+static_assert(sub(HALF, add(HALF, HALF)).raw() == -1)
+static_assert(lt(Q<2>::from_raw(-3), THREE_QUARTERS))
+static_assert(ge(THREE_QUARTERS, THREE_QUARTERS))
+static_assert(same(min(THREE_QUARTERS, Q::from_raw(-1)), Q<2>::from_raw(-1)))
+static_assert(same(max(THREE_QUARTERS, Q::from_raw(-1)), THREE_QUARTERS))
+static_assert(from_int<8>(-3).raw() == -768)
+static_assert(same(from_int<4>(5).shifted<4>(), from_int<0>(5)))
+static_assert(product_fits_i32(46340, 46340))
+static_assert(!product_fits_i32(46341, 46341))
+
+#[test]
+fn the_scales_of_a_product_add() {
+    // 1.5 at 4 bits times -2.25 at 6 bits is -3.375 at 10 bits.
+    let a = Q<4>::from_raw(24)
+    let b = Q<6>::from_raw(-144)
+    let product: Q<10> = mul(a, b)
+    assert!(product.raw() == -3456)
+    // Back to 4 bits, rounding toward negative infinity: -3.375 is -54 / 16.
+    assert!(product.shifted<6>().raw() == -54)
+    // `scaled_by` is the same two steps.
+    assert!(same(scaled_by(a, b), product.shifted<6>()))
+}
+
+#[test]
+fn scaled_by_rounds_toward_negative_infinity() {
+    // -0.5 at 1 bit times 0.5 at 1 bit is -0.25: -1 at 1 bit (floor), not 0.
+    assert!(
+        scaled_by(Q<1>::from_raw(-1), Q<1>::from_raw(1)).raw() == -1,
+    )
+    assert!(scaled_by(Q<1>::from_raw(1), Q<1>::from_raw(1)).raw() == 0)
+}
+
+#[test]
+fn sums_and_comparisons_keep_the_scale() {
+    let a = Q<8>::from_raw(300)
+    let b = Q<8>::from_raw(-45)
+    assert!(add(a, b).raw() == 255)
+    assert!(sub(a, b).raw() == 345)
+    assert!(lt(b, a) && le(b, a) && gt(a, b) && ge(a, b))
+    assert!(!lt(a, a) && le(a, a) && !gt(a, a) && ge(a, a))
+    assert!(same(add(a, b), Q<8>::from_raw(255)))
+    assert!(!same(a, b))
+    assert!(same(min(a, b), b) && same(max(a, b), a))
+}
+
+#[test]
+fn from_int_is_the_integer_at_the_scale() {
+    assert!(from_int<0>(7).raw() == 7)
+    assert!(from_int<12>(-2).raw() == -8192)
+    assert!(from_int<30>(1).raw() == 1073741824)
+}
