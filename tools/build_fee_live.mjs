@@ -37,6 +37,9 @@ const data = {
     keeper: by('TickRelay').keeper,
     adversaries: [...new Set(record.filter((r) => r.label.startsWith('planted false claim')).map((r) => r.claimant))],
   },
+  // Ticks relayed at the start, before the first claim (read after the fact from mainnet).
+  backfill: record.filter((r) => r.label.startsWith('relay ticks') && r.block <= record.find((c) => c.label.startsWith('claim window')).block)
+    .reduce((n, r) => n + Number(r.count), 0),
   sepoliaRpc: SEPOLIA_RPC,
   mainnetRpc: MAINNET_RPC,
   model: { name: model.name, layers: model.layers.map(({ weights, bias, shift }) => ({ weights, bias, shift })) },

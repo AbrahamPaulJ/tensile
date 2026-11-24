@@ -11,7 +11,10 @@ const SCAN = 'https://sepolia.etherscan.io';
 const MAINSCAN = 'https://etherscan.io';
 const CHAIN_ID = 11155111;
 const short = (text) => `${text.slice(0, 8)}...${text.slice(-6)}`;
-const state = { rows: new Map(), selected: null, system: null };
+const state = { rows: new Map(), selected: null, system: null, now: 0 };
+// The browser re-reads at most this many of the newest relayed ticks from mainnet (one day of the
+// grid); the scheduled watcher re-reads every one.
+const CHECK_LIMIT = 288;
 
 function el(tag, text, cls) {
   const node = document.createElement(tag);
@@ -90,7 +93,9 @@ function show(id) {
   body.style.margin = '6px 0 0';
   if (finding === null) {
     head.textContent = `This claim is what the network computes: tier ${honest.cls}, ${TIER_NAMES[honest.cls]}, fee ${FEES[honest.cls] / 10000}%.`;
-    body.textContent = status === 1
+    body.textContent = status === 1 && state.now >= claim.deadline
+      ? 'Its window has closed with no challenge; the keeper finalises it on its next run, and then applies it to the oracle.'
+      : status === 1
       ? (answer?.accepted ? 'Unexpected: the node says a challenge would be accepted.' : `Asked anyway: a challenge is refused by the arbiter with ${answer?.why?.name} (${answer?.why?.meaning}).`)
       : status === 3 ? 'Its window passed unchallenged; it is final.' : 'Unexpected: it was slashed.';
   } else {
@@ -142,7 +147,7 @@ async function checkRelay(relayed, safe) {
     body.append(tr);
     rows.set(r.number, tr);
   }
-  const checkable = relayed.filter((r) => r.block <= safe);
+  const checkable = relayed.filter((r) => r.block <= safe).slice(-CHECK_LIMIT);
   const order = checkable.slice().reverse();
   let equal = 0;
   let wrong = 0;
@@ -175,7 +180,8 @@ async function checkRelay(relayed, safe) {
     $('s-relay').className = wrong ? 'no' : done === checkable.length ? 'ok' : '';
   }
   if (done) {
-    $('relay-note').textContent = `${relayed.length} ticks relayed, of mainnet blocks ${relayed[0].block.toLocaleString('en')} to ${relayed.at(-1).block.toLocaleString('en')} (every 50th block). This browser read the pool's slot0() at each of those blocks from two public mainnet nodes that had to agree: ${equal} of ${done} equal${wrong ? `, ${wrong} DIFFERENT` : ''}. The newest 48 are below.`;
+    const scope = done < relayed.length ? `the newest ${done} of those blocks (the scheduled watcher reads all ${relayed.length})` : 'each of those blocks';
+    $('relay-note').textContent = `${relayed.length} ticks relayed, of mainnet blocks ${relayed[0].block.toLocaleString('en')} to ${relayed.at(-1).block.toLocaleString('en')} (every 50th block). This browser read the pool's slot0() at ${scope} from two public mainnet nodes that had to agree: ${equal} of ${done} equal${wrong ? `, ${wrong} DIFFERENT` : ''}. The newest 48 are below. The first ${data.backfill} ticks were relayed at the start, read after the fact, so that the first window was complete at once; a late or skipped keeper run relays the ticks it missed the same way, each read at its own block (the Sepolia block column shows when).`;
   }
 }
 
@@ -187,6 +193,7 @@ async function main() {
   const head = await node.value('eth_getBlockByNumber', ['latest', false]);
   const latest = parseInt(head.number, 16);
   const now = parseInt(head.timestamp, 16);
+  state.now = now;
   const [relayState, oracleState, arbiterState, relayed, claims, slashes, finalized, feeSets] = await Promise.all([
     system.relayState(), system.oracleState(), system.arbiterState(), system.relayedTicks(latest),
     system.claims(latest), system.slashes(latest), system.finalized(latest), system.feeSets(latest),
@@ -198,7 +205,9 @@ async function main() {
   const tier = FEES.indexOf(oracleState.fee);
   $('s-fee').textContent = `${oracleState.fee / 10000}% (${last && oracleState.moves < last.end + GAP + HORIZON ? `tier ${tier}, ${TIER_NAMES[tier]}` : 'the default'})`;
   $('oracle-note').textContent = `${oracleState.moves} moves stored${grid.length ? `; the relay's events break its own grid: ${grid[0]}` : ', one per relayed tick, each 50 mainnet blocks apart'}. `
-    + (last ? `The fee comes from claim ${last.id}, about the window ending at move ${last.end}; it holds until move ${last.end + GAP + HORIZON}.` : 'No claim has been applied yet: the fee is the default, 0.30%.');
+    + (!last ? 'No claim has been applied yet: the fee is the default, 0.30%.'
+      : oracleState.moves < last.end + GAP + HORIZON ? `The fee comes from claim ${last.id}, about the window ending at move ${last.end}; it holds until move ${last.end + GAP + HORIZON}.`
+        : `The last fee applied came from claim ${last.id}, about the window ending at move ${last.end}; it held until move ${last.end + GAP + HORIZON}, so the fee is the default, 0.30%, until the keeper applies a newer final claim.`);
   if (moves.length >= N_OBS) drawMoves(windowOf(moves, moves.length));
   const fees = $('fees');
   for (const f of feeSets.slice().reverse().slice(0, 12)) {
@@ -259,7 +268,6 @@ async function main() {
   if (!claims.size) $('s-claims').textContent = `none yet (${moves.length} of ${N_OBS} moves)`;
   const open = [...state.rows.entries()].find(([, r]) => r.finding && r.status === 1);
   if (open) show(open[0]);
-  void now;
   void arbiterState;
 }
 
