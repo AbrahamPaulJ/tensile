@@ -156,6 +156,12 @@ footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); font-size: 14p
   </div>
 </section>
 
+<section id="trees">
+  <h2>Tree ensembles get the same dispute</h2>
+  <p>Gradient-boosted trees are what people actually use for tabular risk scores. A second kernel, on the same types, verifies them: a claim commits to every tree's output, and a false answer is slashed by re-walking one tree on-chain. On the scam-risk data a forest of 300 trees beats the dense network on the same 7,054 held-out accounts (F1 0.7065 against 0.6422, accuracy 91.22% against 89.35%). Running it whole on-chain costs 1,301,202 gas; claiming and finalising costs 251,287, or 19.3%; the dearest dispute 118,880, or 9.1%.</p>
+  <p class="honest">A tree dispute costs more gas than a small neuron's, and the tree arbiter has generated tests but no fuzz or mutation run. <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/examples/address-risk-trees/README.md">The example</a> and <a href="https://github.com/AbrahamPaulJ/tensile/blob/main/docs/spec-trees.md">the spec</a>.</p>
+</section>
+
 <section id="library">
   <h2>Also a fixed-point library for Fe</h2>
   <p>Under the inference sits a library other Fe projects can import: values whose binary scale is part of the type, int8 vectors packed 32 to a word, and overflow bounds the compiler checks. Three contracts are built on it with no neural network in sight: a moving average of a pool's tick, a weighted scorecard and a kinked lending rate curve. A missing shift after a fixed-point multiply does not compile; a curve that would overflow at 100% utilisation fails a <code>static_assert</code>. Against plain-integer twins the types cost no gas.</p>

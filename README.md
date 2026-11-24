@@ -29,6 +29,12 @@ ticks it observes, a false claim is slashed by re-running one neuron, and a clai
 another window is refused, which is why the consumer checks the input hash. Four models from 1,042 to 109,386 parameters show
 [where a dispute pays and where it does not](#use-it-with-your-own-network).
 
+**Not only neural networks.** [Tree ensembles](#tree-ensembles-the-same-dispute-for-the-models-people-use-on-tabular-data),
+the models people actually use for tabular risk scores, get the same one-transaction dispute: a false
+answer is slashed by re-walking one tree on-chain. On the scam-risk data a 300-tree forest beats the dense
+network (F1 0.7065 against 0.6422), costs 1,301,202 gas to run whole on-chain and 251,287 to claim and
+finalise (19.3%).
+
 **And not only inference.** The kernel is a fixed-point library other Fe projects can import: scales in
 the type, packed vectors, overflow proofs the compiler checks. [`docs/LIBRARY.md`](docs/LIBRARY.md) shows
 it running a price average, a scorecard and a lending rate curve
@@ -241,6 +247,40 @@ is the claim, with the sum of the layer widths (1.11x here), and a dispute is ne
 about 66,000 gas however small the neuron. The largest model's whole run is already 49% of the
 per-transaction gas cap; its dispute is not.
 
+## Tree ensembles: the same dispute for the models people use on tabular data
+
+`ingots/trees` is a second kernel on the same types, for gradient-boosted trees and random forests:
+`Tree<DEPTH, IN, LF>` and `Forest<TREES, DEPTH, IN, CLASSES, LF>`, with the no-overflow proof of the score
+sum in a `where` clause. A claim commits to the input and to every tree's output. One challenge names a
+tree, and the contract re-walks it (6 comparisons at depth 6) against a Merkle proof of that tree, with the
+same `Tree::eval` the off-chain forest runs; the other re-adds the committed outputs and compares the
+class. If any tree's output is wrong the first succeeds; if all are right the class follows from them, so
+a wrong class falls to the second. `ingots/dispute`, the claim state machine, is reused unchanged. Spec:
+[`docs/spec-trees.md`](docs/spec-trees.md).
+
+On the address-risk data ([`examples/address-risk-trees`](examples/address-risk-trees/README.md)), a
+forest of 300 trees of depth 6, chosen on validation and scored once on the same 7,054 held-out accounts:
+
+| | Forest 300x6 | Dense 14-32-16-2 | Always "not flagged" |
+|---|---|---|---|
+| Accuracy | 91.22% | 89.35% | 83.37% |
+| Precision | 79.59% | 72.79% | |
+| Recall | 63.51% | 57.46% | |
+| F1 | 0.7065 | 0.6422 | |
+| Whole model on-chain, gas | 1,301,202 | 154,748 | |
+| Honest path (`claim` + `finalize`), gas | 251,287 | 281,361 | |
+| Honest path against one whole run | 19.3% | 181.8% | |
+| Dearest dispute, gas | 118,880 | 101,727 | |
+| Dearest dispute against one whole run | 9.1% | 65.7% | |
+
+So on this data the better model is also the one the dispute pays for: the forest is too dear to run on
+every call and cheap to claim, where the small dense network was the reverse. The unflattering rows: a
+tree dispute costs more gas than a small neuron's (1,316 bytes of calldata against 452), the native
+classifier is slow (20 to 25 s for 7,054 rows), and the tree arbiter has its generated Fe tests and anvil
+scripts but no fuzz suite or mutation run. Choosing a whole tree per Merkle leaf over one path rests on a
+calculation, not on having built both (spec section 10). One compiler limit was met and recorded
+(`tests/defects/where_after_substitution.fe`).
+
 ## Use the kernel as a library
 
 Under the inference sits a small fixed-point library for Fe: values whose binary scale is part of the
@@ -370,7 +410,7 @@ recorder. Its narration is a synthetic voice, and the script is `demo/video/scri
 - **It proves a computation, not a good model.** The arbiter says a claim matches the committed integer
   network, nothing about whether the network is right about the digit: it is wrong on 2.56% of the test
   set, and hand-drawn digits are harder still.
-- **Dense networks only.** No convolution. Layer sizes are compile-time, so each model gets its own
+- **Dense networks and tree ensembles only.** No convolution. Layer sizes are compile-time, so each model gets its own
   generated arbiter. Layer 1's weights do not fit one contract, so `Network` reads them from others. One
   overflow proof can visit about 150,000 weights, which bounds a single layer. The native auditor and the
   WebAssembly module are built for the shipped model; the other models' off-chain side is their native
