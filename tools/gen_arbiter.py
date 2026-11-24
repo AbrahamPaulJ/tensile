@@ -1992,17 +1992,18 @@ def tests_source_conv(shape, vectors_dir, samples=3):
         head = head.replace("use ingot::signals::", "use ingot::vectors::{word_leaf, word_parent}\nuse ingot::signals::")
     out = [head]
     for k in s.hiddens():
-        n = s.outs[k - 1]
+        # The byte is changed inside its packed word. An `[i8; N]` copy of a vector of more than
+        # about 1,000 values overflows the EVM stack on Fe 26.5.1 (docs/upstream-reports.md, 1).
         out += [
-            "/// The honest claim with value `j` of hidden vector %d changed by one." % k,
+            "/// The honest claim with value `j` of hidden vector %d changed by one, in" % k,
+            "/// its packed word (byte `j % 32` of word `j / 32`, `docs/spec.md` section 7).",
             "fn wrong_%s(_ j: usize) -> Vectors {" % s.hid(k),
-            I1 + "var values: [i8; %d] = [0; %d]" % (n, n),
-            I1 + "for i in 0 .. %d {" % n,
-            I2 + "values[i] = reference::HIDDEN%d_0.get(i)" % k,
-            I1 + "}",
-            I1 + "values[j] = if values[j] == 127 { 126 } else { values[j] + 1 }",
             I1 + "var vectors = honest()",
-            I1 + "vectors.%s = Activations<%d, %d>::pack(values).words()" % (s.hid(k), n, s.frac[k - 1]),
+            I1 + "let shift: u256 = ((31 - j % 32) * 8) as u256",
+            I1 + "let word = vectors.%s[j / 32]" % s.hid(k),
+            I1 + "let old = (word >> shift) & 0xff",
+            I1 + "let new: u256 = if old == 127 { 126 } else { old + 1 }",
+            I1 + "vectors.%s[j / 32] = word ^ ((old ^ new) << shift)" % s.hid(k),
             I1 + "vectors",
             "}",
             "",
