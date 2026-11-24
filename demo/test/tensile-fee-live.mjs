@@ -85,8 +85,23 @@ console.log(`TickRelay ${config.relay}: ${relayed.length} ticks, mainnet blocks 
 const safe = await mainnet.safeHead();
 const recheck = Number(env.RECHECK ?? 288);
 const upTo = relayed.filter((r) => r.block <= safe);
-const checkable = recheck > 0 ? upTo.slice(-recheck) : upTo;
-const real = await mainnet.ticksAt(checkable.map((r) => r.block));
+const wanted = recheck > 0 ? upTo.slice(-recheck) : upTo;
+// Free public nodes often refuse the state of blocks hours old. A batch that two nodes did not
+// answer is reported as not checked, which is not a wrong result: only a tick that differs fails.
+const checkable = [];
+const real = [];
+let unanswered = 0;
+for (let i = 0; i < wanted.length; i += 25) {
+  const part = wanted.slice(i, i + 25);
+  try {
+    real.push(...(await mainnet.ticksAt(part.map((r) => r.block))));
+    checkable.push(...part);
+  } catch (error) {
+    if (!String(error.message).includes('mainnet nodes answered')) throw error;
+    unanswered += part.length;
+  }
+}
+if (unanswered) console.log(`::warning::relay against mainnet: ${unanswered} of ${wanted.length} ticks NOT CHECKED in this run, the public mainnet nodes did not answer for their blocks`);
 const compared = compareTicks(checkable, real);
 for (const w of compared.wrong) fail(`relayed tick ${w.number} (mainnet block ${w.block}) is ${w.relayed}; mainnet says ${w.mainnet}`);
 const nodes = [...new Set(real.flatMap((r) => r.nodes))].join(', ');
