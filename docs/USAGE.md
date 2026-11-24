@@ -25,6 +25,19 @@ hidden activations 0..127. A hidden layer is `clamp(acc >> shift, 0, 127)`; the 
 `"shift": null` and its accumulators are the logits. `examples/mnist-784-128-64-10/train.py` shows
 one way to get such a file from float training (post-training quantisation, any number of layers).
 
+Any layer but the last may be a 1D convolution without padding (`docs/spec.md` section 8):
+
+```json
+{"kind": "conv1d", "in": 288, "out": 4496, "channels": 1, "kernel": 8, "stride": 1,
+ "weight_frac_bits": 7, "shift": 8, "weights": [..16 filters of kernel * channels ints..], "bias": [..16 ints..]}
+```
+
+`in` is positions times channels, `out` is output positions times filters, and the values run
+position by position. The generated arbiter then has a `challengeFilterK` for that layer, which
+names a filter and a position and re-runs that filter on that one window, and the claim commits to
+its vectors with word trees (`docs/spec-dispute.md` section 11). `examples/amm-fee-conv` is a
+worked example, from training to the dispute's gas.
+
 ## 2. Generate, test, build
 
 ```
@@ -116,10 +129,12 @@ are fixed to the shipped 784-32-10 model; neither is generated for other models.
 
 ## 6. Limits
 
-- **Dense layers only**, int8 weights, power-of-two scales, ReLU as a clamp to 0..127,
-  `input_frac_bits` 7. At least two layers, at most 255 classes; the generated tests need three or
-  more neurons in every hidden layer and one of the first three reference samples to differ from
-  sample 0 in every vector.
+- **Dense layers and 1D convolutions only** (no 2D convolution, no padding, no pooling: stride
+  instead), int8 weights, power-of-two scales, ReLU as a clamp to 0..127,
+  `input_frac_bits` 7. At least two layers, the last one dense, at most 255 classes; the generated
+  tests need three or more neurons in every hidden layer (three or more positions and filters in a
+  convolution) and one of the first three reference samples to differ from sample 0 in every
+  vector.
 - **Sizes are fixed at compile time.** A new model is a new workspace, a new root and a new
   deployment. Nothing is upgradable.
 - **One overflow proof visits at most about 150,000 weights**: a layer of 192 x 784 compiled and

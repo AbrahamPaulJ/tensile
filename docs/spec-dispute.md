@@ -141,7 +141,8 @@ Let `f` be the network of `docs/spec.md` with the committed weights.
 - **Data availability.** All vectors of a claim are in its calldata and event, so the watcher needs
   nothing from the claimant.
 - **Hash and Merkle soundness.** Keccak-256 collision resistance.
-- **Scope.** Dense layers only. The arbiter says a claim matches the committed integer network; it
+- **Scope.** Dense layers and 1D convolutions (`docs/spec.md` section 8; the dispute for a
+  convolution is section 11). The arbiter says a claim matches the committed integer network; it
   says nothing about whether that network is a good model.
 
 ## 8. Structure of the code
@@ -182,3 +183,70 @@ Measured 2026-11-07 on anvil (Osaka), after the half burn, real transactions for
 A slash costs about 22,000 gas more than before the burn: the first write of `burned` to a zero slot. A failed
 challenge reverts, so `cast estimate` cannot measure it; the demo page mines one and shows its gas. All current
 figures: `docs/numbers.md`.
+
+## 11. Convolution layers (added 2026-11-24)
+
+A convolution (`docs/spec.md` section 8) changes three things: what a model leaf holds, what a
+challenge names, and, for a model that has one, how a claim commits to its vectors. Sections 3 to
+9 are otherwise unchanged, and a model without a convolution is committed and disputed exactly as
+before (its generated arbiter is byte for byte what it was; `tools/check_arbiter_gen.sh`).
+
+**Model leaf per filter.** A filter's weights are shared by every position, so the model tree has
+one leaf per filter, not per output value: `leaf(l, j)` of section 2 with `j` the filter index and
+`row words` the filter's `K * C` weights packed. A convolution layer of `F` filters adds `F`
+leaves whatever its number of positions.
+
+**Filter challenge.** One handler per convolution layer, `challengeFilterK`, naming `(claim,
+filter j, position p)` and supplying filter `j` (row words, bias, Merkle proof) and the input
+values that the window of `p` reads. It recomputes output value `p * F + j` with
+`tensile::filter_at` (the dense `neuron` on the window, the code the forward pass runs for every
+position) and slashes if it differs from the claimed value. `j >= F` or `p >= P` reverts.
+
+**Binding the patch to the claim.** The contract must know that the window it recomputes on is
+the window of the claimed layer input, and that the value it compares with is the claimed output.
+Two rules were built and measured (`examples/amm-fee-conv/RESULTS.md`):
+
+- *Flat* (the dense rule): the claim stores `keccak256` of each packed vector; a filter challenge
+  supplies the whole layer input and the whole output, the contract hashes both against the
+  claim, cuts the window out of the input and reads the claimed value from the output.
+- *Word tree*: the claim commits to each packed vector (input, every hidden vector) as the root of
+  a Merkle tree over its 32-byte words, computed on-chain at claim time from the claimed words:
+
+  ```
+  word leaf(i) = keccak256( "tensile.word.v0" padded to 32 bytes || u256(i) || word i )
+  ```
+
+  The leaves are padded with zero nodes to the next power of two; a node is zero over two zero
+  nodes and otherwise the sorted-pair hash of section 2. A filter challenge supplies only the
+  `SPAN = min(ceil(K * C / 32) + 1, words of the input)` consecutive input words that start at
+  `first(p) = min(p * S * C / 32, input words - SPAN)`, each with its proof, and the one output
+  word that holds value `p * F + j`, with its proof. Dense layers of the same model take whole
+  vectors as before and recompute the root instead of the hash. The logits keep the flat hash.
+
+The word tree is the rule for every model with a convolution: on the example model its filter
+challenges cost a fraction of the flat ones, and its claim costs more (the roots are computed
+on-chain). The measured figures are in section 12 of this file's companion,
+`examples/amm-fee-conv/RESULTS.md`; the generator still emits the flat rule on request
+(`tools/gen_arbiter.py --binding flat`), which is how the comparison is measured.
+
+**Why the word tree is sound.**
+
+- *The roots commit to the claimed vectors.* The contract computes every root itself from the
+  claimed words, after rejecting any vector that is out of range or badly padded (section 3,
+  rule 1), so every word that can be opened is a well-formed word of the claimed vector and the
+  overflow proof covers the recomputation.
+- *An opened word is the claimed word at that index.* A word leaf contains its index and is 96
+  bytes (never the 64-byte preimage of a node), and every proof has exactly the tree's depth, so
+  opening another word or another index under a root means a Keccak-256 collision.
+- *The window is the claimed window.* `first(p)` depends only on `p` and the layer's shape, and
+  the `SPAN` words from `first(p)` always contain the `K * C` values from `p * S * C` (a window of
+  `K * C` bytes touches at most `ceil(K * C / 32) + 1` words, and the clamp keeps the span inside
+  the vector, which ends at or after the window). The kernel's `window` fails if it would not.
+- *The filter is the committed filter* by the model proof (section 2).
+- *So the walk of section 6 still holds:* the first wrong value of a false claim, in layer order,
+  is a dense neuron, a filter output at one position (whose window is a correct part of an
+  earlier, correct vector), a logit or the class, and its challenge succeeds; on a true claim
+  every recomputation matches and every challenge reverts.
+
+**Data availability.** The claim's event still carries every vector in full, so a watcher can
+rebuild every root and every proof (`tools/gen_tree.py`, `word_proof`) from the event alone.

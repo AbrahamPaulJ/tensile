@@ -1,4 +1,4 @@
-"""Generate the Fe source of the dispute arbiter for any dense Tensile model.
+"""Generate the Fe source of the dispute arbiter for any Tensile model (dense layers and 1D convolutions).
 
 Usage:
     python tools/gen_arbiter.py [--model ref/out/model.json] [--vectors ref/out] --out DIR
@@ -16,7 +16,9 @@ the model ingot `tools/gen_fe.py` writes from the same model file:
 Why a generator and not one generic contract: a `msg` variant needs concrete ABI types and a
 selector string, so the number of layers and their widths cannot be const generics of a handler.
 The claim carries one packed vector per layer boundary, the record one hash per vector, and there
-is one `challengeNeuronK` handler per layer plus `challengeClass`.
+is one `challengeNeuronK` handler per layer plus `challengeClass`. A convolution layer gets a
+`challengeFilterK` handler instead, naming a filter and a position, and a model with a convolution
+commits to its vectors with word trees by default (`--binding`, docs/spec-dispute.md section 11).
 
 For the shipped 784-32-10 model the output, after `fe fmt`, is byte for byte the hand-written
 `ingots/onchain/src/{arbiter,record,signals,commitment,arbiter_tests}.fe`;
