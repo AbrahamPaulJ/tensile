@@ -276,7 +276,18 @@ async function main() {
     const hash = inputHash(x0);
     const standing = [...claims].some(([id, c]) => inputHash(c.x0) === hash && !audits.get(id).finding && !slashes[id]);
     if (!standing) {
-      const onChain = await system.inputWords(end);
+      // A public node may answer from a block before this run's own relay transaction: ask again
+      // for up to a minute before treating a missing window as an error.
+      let onChain;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          onChain = await system.inputWords(end);
+          break;
+        } catch (error) {
+          if (!relayedNow || attempt >= 6 || !String(error.message).includes('NoSuchWindow')) throw error;
+          await new Promise((done) => setTimeout(done, 10000));
+        }
+      }
       if (onChain.join() !== x0.join()) throw new Error(`the oracle's window ending at move ${end} differs from the relayed ticks`);
       const run = forward(model, x0);
       const sent = await sender.send(`claim window ${end}: tier ${run.cls} (${FEES[run.cls]})`, config.arbiter, claimData(x0, run), arbiterState.bond, { end: String(end), tier: String(run.cls) });
